@@ -13,21 +13,27 @@ app.listen(PORT, () => {
   console.log(`Web server running on port ${PORT}`);
 });
 
-// 2. Direct Twitch Chat Connection (tmi.js)
+// Clean up token formatting for Twitch IRC
+const rawToken = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').trim();
+const pass = rawToken.startsWith('oauth:') ? rawToken : `oauth:${rawToken}`;
+
+// 2. Direct Twitch Chat Connection
 const client = new tmi.Client({
   options: { debug: true },
   identity: {
-    username: process.env.TWITCH_BOT_USERNAME,
-    password: process.env.TWITCH_BOT_ACCESS_TOKEN
+    username: (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim(),
+    password: pass
   },
-  channels: [process.env.TWITCH_CHANNEL]
+  channels: [(process.env.TWITCH_CHANNEL || '').toLowerCase().trim()]
 });
 
-client.connect().catch(console.error);
+// Connect and catch connection errors explicitly
+client.connect()
+  .then(() => console.log('Successfully connected to Twitch chat!'))
+  .catch((err) => console.error('Twitch connection failed:', err));
 
-// 3. Standalone Chat Listener
+// 3. Independent Chat Listener
 client.on('message', (channel, tags, message, self) => {
-  // Ignore messages sent by the bot itself
   if (self) return;
 
   const msg = message.trim().toLowerCase();
@@ -35,7 +41,7 @@ client.on('message', (channel, tags, message, self) => {
 
   // Command: !hump (Restricted to motmo_)
   if (msg === '!hump') {
-    if (username !== 'motmo_') return; // Ignore everyone else completely
+    if (username !== 'motmo_') return;
 
     const roll = Math.random();
     if (roll < 0.5) {
