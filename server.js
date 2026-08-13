@@ -39,7 +39,7 @@ const MAX_LOG_SIZE = 50;
 
 // Cooldown tracking for !recap (15 minutes global)
 let lastRecapUse = 0;
-const RECAP_COOLDOWN = 15 * 60 * 1000; // 15 minutes (in milliseconds)
+const RECAP_COOLDOWN = 15 * 60 * 1000; // 15 minutes in milliseconds
 
 // 1. Health check endpoint for UptimeRobot
 app.get('/health', (req, res) => res.status(200).send('OK'));
@@ -161,8 +161,21 @@ client.on('message', async (channel, tags, message, self) => {
   // COMMAND: !recap (15 MIN COOLDOWN)
   // ==========================================
   if (lowerMsg.startsWith('!recap')) {
-    // Silent exit if triggered within 15 minutes of last use
-    if (now - lastRecapUse < RECAP_COOLDOWN) return;
+    const timeElapsed = now - lastRecapUse;
+
+    // Check if command is on cooldown
+    if (timeElapsed < RECAP_COOLDOWN) {
+      const remainingMs = RECAP_COOLDOWN - timeElapsed;
+      const minutesLeft = Math.floor(remainingMs / 60000);
+      const secondsLeft = Math.floor((remainingMs % 60000) / 1000);
+      
+      const timeString = minutesLeft > 0 
+        ? `${minutesLeft}m ${secondsLeft}s` 
+        : `${secondsLeft}s`;
+
+      //client.say(channel, `@${displayName}, !recap is on cooldown. Try again in ${timeString}.`);
+      return;
+    }
 
     if (recentChatLogs.length < 5) {
       //client.say(channel, `@${displayName}, not enough chat history yet to summarize!`);
@@ -174,25 +187,27 @@ client.on('message', async (channel, tags, message, self) => {
     try {
       const chatContext = recentChatLogs.join('\n');
       const customPrompt = `You are a Twitch stream assistant. Summarize chat sentiment/mood/vibes and what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. If topics are broad, keep it concise and under 400 characters. Otherwise, try not to add unnecessary details and avoid artificially making it longer than it needs to be. If any sexual discussions are included, make it a family-friendly version:\n\n${chatContext}`;
-    
+
       const response = await ai.models.generateContent({
         model: 'gemini-2.0-flash',
         contents: customPrompt
       });
-    
+
       let summary = response.text ? response.text.trim() : 'Could not generate recap.';
       if (summary.length > 400) {
         summary = summary.substring(0, 397) + '...';
       }
-    
+
       // 🔍 TEST LOG: Print output to Render logs
       console.log(`[TEST !recap Output for @${displayName}]:`, summary);
-    
+
       // Send output to Twitch
       //client.say(channel, `[Chat Recap]: ${summary}`);
     } catch (err) {
       console.error('Gemini !recap Error:', err);
     }
+    return;
+  }
 
   // ==========================================
   // LOG ORGANIC CHAT MESSAGES
