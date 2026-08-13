@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 3000;
 // ==========================================
 
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
+
 const SUMMARY_PREFIX = 'AI Summary: ';
 const TWITCH_MESSAGE_LIMIT = 500;
 const SUMMARY_TEXT_LIMIT = TWITCH_MESSAGE_LIMIT - SUMMARY_PREFIX.length;
@@ -17,7 +18,6 @@ if (!DASHBOARD_PASSWORD) {
   console.warn('WARNING: DASHBOARD_PASSWORD environment variable is not set.');
 }
 
-// Larger limit so pasted Render logs can be tested.
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
@@ -58,7 +58,10 @@ const recentChatLogs = [];
 const MAX_LOG_SIZE = 50;
 
 let lastRecapUse = 0;
-const RECAP_COOLDOWN = 15 * 60 * 1000;
+let currentRecapCooldown = 15 * 60 * 1000;
+
+const RECAP_SUCCESS_COOLDOWN = 15 * 60 * 1000;
+const RECAP_FAILURE_COOLDOWN = 5 * 60 * 1000;
 
 // ==========================================
 // IGNORED CHAT USERS
@@ -75,12 +78,65 @@ function isIgnoredUsername(username) {
 }
 
 // ==========================================
+// CHAT SANITIZATION
+// ==========================================
+
+const sensitivePatterns = [
+  // Explicit sexual content
+  /\bporn(?:ography)?\b/gi,
+  /\bincest\b/gi,
+  /\brape(?:d|s|ing)?\b/gi,
+
+  // Self-harm
+  /\bsuicid(?:e|al)\b/gi,
+
+  // Graphic violence
+  /\bbehead(?:ed|ing)?\b/gi,
+  /\bdecapitat(?:e|ed|ing|ion)\b/gi
+];
+
+function sanitizeChatForGemini(chatLogs) {
+  let censoredCount = 0;
+  let affectedMessages = 0;
+
+  const sanitizedLogs = chatLogs.map((chat) => {
+    let sanitized = chat;
+    let messageChanged = false;
+
+    for (const pattern of sensitivePatterns) {
+      sanitized = sanitized.replace(pattern, () => {
+        censoredCount++;
+        messageChanged = true;
+        return '[censored]';
+      });
+    }
+
+    if (messageChanged) {
+      affectedMessages++;
+    }
+
+    return sanitized;
+  });
+
+  return {
+    logs: sanitizedLogs,
+    censoredCount,
+    affectedMessages,
+    sanitized: censoredCount > 0
+  };
+}
+
+// ==========================================
 // PARSE PASTED RENDER / TWITCH LOGS
 // ==========================================
 
 function parsePastedChat(rawText) {
   if (typeof rawText !== 'string' || !rawText.trim()) {
-    return [];
+    return {
+      logs: [],
+      totalValidMessages: 0,
+      truncated: false
+    };
   }
 
   const lines = rawText
@@ -91,24 +147,25 @@ function parsePastedChat(rawText) {
   const parsedMessages = [];
 
   for (const originalLine of lines) {
-    // Remove ANSI terminal color codes if Render included any.
-    const line = originalLine.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').trim();
+    const line = originalLine
+      .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+      .trim();
 
     let username = '';
     let message = '';
+    let match;
 
-    // Common TMI / Render format:
-    // info: [#channel] <username>: message
+    // Example:
     // [#channel] <username>: message
     // <username>: message
-    let match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
+    match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
 
     if (match) {
       username = match[1];
       message = match[2];
     }
 
-    // Simple copied format:
+    // Example:
     // username: message
     if (!username) {
       match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
@@ -119,7 +176,7 @@ function parsePastedChat(rawText) {
       }
     }
 
-    // Alternate channel-prefixed format:
+    // Example:
     // [#channel] username: message
     if (!username) {
       match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
@@ -130,7 +187,6 @@ function parsePastedChat(rawText) {
       }
     }
 
-    // Ignore lines that don't look like Twitch chat.
     if (!username || !message) {
       continue;
     }
@@ -148,23 +204,25 @@ function parsePastedChat(rawText) {
     parsedMessages.push(`${username}: ${message}`);
   }
 
-  // Keep only the 100 most recent valid chat messages.
-  return parsedMessages.slice(-100);
+  const totalValidMessages = parsedMessages.length;
+  const truncated = totalValidMessages > 100;
+
+  return {
+    logs: parsedMessages.slice(-100),
+    totalValidMessages,
+    truncated
+  };
 }
 
 // ==========================================
-// GEMINI INTERACTIONS API
+// GEMINI API REQUEST
 // ==========================================
 
-async function generateRecap(chatLogs) {
+async function callGemini(chatLogs) {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
 
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY environment variable is not set.');
-  }
-
-  if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
-    throw new Error('No chat logs were provided to Gemini.');
   }
 
   const chatContext = chatLogs.join('\n');
@@ -186,14 +244,21 @@ AVOID VAGUE SUMMARIES:
 - Do not say "viewers discussed Pokémon strategies" when you can say which Pokémon, strategy, stat, evolution, or opinion they discussed.
 - Do not say "chat was joking around" when you can briefly explain the actual joke.
 - Do not use generic filler such as "friendly banter," "shared support," or "good vibes."
-- Do not list every username just for the sake of including names. Mention users only when it helps explain what happened.
-- Do not invent details or infer opinions that are not supported by the messages.
+- Do not list every username just for the sake of including names.
+- Mention users only when it helps explain what happened.
+- Do not invent details or infer opinions not supported by chat.
+
+CENSORED CHAT:
+- Some messages may contain the literal text "[censored]".
+- Keep the surrounding context when it is useful.
+- Do not guess, restore, reconstruct, or repeat the censored word.
+- It is okay to leave the censored detail out of the recap entirely.
 
 STYLE:
 - Write 2 to 4 compact sentences when useful.
-- Dense with information but still natural and readable.
+- Dense with information but natural and readable.
 - No hashtags.
-- Do not start with "AI Summary:" because the bot adds that separately.
+- Do not start with "AI Summary:" because the bot adds it separately.
 - Maximum ${SUMMARY_TEXT_LIMIT} characters.
 - Use the available space when there are enough meaningful details.
 - Do not make the recap unnecessarily short.
@@ -201,23 +266,20 @@ STYLE:
 Recent Twitch chat:
 ${chatContext}`;
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/interactions';
-
-  const payload = {
-    model: 'gemini-3.5-flash-lite',
-    input: customPrompt
-  };
-
-  console.log(`[Gemini] Sending ${chatLogs.length} messages for recap...`);
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify(payload)
-  });
+  const response = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/interactions',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash-lite',
+        input: customPrompt
+      })
+    }
+  );
 
   let data;
 
@@ -237,13 +299,21 @@ ${chatContext}`;
       data?.message ||
       `Gemini API returned HTTP ${response.status}`;
 
-    throw new Error(errorMessage);
+    const error = new Error(errorMessage);
+    error.status = response.status;
+    error.geminiData = data;
+
+    throw error;
   }
 
-  // ==========================================
-  // EXTRACT TEXT FROM INTERACTIONS RESPONSE
-  // ==========================================
+  return data;
+}
 
+// ==========================================
+// EXTRACT GEMINI RESPONSE
+// ==========================================
+
+function extractGeminiText(data) {
   let summary = '';
 
   if (Array.isArray(data.steps)) {
@@ -264,7 +334,6 @@ ${chatContext}`;
     }
   }
 
-  // Fallback response formats.
   if (!summary && typeof data.output_text === 'string') {
     summary = data.output_text;
   }
@@ -285,7 +354,55 @@ ${chatContext}`;
     }
   }
 
-  summary = summary.trim();
+  return summary.trim();
+}
+
+// ==========================================
+// GENERATE RECAP
+// ==========================================
+
+async function generateRecap(chatLogs) {
+  if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
+    throw new Error('No chat logs were provided to Gemini.');
+  }
+
+  const sanitization = sanitizeChatForGemini(chatLogs);
+
+  if (sanitization.sanitized) {
+    console.log(
+      `[Gemini] Sanitized ${sanitization.censoredCount} sensitive term(s) across ` +
+      `${sanitization.affectedMessages} message(s).`
+    );
+  }
+
+  let data;
+
+  try {
+    data = await callGemini(sanitization.logs);
+  } catch (err) {
+    const message = err.message || '';
+
+    const inputBlocked =
+      message.includes('Input blocked') ||
+      message.includes('sensitive words') ||
+      message.includes('Prohibited Use policy');
+
+    if (inputBlocked) {
+      const blockedError = new Error(
+        'Gemini blocked the chat input even after sensitive-term redaction. ' +
+        'One or more messages may contain content that cannot be submitted.'
+      );
+
+      blockedError.inputBlocked = true;
+      blockedError.sanitization = sanitization;
+
+      throw blockedError;
+    }
+
+    throw err;
+  }
+
+  let summary = extractGeminiText(data);
 
   if (!summary) {
     console.error(
@@ -298,17 +415,20 @@ ${chatContext}`;
     );
   }
 
-  // Prevent duplicated prefix.
   summary = summary.replace(/^AI Summary:\s*/i, '');
 
-  // Guarantee that "AI Summary: " + recap stays within Twitch's 500-char limit.
   if (summary.length > SUMMARY_TEXT_LIMIT) {
-    summary = summary.substring(0, SUMMARY_TEXT_LIMIT - 3).trimEnd() + '...';
+    summary = summary
+      .substring(0, SUMMARY_TEXT_LIMIT - 3)
+      .trimEnd() + '...';
   }
 
   console.log('[Gemini Recap]', summary);
 
-  return summary;
+  return {
+    summary,
+    sanitization
+  };
 }
 
 // ==========================================
@@ -350,7 +470,7 @@ app.get('/', (req, res) => {
       border-radius: 8px;
       padding: 24px;
       width: 100%;
-      max-width: 600px;
+      max-width: 650px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     }
 
@@ -380,7 +500,6 @@ app.get('/', (req, res) => {
       color: #fff;
       box-sizing: border-box;
       font-size: 14px;
-      font-family: Arial, sans-serif;
     }
 
     input {
@@ -388,7 +507,7 @@ app.get('/', (req, res) => {
     }
 
     textarea {
-      min-height: 280px;
+      min-height: 300px;
       resize: vertical;
       font-family: Consolas, Monaco, monospace;
       font-size: 12px;
@@ -474,6 +593,13 @@ app.get('/', (req, res) => {
       font-size: 11px;
     }
 
+    .sanitized-warning {
+      display: block;
+      color: #f5c542;
+      margin-top: 10px;
+      font-size: 11px;
+    }
+
     @media (max-width: 550px) {
       .test-buttons {
         flex-direction: column;
@@ -502,6 +628,7 @@ app.get('/', (req, res) => {
 
     <form id="chatForm">
       <label for="messageInput">Message to Twitch</label>
+
       <input
         type="text"
         id="messageInput"
@@ -537,7 +664,8 @@ app.get('/', (req, res) => {
     <p class="hint">
       Paste Twitch chat lines from Render here. Nightbot, StreamElements,
       and ${botUsername || 'TWITCH_BOT_USERNAME'} are ignored automatically.
-      If more than 100 valid chat messages are pasted, only the 100 most recent are used.
+      If more than 100 valid chat messages are found, only the 100 most recent
+      are sent to Gemini.
     </p>
 
     <textarea
@@ -658,7 +786,10 @@ app.get('/', (req, res) => {
           let sourceText = 'Sample chat';
 
           if (data.source === 'stored') {
-            sourceText = 'Stored chat (' + data.messageCount + ' messages)';
+            sourceText =
+              'Stored chat (' +
+              data.messageCount +
+              ' messages)';
           }
 
           if (data.source === 'pasted') {
@@ -667,11 +798,27 @@ app.get('/', (req, res) => {
               data.messageCount +
               ' messages used';
 
-            if (data.truncated) {
-              sourceText += ', limited to most recent 100';
+            if (data.totalValidMessages > data.messageCount) {
+              sourceText +=
+                ' of ' +
+                data.totalValidMessages +
+                ' valid messages';
             }
 
             sourceText += ')';
+          }
+
+          let sanitizationText = '';
+
+          if (data.sanitized) {
+            sanitizationText =
+              '<span class="sanitized-warning">' +
+              '⚠ Sensitive chat text was redacted before being sent to Gemini: ' +
+              data.censoredCount +
+              ' term(s) across ' +
+              data.affectedMessages +
+              ' message(s).' +
+              '</span>';
           }
 
           testResult.innerHTML =
@@ -682,10 +829,12 @@ app.get('/', (req, res) => {
             '<span class="char-count">' +
             data.characterCount +
             ' / 500 characters' +
-            '</span>';
+            '</span>' +
+            sanitizationText;
         } else {
           testResult.style.color = '#ff4f4f';
-          testResult.textContent = 'Error: ' + getErrorMessage(data.error);
+          testResult.textContent =
+            'Error: ' + getErrorMessage(data.error);
         }
       } catch (err) {
         testResult.style.color = '#ff4f4f';
@@ -717,9 +866,20 @@ app.get('/', (req, res) => {
         .replace(/'/g, '&#039;');
     }
 
-    testSampleBtn.addEventListener('click', () => runSummaryTest('sample'));
-    testStoredBtn.addEventListener('click', () => runSummaryTest('stored'));
-    testPastedBtn.addEventListener('click', () => runSummaryTest('pasted'));
+    testSampleBtn.addEventListener(
+      'click',
+      () => runSummaryTest('sample')
+    );
+
+    testStoredBtn.addEventListener(
+      'click',
+      () => runSummaryTest('stored')
+    );
+
+    testPastedBtn.addEventListener(
+      'click',
+      () => runSummaryTest('pasted')
+    );
   </script>
 </body>
 </html>
@@ -830,7 +990,7 @@ app.post('/test-summary', async (req, res) => {
 
   let logs;
   let source;
-  let truncated = false;
+  let totalValidMessages;
 
   if (type === 'stored') {
     if (recentChatLogs.length === 0) {
@@ -842,6 +1002,7 @@ app.post('/test-summary', async (req, res) => {
 
     logs = [...recentChatLogs];
     source = 'stored';
+    totalValidMessages = logs.length;
   } else if (type === 'pasted') {
     if (typeof pastedChat !== 'string' || !pastedChat.trim()) {
       return res.status(400).json({
@@ -850,44 +1011,40 @@ app.post('/test-summary', async (req, res) => {
       });
     }
 
-    const allParsedLogs = parsePastedChat(pastedChat);
+    const parsed = parsePastedChat(pastedChat);
 
-    if (allParsedLogs.length === 0) {
+    if (parsed.logs.length === 0) {
       return res.status(400).json({
         success: false,
         error:
-          'No recognizable Twitch chat messages were found. Expected lines such as "<username>: message" or "username: message".'
+          'No recognizable Twitch chat messages were found. ' +
+          'Expected lines such as "<username>: message" or "username: message".'
       });
     }
 
-    /*
-     * parsePastedChat already caps the result at 100.
-     * Check raw recognizable count separately so WebUI can report truncation.
-     */
-    const rawLineCount = pastedChat
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean).length;
-
-    logs = allParsedLogs;
+    logs = parsed.logs;
     source = 'pasted';
-    truncated = rawLineCount > 100 && logs.length === 100;
+    totalValidMessages = parsed.totalValidMessages;
   } else {
     logs = sampleChatLogs;
     source = 'sample';
+    totalValidMessages = logs.length;
   }
 
   try {
-    const summary = await generateRecap(logs);
-    const fullOutput = SUMMARY_PREFIX + summary;
+    const result = await generateRecap(logs);
+    const fullOutput = SUMMARY_PREFIX + result.summary;
 
     return res.json({
       success: true,
       source,
       messageCount: logs.length,
-      truncated,
+      totalValidMessages,
       output: fullOutput,
-      characterCount: fullOutput.length
+      characterCount: fullOutput.length,
+      sanitized: result.sanitization.sanitized,
+      censoredCount: result.sanitization.censoredCount,
+      affectedMessages: result.sanitization.affectedMessages
     });
   } catch (err) {
     console.error('Summary test error:', err);
@@ -897,7 +1054,8 @@ app.post('/test-summary', async (req, res) => {
       error: {
         message: err.message,
         name: err.name,
-        details: err.toString()
+        details: err.toString(),
+        inputBlocked: err.inputBlocked || false
       }
     });
   }
@@ -929,8 +1087,9 @@ client.on('message', async (channel, tags, message, self) => {
   if (lowerMsg.startsWith('!recap')) {
     const timeElapsed = now - lastRecapUse;
 
-    if (timeElapsed < RECAP_COOLDOWN) {
-      const remainingMs = RECAP_COOLDOWN - timeElapsed;
+    // Report exact remaining cooldown.
+    if (timeElapsed < currentRecapCooldown) {
+      const remainingMs = currentRecapCooldown - timeElapsed;
       const minutesLeft = Math.floor(remainingMs / 60000);
       const secondsLeft = Math.floor((remainingMs % 60000) / 1000);
 
@@ -963,29 +1122,66 @@ client.on('message', async (channel, tags, message, self) => {
       return;
     }
 
+    /*
+     * Reserve the normal 15-minute cooldown while Gemini is running.
+     * If it succeeds, this remains the cooldown.
+     * If it fails, it is replaced with a fresh 5-minute cooldown.
+     */
     lastRecapUse = now;
+    currentRecapCooldown = RECAP_SUCCESS_COOLDOWN;
 
     try {
-      const summary = await generateRecap(recentChatLogs);
-      const twitchMessage = SUMMARY_PREFIX + summary;
+      const result = await generateRecap(recentChatLogs);
+      const twitchMessage = SUMMARY_PREFIX + result.summary;
 
-      console.log(`[!recap Output for @${displayName}]:`, twitchMessage);
-      console.log(`[!recap Length]: ${twitchMessage.length}/500`);
+      console.log(
+        `[!recap Output for @${displayName}]:`,
+        twitchMessage
+      );
+
+      console.log(
+        `[!recap Length]: ${twitchMessage.length}/500`
+      );
+
+      if (result.sanitization.sanitized) {
+        console.log(
+          `[!recap Sanitized]: ${result.sanitization.censoredCount} term(s) ` +
+          `across ${result.sanitization.affectedMessages} message(s)`
+        );
+      }
+
+      // Successful recap = normal 15-minute cooldown.
+      currentRecapCooldown = RECAP_SUCCESS_COOLDOWN;
 
       await client.say(channel, twitchMessage);
     } catch (err) {
       console.error('Gemini !recap Error:', err);
 
-      // Allow retry if Gemini itself failed.
-      lastRecapUse = 0;
+      /*
+       * Failure = fresh 5-minute cooldown.
+       * Using Date.now() means the five minutes begin when the failure occurs,
+       * not when the Gemini request originally started.
+       */
+      lastRecapUse = Date.now();
+      currentRecapCooldown = RECAP_FAILURE_COOLDOWN;
 
       try {
-        await client.say(
-          channel,
-          `@${displayName}, failed to generate chat recap.`
-        );
+        if (err.inputBlocked) {
+          await client.say(
+            channel,
+            `@${displayName}, I couldn't summarize that chat because some recent messages were blocked by the AI safety filter. !recap is on a 5-minute cooldown to let chat move on.`
+          );
+        } else {
+          await client.say(
+            channel,
+            `@${displayName}, failed to generate chat recap. !recap is on a 5-minute cooldown to let chat move on.`
+          );
+        }
       } catch (sendErr) {
-        console.error('Failed to send Gemini error to Twitch:', sendErr);
+        console.error(
+          'Failed to send Gemini error to Twitch:',
+          sendErr
+        );
       }
     }
 
@@ -1008,11 +1204,20 @@ client.on('message', async (channel, tags, message, self) => {
   // PASSIVE TRIGGERS
   // ==========================================
 
-  if (username === 'motmo_' && lowerMsg.includes('hog reveal')) {
+  if (
+    username === 'motmo_' &&
+    lowerMsg.includes('hog reveal')
+  ) {
     try {
-      await client.say(channel, 'Did Motmo_ say.. HOG REVEAL?');
+      await client.say(
+        channel,
+        'Did Motmo_ say.. HOG REVEAL?'
+      );
     } catch (err) {
-      console.error('Passive trigger error:', err);
+      console.error(
+        'Passive trigger error:',
+        err
+      );
     }
   }
 });
@@ -1022,11 +1227,17 @@ client.on('message', async (channel, tags, message, self) => {
 // ==========================================
 
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Promise Rejection:', reason);
+  console.error(
+    'Unhandled Promise Rejection:',
+    reason
+  );
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+  console.error(
+    'Uncaught Exception:',
+    err
+  );
 });
 
 // ==========================================
@@ -1037,8 +1248,11 @@ app.listen(PORT, () => {
   console.log(`Web server running on port ${PORT}`);
   console.log('Gemini model: gemini-3.5-flash-lite');
   console.log(
-    `AI summary limit: ${SUMMARY_TEXT_LIMIT} + ${SUMMARY_PREFIX.length} prefix chars = 500`
+    `AI summary limit: ${SUMMARY_TEXT_LIMIT} text chars + ` +
+    `${SUMMARY_PREFIX.length} prefix chars = 500`
   );
+  console.log('Successful !recap cooldown: 15 minutes');
+  console.log('Failed !recap cooldown: 5 minutes');
 
   if (channelName) {
     console.log(`Twitch channel: #${channelName}`);
