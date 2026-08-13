@@ -37,15 +37,15 @@ client.connect().catch(console.error);
 const recentChatLogs = [];
 const MAX_LOG_SIZE = 50;
 
-// Cooldown tracking for !askai
+// Cooldown tracking for !askai (15 minutes global + user)
 let lastGlobalAiUse = 0;
 const userAiCooldowns = new Map();
-const AI_GLOBAL_COOLDOWN = 15 * 1000; // 15 seconds
-const AI_USER_COOLDOWN = 45 * 1000;   // 45 seconds
+const AI_GLOBAL_COOLDOWN = 15 * 60 * 1000; // 15 minutes (in milliseconds)
+const AI_USER_COOLDOWN = 15 * 60 * 1000;   // 15 minutes (in milliseconds)
 
 // Cooldown tracking for !recap
 let lastRecapUse = 0;
-const RECAP_COOLDOWN = 60 * 1000;     // 60 seconds
+const RECAP_COOLDOWN = 60 * 1000;          // 60 seconds
 
 // 1. Health check endpoint for UptimeRobot
 app.get('/health', (req, res) => res.status(200).send('OK'));
@@ -160,10 +160,10 @@ client.on('message', async (channel, tags, message, self) => {
   if (ignoredBots.includes(username)) return;
 
   // ==========================================
-  // COMMAND 1: !askai <prompt>
+  // COMMAND 1: !askai <prompt> (15 MIN COOLDOWN)
   // ==========================================
   if (lowerMsg.startsWith('!askai')) {
-    // Cooldown check (silent exit if on cooldown)
+    // Cooldown check (silent exit if triggered within 15 minutes)
     if (now - lastGlobalAiUse < AI_GLOBAL_COOLDOWN) return;
     const lastUserUse = userAiCooldowns.get(username) || 0;
     if (now - lastUserUse < AI_USER_COOLDOWN) return;
@@ -174,7 +174,7 @@ client.on('message', async (channel, tags, message, self) => {
       return;
     }
 
-    // Set cooldown timestamps
+    // Set 15-minute cooldown timestamps
     lastGlobalAiUse = now;
     userAiCooldowns.set(username, now);
 
@@ -214,7 +214,7 @@ client.on('message', async (channel, tags, message, self) => {
       const chatContext = recentChatLogs.join('\n');
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `You are a Twitch stream assistant. Summarize what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Include chat sentiment/mood/vibe. Do not use hashtags. Keep it udner 400 characters:\n\n${chatContext}`
+        contents: `You are a Twitch stream assistant. Summarize what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. Keep it concise:\n\n${chatContext}`
       });
 
       let summary = response.text ? response.text.trim() : 'Could not generate recap.';
