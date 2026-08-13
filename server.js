@@ -1,6 +1,5 @@
 const express = require('express');
 const tmi = require('tmi.js');
-const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,9 +10,6 @@ const DASHBOARD_PASSWORD = 'Cf19fdfa34s';
 // Middleware to parse incoming JSON & form data
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Setup Twitch Client
 const rawToken = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').trim();
@@ -41,24 +37,54 @@ const MAX_LOG_SIZE = 50;
 let lastRecapUse = 0;
 const RECAP_COOLDOWN = 15 * 60 * 1000; // 15 minutes in milliseconds
 
-// Helper Function for Gemini Recap using Interactions API
+// ==========================================
+// INTERACTIONS API HELPER (NATIVE FETCH)
+// ==========================================
 async function generateRecap(chatLogs) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY environment variable is not set.");
+  }
+
   const chatContext = chatLogs.join('\n');
   const customPrompt = `You are a Twitch stream assistant. Summarize chat sentiment/mood/vibes and what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. If topics are broad, keep it concise and under 400 characters. Otherwise, try not to add unnecessary details and avoid artificially making it longer than it needs to be. If any sexual discussions are included, make it a family-friendly version:\n\n${chatContext}`;
 
-  // Using the Interactions API endpoint as requested by Google's API migration error
-  const response = await ai.interactions.create({
+  // Direct call to Google's Interactions API endpoint
+  const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${apiKey}`;
+
+  const payload = {
     model: 'gemini-2.5-flash',
     input: customPrompt
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
   });
 
-  // Extract response text from Interactions object
-  let summary = response.text || response.outputs?.[0]?.text || 'Could not generate recap.';
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(JSON.stringify(data));
+  }
+
+  // Extract response text from standard Interactions payload
+  let summary = '';
+  if (data.outputs && data.outputs.length > 0) {
+    summary = data.outputs[0].text || data.outputs[0].content || '';
+  } else if (data.text) {
+    summary = data.text;
+  } else {
+    summary = 'Could not generate recap.';
+  }
+
   summary = summary.trim();
 
   if (summary.length > 400) {
     summary = summary.substring(0, 397) + '...';
   }
+
   return summary;
 }
 
@@ -103,7 +129,7 @@ app.get('/', (req, res) => {
 
         <hr style="border: 0; border-top: 1px solid #26262c; margin: 16px 0;">
 
-        <button type="button" class="btn-test" id="testGeminiBtn">⚡ Test Gemini API Connection</button>
+        <button type="button" class="btn-test" id="testGeminiBtn">⚡ Test Interactions API</button>
 
         <div id="status"></div>
         <div id="testResult"></div>
@@ -154,7 +180,7 @@ app.get('/', (req, res) => {
             return;
           }
 
-          testResult.innerHTML = '<span style="color: #adadb8;">Testing Gemini API...</span>';
+          testResult.innerHTML = '<span style="color: #adadb8;">Testing Interactions API...</span>';
 
           try {
             const res = await fetch('/test-gemini', {
@@ -199,7 +225,7 @@ app.post('/send-chat', (req, res) => {
     });
 });
 
-// 4. Protected Dashboard API Endpoint: Test Gemini Directly
+// 4. Protected Dashboard API Endpoint: Test Gemini Directly via Interactions API
 app.post('/test-gemini', async (req, res) => {
   const { password } = req.body;
 
@@ -219,13 +245,12 @@ app.post('/test-gemini', async (req, res) => {
     const summary = await generateRecap(dummyChatLogs);
     res.json({ success: true, output: summary });
   } catch (err) {
-    console.error('Test Gemini Error:', err);
+    console.error('Test Interactions API Error:', err);
     res.status(500).json({ 
       success: false, 
       error: {
         message: err.message,
         name: err.name,
-        status: err.status || undefined,
         details: err.toString()
       }
     });
