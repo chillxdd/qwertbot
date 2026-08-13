@@ -150,6 +150,9 @@ function parsePastedChat(rawText) {
     let message = '';
     let match;
 
+    // Example:
+    // [#channel] <username>: message
+    // <username>: message
     match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
 
     if (match) {
@@ -157,6 +160,8 @@ function parsePastedChat(rawText) {
       message = match[2];
     }
 
+    // Example:
+    // username: message
     if (!username) {
       match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
@@ -166,6 +171,8 @@ function parsePastedChat(rawText) {
       }
     }
 
+    // Example:
+    // [#channel] username: message
     if (!username) {
       match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
@@ -238,7 +245,24 @@ If the meaning of a number, name, pronoun, event, milestone, or reference is unc
 
 Example:
 If someone says "you almost have 200 on Twitch," you may say "they noted the channel is almost at 200 on Twitch."
-Do NOT change it to "200 followers," "200 viewers," "200 subscribers," or any other interpretation unless the chat explicitly says what 200 refers to.
+Do NOT change it to "200 followers," "200 viewers," "200 subscribers," or another interpretation unless the chat explicitly says what 200 refers to.
+
+MESSAGE ORDER AND RECENCY:
+- The supplied messages are ordered from older to newer within one recent chat window.
+- Message order indicates recency, NOT a narrative timeline.
+- Do NOT use words such as "later," "earlier," "afterward," "subsequently," "eventually," "then," or "before that" merely because one message appears after another.
+- Do not imply that separate topics happened in distinct chronological phases unless the chat explicitly establishes that sequence.
+- Prefer neutral connectors such as "also," "while," "and," or "meanwhile" when combining topics.
+- The messages near the bottom are simply the most recent messages in the supplied window.
+- If recency itself matters, say "more recently" or "in the most recent messages," but only when useful.
+
+OPTIONAL VIBE OPENER:
+- You MAY begin with one very short description of the overall chat mood or vibe if it is strongly and clearly supported by many messages.
+- Keep this opening extremely short, ideally only a few words.
+- Example: "Chat is playful and competitive, ..."
+- Do not use a vibe opener if it would replace or crowd out useful concrete information.
+- Avoid generic phrases such as "fun and lively," "good vibes," "friendly banter," or "supportive atmosphere."
+- If the specific messages already make the mood obvious, skip the vibe description entirely.
 
 PRIORITIZE CONCRETE DETAILS:
 - Mention specific usernames when their comment, opinion, joke, question, story, or reaction is notable.
@@ -249,7 +273,7 @@ PRIORITIZE CONCRETE DETAILS:
 - Combine related comments efficiently, but do not merge unrelated comments into a new claim.
 
 AVOID VAGUE SUMMARIES:
-- Do not waste space saying chat was "lively," "hyped," "fun," "relaxed," "playful," or similar unless that description adds information not already obvious from the recap.
+- Do not waste space describing mood when specific information is available.
 - Do not say "viewers discussed strategies" when the specific strategy or opinion is stated.
 - Do not say "chat was joking around" when the actual joke can be briefly described.
 - Avoid filler such as "friendly banter," "shared support," "good vibes," or similar generic language.
@@ -264,16 +288,18 @@ CENSORED CHAT:
 BEFORE WRITING THE RECAP:
 Internally identify the concrete claims, questions, opinions, jokes, and events that are explicitly supported by the chat.
 Then write the recap using ONLY those supported details.
-Do not output your analysis or evidence list. Output only the final recap.
+Do not output your analysis or evidence list.
+Output only the final recap.
 
 STYLE:
 - Write 2 to 4 compact sentences when useful.
 - Be information-dense but natural and readable.
 - No hashtags.
-- Do not start with "AI Summary:" because the bot adds it separately.
+- Do not start with "Chat Recap:" because the bot adds it separately.
+- Do not start with "AI Summary:".
 - Maximum ${SUMMARY_TEXT_LIMIT} characters.
 - Use additional space only for facts clearly supported by chat.
-- Never add assumptions, filler, or inferred context just to make the recap longer.
+- Never add assumptions, filler, inferred context, or fake chronology just to make the recap longer.
 - A shorter accurate recap is better than a fuller recap containing uncertain details.
 
 Recent Twitch chat:
@@ -428,6 +454,7 @@ async function generateRecap(chatLogs) {
     );
   }
 
+  // Prevent duplicate prefixes.
   summary = summary.replace(/^AI Summary:\s*/i, '');
   summary = summary.replace(/^Chat Recap:\s*/i, '');
 
@@ -775,10 +802,7 @@ app.get('/', (req, res) => {
       }
 
       try {
-        const body = {
-          password,
-          type
-        };
+        const body = { password, type };
 
         if (type === 'pasted') {
           body.pastedChat = pastedChatInput.value;
@@ -1251,7 +1275,7 @@ app.listen(PORT, () => {
   console.log('Gemini model: gemini-3.5-flash-lite');
 
   console.log(
-    `AI summary limit: ${SUMMARY_TEXT_LIMIT} text chars + ` +
+    `Chat recap limit: ${SUMMARY_TEXT_LIMIT} text chars + ` +
     `${SUMMARY_PREFIX.length} prefix chars = 500`
   );
 
