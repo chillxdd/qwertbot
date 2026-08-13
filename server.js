@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 
-const SUMMARY_PREFIX = 'Chat Recap: ';
+const SUMMARY_PREFIX = 'AI Summary: ';
 const TWITCH_MESSAGE_LIMIT = 500;
 const SUMMARY_TEXT_LIMIT = TWITCH_MESSAGE_LIMIT - SUMMARY_PREFIX.length;
 
@@ -82,15 +82,10 @@ function isIgnoredUsername(username) {
 // ==========================================
 
 const sensitivePatterns = [
-  // Explicit sexual content
   /\bporn(?:ography)?\b/gi,
   /\bincest\b/gi,
   /\brape(?:d|s|ing)?\b/gi,
-
-  // Self-harm
   /\bsuicid(?:e|al)\b/gi,
-
-  // Graphic violence
   /\bbehead(?:ed|ing)?\b/gi,
   /\bdecapitat(?:e|ed|ing|ion)\b/gi
 ];
@@ -155,9 +150,6 @@ function parsePastedChat(rawText) {
     let message = '';
     let match;
 
-    // Example:
-    // [#channel] <username>: message
-    // <username>: message
     match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
 
     if (match) {
@@ -165,8 +157,6 @@ function parsePastedChat(rawText) {
       message = match[2];
     }
 
-    // Example:
-    // username: message
     if (!username) {
       match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
@@ -176,8 +166,6 @@ function parsePastedChat(rawText) {
       }
     }
 
-    // Example:
-    // [#channel] username: message
     if (!username) {
       match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
@@ -227,41 +215,66 @@ async function callGemini(chatLogs) {
 
   const chatContext = chatLogs.join('\n');
 
-  const customPrompt = `You are creating a recap of recent Twitch chat for the broadcaster or a viewer who was lurking, stepped away, or could not keep up with chat.
+  const customPrompt = `You are creating a factual recap of recent Twitch chat for the broadcaster or a viewer who was lurking, stepped away, or could not keep up with chat.
 
 Your job is to tell them what they actually missed.
 
+SOURCE-OF-TRUTH RULE:
+The supplied chat messages are your ONLY source of factual information.
+Treat anything not explicitly supported by those messages as unknown.
+Accuracy is more important than sounding polished, complete, or confident.
+
+STRICT FACTUAL ACCURACY:
+- Every factual detail in the recap must be directly supported by the supplied chat.
+- Never fill in missing context using assumptions, common knowledge, outside knowledge, or what you think someone probably meant.
+- Never invent stream events, game events, milestones, raids, follows, subscriptions, viewer counts, follower counts, surprises, announcements, or other occurrences not explicitly supported by chat.
+- Never turn speculation, jokes, guesses, predictions, or questions into established facts.
+- Do not combine unrelated messages in a way that creates a new implied fact.
+- When uncertain, omit the detail rather than guess.
+
+PRESERVE AMBIGUITY:
+Twitch chat often uses shorthand and assumes context you may not have.
+If the meaning of a number, name, pronoun, event, milestone, or reference is unclear, preserve the original ambiguity or omit it.
+
+Example:
+If someone says "you almost have 200 on Twitch," you may say "they noted the channel is almost at 200 on Twitch."
+Do NOT change it to "200 followers," "200 viewers," "200 subscribers," or any other interpretation unless the chat explicitly says what 200 refers to.
+
 PRIORITIZE CONCRETE DETAILS:
 - Mention specific usernames when their comment, opinion, joke, question, story, or reaction is notable.
-- Mention specific people, Pokémon, games, characters, items, events, topics, strategies, or other names being discussed.
+- Mention specific people, games, characters, Pokémon, items, events, strategies, or other named topics when clearly stated.
 - Capture notable opinions, disagreements, debates, questions, predictions, suggestions, decisions, and reactions.
-- Mention funny recurring jokes, callbacks, stream lore, surprising comments, or memorable moments when relevant.
-- If something happened in the game or stream that chat was reacting to, explain what they were reacting to.
-- Combine related comments so the recap covers several useful details efficiently.
+- Mention recurring jokes, callbacks, stream lore, or memorable comments when clearly supported by chat.
+- If chat is reacting to something, describe only what the messages actually establish they are reacting to.
+- Combine related comments efficiently, but do not merge unrelated comments into a new claim.
 
 AVOID VAGUE SUMMARIES:
-- Do not waste space saying chat was "lively," "hyped," "fun," "relaxed," "playful," or similar unless that mood itself is important.
-- Do not say "viewers discussed Pokémon strategies" when you can say which Pokémon, strategy, stat, evolution, or opinion they discussed.
-- Do not say "chat was joking around" when you can briefly explain the actual joke.
-- Do not use generic filler such as "friendly banter," "shared support," or "good vibes."
-- Do not list every username just for the sake of including names.
-- Mention users only when it helps explain what happened.
-- Do not invent details or infer opinions not supported by chat.
+- Do not waste space saying chat was "lively," "hyped," "fun," "relaxed," "playful," or similar unless that description adds information not already obvious from the recap.
+- Do not say "viewers discussed strategies" when the specific strategy or opinion is stated.
+- Do not say "chat was joking around" when the actual joke can be briefly described.
+- Avoid filler such as "friendly banter," "shared support," "good vibes," or similar generic language.
+- Do not list usernames merely to include names. Mention them only when tied to a useful detail.
 
 CENSORED CHAT:
 - Some messages may contain the literal text "[censored]".
-- Keep the surrounding context when it is useful.
+- Keep surrounding context when useful.
 - Do not guess, restore, reconstruct, or repeat the censored word.
-- It is okay to leave the censored detail out of the recap entirely.
+- It is okay to omit the censored detail entirely.
+
+BEFORE WRITING THE RECAP:
+Internally identify the concrete claims, questions, opinions, jokes, and events that are explicitly supported by the chat.
+Then write the recap using ONLY those supported details.
+Do not output your analysis or evidence list. Output only the final recap.
 
 STYLE:
 - Write 2 to 4 compact sentences when useful.
-- Dense with information but natural and readable.
+- Be information-dense but natural and readable.
 - No hashtags.
 - Do not start with "AI Summary:" because the bot adds it separately.
 - Maximum ${SUMMARY_TEXT_LIMIT} characters.
-- Use the available space when there are enough meaningful details.
-- Do not make the recap unnecessarily short.
+- Use additional space only for facts clearly supported by chat.
+- Never add assumptions, filler, or inferred context just to make the recap longer.
+- A shorter accurate recap is better than a fuller recap containing uncertain details.
 
 Recent Twitch chat:
 ${chatContext}`;
@@ -416,6 +429,7 @@ async function generateRecap(chatLogs) {
   }
 
   summary = summary.replace(/^AI Summary:\s*/i, '');
+  summary = summary.replace(/^Chat Recap:\s*/i, '');
 
   if (summary.length > SUMMARY_TEXT_LIMIT) {
     summary = summary
@@ -971,22 +985,22 @@ app.post('/test-summary', async (req, res) => {
   }
 
   const sampleChatLogs = [
-    'PikaFan92: I still think Jolteon is better here because the speed matters more than bulk.',
-    'Motmo_: nah Vaporeon survives basically everything though lol',
-    'Sqwert: I was thinking Jolteon too but I already used one last run.',
-    'RetroGamer: Did you ever finish that Emerald Nuzlocke you talked about?',
-    'PikaFan92: wait that crit actually saved the entire fight',
-    'BreadWizard: FBI OPEN UP',
-    'Motmo_: not the FBI again, hide the basement',
-    'RetroGamer: the basement lore has returned',
-    'JessPlays: Are you evolving Eevee now or waiting for another move?',
-    'Sqwert: probably waiting, I want to check the moveset first',
-    'PikaFan92: smart, evolving now might lock you out of Bite',
-    'BreadWizard: President Snorlax would fix the economy by sleeping through every meeting',
-    'Motmo_: Gengar for president, no contest',
-    'JessPlays: Gengar would absolutely commit tax fraud though',
-    'RetroGamer: that is apparently a campaign promise now'
-  ];
+    'jebadiahchrist: when will you be continuing the Elden ring run?',
+    'motmo_: W dalthecow',
+    'dude_theguy: @Motmo_ LUL we have fun here',
+    'dalthecow: for gl',
+    'nightbot: W dalthecow',
+    'coosgoose: W dal',
+    'jebadiahchrist: holy shit you almost have 200 on twitch',
+    'dude_theguy: W dalthecow',
+    'perkinssx: W',
+    'heifer54321: WW',
+    'dumb_boyy: n opole?',
+    'coosgoose: @Motmo_ Hahaha he was a formidable foe, he put in more work than I to be sure'
+  ].filter((line) => {
+    const username = line.split(':')[0];
+    return !isIgnoredUsername(username);
+  });
 
   let logs;
   let source;
@@ -1087,7 +1101,6 @@ client.on('message', async (channel, tags, message, self) => {
   if (lowerMsg.startsWith('!recap')) {
     const timeElapsed = now - lastRecapUse;
 
-    // Report exact remaining cooldown.
     if (timeElapsed < currentRecapCooldown) {
       const remainingMs = currentRecapCooldown - timeElapsed;
       const minutesLeft = Math.floor(remainingMs / 60000);
@@ -1122,11 +1135,6 @@ client.on('message', async (channel, tags, message, self) => {
       return;
     }
 
-    /*
-     * Reserve the normal 15-minute cooldown while Gemini is running.
-     * If it succeeds, this remains the cooldown.
-     * If it fails, it is replaced with a fresh 5-minute cooldown.
-     */
     lastRecapUse = now;
     currentRecapCooldown = RECAP_SUCCESS_COOLDOWN;
 
@@ -1150,18 +1158,12 @@ client.on('message', async (channel, tags, message, self) => {
         );
       }
 
-      // Successful recap = normal 15-minute cooldown.
       currentRecapCooldown = RECAP_SUCCESS_COOLDOWN;
 
       await client.say(channel, twitchMessage);
     } catch (err) {
       console.error('Gemini !recap Error:', err);
 
-      /*
-       * Failure = fresh 5-minute cooldown.
-       * Using Date.now() means the five minutes begin when the failure occurs,
-       * not when the Gemini request originally started.
-       */
       lastRecapUse = Date.now();
       currentRecapCooldown = RECAP_FAILURE_COOLDOWN;
 
@@ -1247,10 +1249,12 @@ process.on('uncaughtException', (err) => {
 app.listen(PORT, () => {
   console.log(`Web server running on port ${PORT}`);
   console.log('Gemini model: gemini-3.5-flash-lite');
+
   console.log(
     `AI summary limit: ${SUMMARY_TEXT_LIMIT} text chars + ` +
     `${SUMMARY_PREFIX.length} prefix chars = 500`
   );
+
   console.log('Successful !recap cooldown: 15 minutes');
   console.log('Failed !recap cooldown: 5 minutes');
 
