@@ -265,6 +265,7 @@ OPTIONAL VIBE OPENER:
 - If the specific messages already make the mood obvious, skip the vibe description entirely.
 
 PRIORITIZE CONCRETE DETAILS:
+- Always refer to the streamer/broadcaster as Qwert.
 - Mention specific usernames when their comment, opinion, joke, question, story, or reaction is notable.
 - Mention specific people, games, characters, Pokémon, items, events, strategies, or other named topics when clearly stated.
 - Capture notable opinions, disagreements, debates, questions, predictions, suggestions, decisions, and reactions.
