@@ -250,11 +250,11 @@ async function callGemini(chatLogs) {
 
   const chatContext = chatLogs.join('\n');
 
-  const customPrompt = `You are creating a factual recap of recent Twitch chat for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
+  const customPrompt = `You are creating a factual, useful Twitch chat recap for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
 
 Always refer to the streamer/broadcaster as Qwert.
 
-Your job is to tell them what they actually missed.
+Your job is to tell them what was actually worth knowing from recent chat.
 
 SOURCE-OF-TRUTH RULE:
 The supplied chat messages are your ONLY source of factual information.
@@ -286,28 +286,60 @@ MESSAGE ORDER AND RECENCY:
 - Messages near the bottom are simply the most recent messages in the supplied chat window.
 - If recency itself matters, say "more recently" or "in the most recent messages," but only when useful.
 
+IMPORTANCE FILTER:
+Not every chat message deserves to appear in the recap.
+
+Prioritize details that are:
+- Funny, surprising, chaotic, memorable, or likely to make someone laugh.
+- Clearly important to the stream or current gameplay.
+- Repeated by multiple viewers.
+- Part of an ongoing joke, debate, prediction, argument, or running topic.
+- A notable or interesting question directed at Qwert.
+- Something chat reacted strongly to.
+- A clear win, loss, clutch moment, mistake, discovery, or other notable game-related reaction.
+- Useful context for understanding what chat was broadly focused on.
+
+Deprioritize or omit:
+- Routine greetings and farewells.
+- Someone saying they are leaving, going to work, joining a meeting, eating, sleeping, lurking, or returning.
+- Mundane personal updates that chat did not meaningfully react to.
+- Isolated food, drink, product, or brand preferences unless they became a larger discussion or joke.
+- Minor one-off comments with no broader relevance.
+- Details that are specific but not actually interesting.
+- A user's personal update simply because it is easy to summarize.
+
+Before writing the recap, internally rank candidate details by recap value and include only the strongest ones.
+
+OVERALL PICTURE:
+- If many messages revolve around the same broad topic, summarize that topic once instead of listing many individual comments.
+- Use usernames and direct examples only for the funniest, strongest, most representative, or most useful moments.
+- Balance specific highlights with a clear overall picture of what chat was mainly focused on.
+- Do not turn the recap into a list of unrelated usernames and one-off comments.
+- It is better to capture 3 or 4 meaningful themes or moments well than to mention 8 mundane details.
+
 OPTIONAL VIBE OPENER:
 - You MAY begin with one very short description of the overall chat mood or vibe if it is strongly and clearly supported by many messages.
 - Keep it extremely short, ideally only a few words.
-- Example: "Chat is playful and competitive, ..."
+- Example: "Chat is chaotic and Pokémon-heavy, ..."
 - Do not use a vibe opener if it would crowd out useful concrete information.
 - Avoid generic phrases such as "fun and lively," "good vibes," "friendly banter," or "supportive atmosphere."
-- If the specific recap already makes the mood obvious, skip the vibe description entirely.
+- If the recap itself already makes the mood obvious, skip the vibe description entirely.
 
 PRIORITIZE CONCRETE DETAILS:
-- Mention specific usernames when their comment, opinion, joke, question, story, or reaction is notable.
-- Mention specific people, games, characters, Pokémon, items, events, strategies, or other named topics when clearly stated.
+- Mention specific usernames only when their contribution is genuinely noteworthy, funny, repeated, useful, or central to a larger topic.
+- Do not include a username merely because their message is easy to summarize.
+- Mention specific people, games, characters, Pokémon, items, events, strategies, or other named topics when they matter to the recap.
 - Capture notable opinions, disagreements, debates, questions, predictions, suggestions, decisions, and reactions.
 - Mention recurring jokes, callbacks, stream lore, or memorable comments when clearly supported by chat.
 - If chat is reacting to something, describe only what the messages actually establish they are reacting to.
 - Combine related comments efficiently, but do not merge unrelated comments into a new claim.
 
 AVOID VAGUE SUMMARIES:
-- Do not waste space describing mood when specific information is available.
-- Do not say "viewers discussed strategies" when the specific strategy or opinion is stated.
+- Do not waste space describing mood when specific useful information is available.
+- Do not say "viewers discussed strategies" when the specific strategy or opinion is worth mentioning.
 - Do not say "chat was joking around" when the actual joke can be briefly described.
 - Avoid filler such as "friendly banter," "shared support," "good vibes," or similar generic language.
-- Do not list usernames merely to include names. Mention them only when tied to a useful detail.
+- Do not force specificity when a broader summary would better represent the conversation.
 
 CENSORED CHAT:
 - Some messages may contain the literal text "[censored]".
@@ -316,9 +348,14 @@ CENSORED CHAT:
 - It is okay to omit the censored detail entirely.
 
 BEFORE WRITING THE RECAP:
-Internally identify the concrete claims, questions, opinions, jokes, and events that are explicitly supported by the chat.
-Then write the recap using ONLY those supported details.
-Do not output your analysis or evidence list.
+Internally:
+1. Identify the main topics and notable moments.
+2. Identify which individual messages are actually funny, important, repeated, or representative.
+3. Remove mundane or low-value details.
+4. Rank what remains by recap value.
+5. Write the recap using ONLY supported details.
+
+Do not output your analysis or ranking.
 Output only the final recap.
 
 LENGTH AND ENDING:
@@ -329,7 +366,7 @@ LENGTH AND ENDING:
 - Never end with "..." or an unfinished thought.
 - Never begin another topic unless you have enough room to finish that thought.
 - If there is not enough room for another complete topic, omit that topic entirely.
-- Prefer fewer complete, useful details over squeezing in one additional incomplete detail.
+- Prefer fewer complete, meaningful details over squeezing in mundane extras.
 - Do not sacrifice factual accuracy or sentence completeness just to get closer to the character limit.
 
 STYLE:
@@ -339,7 +376,7 @@ STYLE:
 - Do not start with "Chat Recap:" because the bot adds it separately.
 - Do not start with "AI Summary:".
 - Never add assumptions, filler, inferred context, or fake chronology just to make the recap longer.
-- A shorter complete recap is better than a longer recap with an unfinished final thought.
+- A shorter recap containing the best moments is better than a longer recap filled with mundane details.
 
 Recent Twitch chat:
 ${chatContext}`;
@@ -543,14 +580,11 @@ async function generateRecap(chatLogs) {
     );
   }
 
-  // Prevent duplicate prefixes.
   summary = summary.replace(/^AI Summary:\s*/i, '');
   summary = summary.replace(/^Chat Recap:\s*/i, '');
 
-  // Remove fake chronology even if Gemini ignores the prompt.
   summary = cleanRecapWording(summary);
 
-  // If Gemini ends with an ellipsis, back up to the last complete sentence.
   if (/\.{3}\s*$/.test(summary)) {
     const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
 
