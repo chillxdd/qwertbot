@@ -150,7 +150,6 @@ function parsePastedChat(rawText) {
     let message = '';
     let match;
 
-    // Example:
     // [#channel] <username>: message
     // <username>: message
     match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
@@ -160,7 +159,6 @@ function parsePastedChat(rawText) {
       message = match[2];
     }
 
-    // Example:
     // username: message
     if (!username) {
       match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
@@ -171,7 +169,6 @@ function parsePastedChat(rawText) {
       }
     }
 
-    // Example:
     // [#channel] username: message
     if (!username) {
       match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
@@ -253,19 +250,18 @@ MESSAGE ORDER AND RECENCY:
 - Do NOT use words such as "later," "earlier," "afterward," "subsequently," "eventually," "then," or "before that" merely because one message appears after another.
 - Do not imply that separate topics happened in distinct chronological phases unless the chat explicitly establishes that sequence.
 - Prefer neutral connectors such as "also," "while," "and," or "meanwhile" when combining topics.
-- The messages near the bottom are simply the most recent messages in the supplied window.
+- Messages near the bottom are simply the most recent messages in the supplied chat window.
 - If recency itself matters, say "more recently" or "in the most recent messages," but only when useful.
 
 OPTIONAL VIBE OPENER:
 - You MAY begin with one very short description of the overall chat mood or vibe if it is strongly and clearly supported by many messages.
-- Keep this opening extremely short, ideally only a few words.
+- Keep it extremely short, ideally only a few words.
 - Example: "Chat is playful and competitive, ..."
-- Do not use a vibe opener if it would replace or crowd out useful concrete information.
+- Do not use a vibe opener if it would crowd out useful concrete information.
 - Avoid generic phrases such as "fun and lively," "good vibes," "friendly banter," or "supportive atmosphere."
-- If the specific messages already make the mood obvious, skip the vibe description entirely.
+- If the specific recap already makes the mood obvious, skip the vibe description entirely.
 
 PRIORITIZE CONCRETE DETAILS:
-- Always refer to the streamer/broadcaster as Qwert.
 - Mention specific usernames when their comment, opinion, joke, question, story, or reaction is notable.
 - Mention specific people, games, characters, Pokémon, items, events, strategies, or other named topics when clearly stated.
 - Capture notable opinions, disagreements, debates, questions, predictions, suggestions, decisions, and reactions.
@@ -292,16 +288,25 @@ Then write the recap using ONLY those supported details.
 Do not output your analysis or evidence list.
 Output only the final recap.
 
+LENGTH AND ENDING:
+- You have exactly ${SUMMARY_TEXT_LIMIT} characters available for the recap text.
+- Aim to use most of those ${SUMMARY_TEXT_LIMIT} characters when there are enough useful, well-supported details.
+- NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
+- Every sentence must be complete.
+- Never end with "..." or an unfinished thought.
+- Never begin another topic unless you have enough room to finish that thought.
+- If there is not enough room for another complete topic, omit that topic entirely.
+- Prefer fewer complete, useful details over squeezing in one additional incomplete detail.
+- Do not sacrifice factual accuracy or sentence completeness just to get closer to the character limit.
+
 STYLE:
 - Write 2 to 4 compact sentences when useful.
 - Be information-dense but natural and readable.
 - No hashtags.
 - Do not start with "Chat Recap:" because the bot adds it separately.
 - Do not start with "AI Summary:".
-- Maximum ${SUMMARY_TEXT_LIMIT} characters.
-- Use additional space only for facts clearly supported by chat.
 - Never add assumptions, filler, inferred context, or fake chronology just to make the recap longer.
-- A shorter accurate recap is better than a fuller recap containing uncertain details.
+- A shorter complete recap is better than a longer recap with an unfinished final thought.
 
 Recent Twitch chat:
 ${chatContext}`;
@@ -398,6 +403,52 @@ function extractGeminiText(data) {
 }
 
 // ==========================================
+// SAFE COMPLETE-SENTENCE LIMIT
+// ==========================================
+
+function enforceSummaryLimit(summary) {
+  if (summary.length <= SUMMARY_TEXT_LIMIT) {
+    return summary;
+  }
+
+  const withinLimit = summary.substring(0, SUMMARY_TEXT_LIMIT);
+
+  const sentenceEndings = [
+    withinLimit.lastIndexOf('.'),
+    withinLimit.lastIndexOf('?'),
+    withinLimit.lastIndexOf('!')
+  ];
+
+  const lastSentenceEnd = Math.max(...sentenceEndings);
+
+  /*
+   * If at least one complete sentence exists inside the limit,
+   * drop everything after that sentence.
+   *
+   * No "..." is added.
+   */
+  if (lastSentenceEnd >= 0) {
+    return withinLimit
+      .substring(0, lastSentenceEnd + 1)
+      .trim();
+  }
+
+  /*
+   * Extremely unlikely fallback:
+   * Gemini produced >488 chars with no sentence punctuation.
+   *
+   * Cut at the last space so we don't split a word.
+   */
+  const lastSpace = withinLimit.lastIndexOf(' ');
+
+  if (lastSpace > 0) {
+    return withinLimit.substring(0, lastSpace).trim();
+  }
+
+  return withinLimit.trim();
+}
+
+// ==========================================
 // GENERATE RECAP
 // ==========================================
 
@@ -459,13 +510,29 @@ async function generateRecap(chatLogs) {
   summary = summary.replace(/^AI Summary:\s*/i, '');
   summary = summary.replace(/^Chat Recap:\s*/i, '');
 
-  if (summary.length > SUMMARY_TEXT_LIMIT) {
-    summary = summary
-      .substring(0, SUMMARY_TEXT_LIMIT - 3)
-      .trimEnd() + '...';
+  // Remove trailing ellipsis if Gemini ignored the prompt.
+  if (/\.{3}\s*$/.test(summary)) {
+    const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
+    const lastSentenceEnd = Math.max(
+      withoutEllipsis.lastIndexOf('.'),
+      withoutEllipsis.lastIndexOf('?'),
+      withoutEllipsis.lastIndexOf('!')
+    );
+
+    if (lastSentenceEnd >= 0) {
+      summary = withoutEllipsis
+        .substring(0, lastSentenceEnd + 1)
+        .trim();
+    }
   }
 
+  // Hard safety limit without chopping a sentence.
+  summary = enforceSummaryLimit(summary);
+
   console.log('[Gemini Recap]', summary);
+  console.log(
+    `[Gemini Recap Length] ${summary.length}/${SUMMARY_TEXT_LIMIT} text characters`
+  );
 
   return {
     summary,
@@ -661,6 +728,7 @@ app.get('/', (req, res) => {
     </p>
 
     <label for="passwordInput">Password</label>
+
     <input
       type="password"
       id="passwordInput"
@@ -1277,7 +1345,7 @@ app.listen(PORT, () => {
 
   console.log(
     `Chat recap limit: ${SUMMARY_TEXT_LIMIT} text chars + ` +
-    `${SUMMARY_PREFIX.length} prefix chars = 500`
+    `${SUMMARY_PREFIX.length} prefix chars = ${TWITCH_MESSAGE_LIMIT}`
   );
 
   console.log('Successful !recap cooldown: 15 minutes');
