@@ -150,8 +150,6 @@ function parsePastedChat(rawText) {
     let message = '';
     let match;
 
-    // [#channel] <username>: message
-    // <username>: message
     match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
 
     if (match) {
@@ -159,7 +157,6 @@ function parsePastedChat(rawText) {
       message = match[2];
     }
 
-    // username: message
     if (!username) {
       match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
@@ -169,7 +166,6 @@ function parsePastedChat(rawText) {
       }
     }
 
-    // [#channel] username: message
     if (!username) {
       match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
@@ -219,7 +215,9 @@ async function callGemini(chatLogs) {
 
   const chatContext = chatLogs.join('\n');
 
-  const customPrompt = `You are creating a factual recap of recent Twitch chat for the broadcaster or a viewer who was lurking, stepped away, or could not keep up with chat.
+  const customPrompt = `You are creating a factual recap of recent Twitch chat for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
+
+Always refer to the streamer/broadcaster as Qwert.
 
 Your job is to tell them what they actually missed.
 
@@ -241,13 +239,13 @@ Twitch chat often uses shorthand and assumes context you may not have.
 If the meaning of a number, name, pronoun, event, milestone, or reference is unclear, preserve the original ambiguity or omit it.
 
 Example:
-If someone says "you almost have 200 on Twitch," you may say "they noted the channel is almost at 200 on Twitch."
+If someone says "you almost have 200 on Twitch," you may say "they noted Qwert is almost at 200 on Twitch."
 Do NOT change it to "200 followers," "200 viewers," "200 subscribers," or another interpretation unless the chat explicitly says what 200 refers to.
 
 MESSAGE ORDER AND RECENCY:
 - The supplied messages are ordered from older to newer within one recent chat window.
 - Message order indicates recency, NOT a narrative timeline.
-- Do NOT use words such as "later," "earlier," "afterward," "subsequently," "eventually," "then," or "before that" merely because one message appears after another.
+- Do NOT use words such as "later," "later on," "earlier," "afterward," "afterwards," "subsequently," "eventually," "then," or "before that" merely because one message appears after another.
 - Do not imply that separate topics happened in distinct chronological phases unless the chat explicitly establishes that sequence.
 - Prefer neutral connectors such as "also," "while," "and," or "meanwhile" when combining topics.
 - Messages near the bottom are simply the most recent messages in the supplied chat window.
@@ -403,6 +401,24 @@ function extractGeminiText(data) {
 }
 
 // ==========================================
+// CLEAN RECAP WORDING
+// ==========================================
+
+function cleanRecapWording(summary) {
+  return summary
+    .replace(/\bLater on,\s*/gi, 'Also, ')
+    .replace(/\bLater,\s*/gi, 'Also, ')
+    .replace(/\bAfterward,\s*/gi, 'Also, ')
+    .replace(/\bAfterwards,\s*/gi, 'Also, ')
+    .replace(/\bSubsequently,\s*/gi, 'Also, ')
+    .replace(/\bEventually,\s*/gi, 'Also, ')
+    .replace(/\bThen,\s*/gi, 'Also, ')
+    .replace(/\bBefore that,\s*/gi, 'Also, ')
+    .replace(/\bAlso,\s+also\b/gi, 'Also')
+    .trim();
+}
+
+// ==========================================
 // SAFE COMPLETE-SENTENCE LIMIT
 // ==========================================
 
@@ -413,32 +429,18 @@ function enforceSummaryLimit(summary) {
 
   const withinLimit = summary.substring(0, SUMMARY_TEXT_LIMIT);
 
-  const sentenceEndings = [
+  const lastSentenceEnd = Math.max(
     withinLimit.lastIndexOf('.'),
     withinLimit.lastIndexOf('?'),
     withinLimit.lastIndexOf('!')
-  ];
+  );
 
-  const lastSentenceEnd = Math.max(...sentenceEndings);
-
-  /*
-   * If at least one complete sentence exists inside the limit,
-   * drop everything after that sentence.
-   *
-   * No "..." is added.
-   */
   if (lastSentenceEnd >= 0) {
     return withinLimit
       .substring(0, lastSentenceEnd + 1)
       .trim();
   }
 
-  /*
-   * Extremely unlikely fallback:
-   * Gemini produced >488 chars with no sentence punctuation.
-   *
-   * Cut at the last space so we don't split a word.
-   */
   const lastSpace = withinLimit.lastIndexOf(' ');
 
   if (lastSpace > 0) {
@@ -510,9 +512,13 @@ async function generateRecap(chatLogs) {
   summary = summary.replace(/^AI Summary:\s*/i, '');
   summary = summary.replace(/^Chat Recap:\s*/i, '');
 
-  // Remove trailing ellipsis if Gemini ignored the prompt.
+  // Force-remove fake chronology even if Gemini ignores the prompt.
+  summary = cleanRecapWording(summary);
+
+  // If Gemini ends with an ellipsis, back up to the previous complete sentence.
   if (/\.{3}\s*$/.test(summary)) {
     const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
+
     const lastSentenceEnd = Math.max(
       withoutEllipsis.lastIndexOf('.'),
       withoutEllipsis.lastIndexOf('?'),
@@ -526,7 +532,6 @@ async function generateRecap(chatLogs) {
     }
   }
 
-  // Hard safety limit without chopping a sentence.
   summary = enforceSummaryLimit(summary);
 
   console.log('[Gemini Recap]', summary);
