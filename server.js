@@ -26,12 +26,7 @@ if (!DASHBOARD_PASSWORD) {
   );
 }
 
-app.use(
-  express.json({
-    limit: '1mb'
-  })
-);
-
+app.use(express.json({ limit: '1mb' }));
 app.use(
   express.urlencoded({
     extended: true,
@@ -45,8 +40,7 @@ app.use(
 
 const rawToken =
   (
-    process.env
-      .TWITCH_BOT_ACCESS_TOKEN ||
+    process.env.TWITCH_BOT_ACCESS_TOKEN ||
     ''
   ).trim();
 
@@ -65,34 +59,32 @@ const channelName =
 
 const botUsername =
   (
-    process.env
-      .TWITCH_BOT_USERNAME ||
+    process.env.TWITCH_BOT_USERNAME ||
     ''
   )
     .toLowerCase()
     .trim();
 
-const client =
-  new tmi.Client({
-    options: {
-      debug: true
-    },
-    identity: {
-      username: botUsername,
-      password: pass
-    },
-    channels: channelName
-      ? [channelName]
-      : []
-  });
+const client = new tmi.Client({
+  options: {
+    debug: true
+  },
+  identity: {
+    username: botUsername,
+    password: pass
+  },
+  channels: channelName
+    ? [channelName]
+    : []
+});
+
+let botConnected = false;
 
 // ==========================================
 // IGNORED CHAT USERS
 // ==========================================
 
-function isIgnoredUsername(
-  username
-) {
+function isIgnoredUsername(username) {
   const ignoredUsers = [
     'nightbot',
     'streamelements',
@@ -115,13 +107,29 @@ const recapManager =
     client,
     channelName,
     botUsername,
-    twitchAccessToken:
-      rawToken
+    twitchAccessToken: rawToken
   });
 
 // ==========================================
 // TWITCH CONNECTION
 // ==========================================
+
+client.on('connected', () => {
+  botConnected = true;
+
+  console.log(
+    '[Bot] Twitch chat connection is online.'
+  );
+});
+
+client.on('disconnected', (reason) => {
+  botConnected = false;
+
+  console.log(
+    '[Bot] Twitch chat disconnected:',
+    reason
+  );
+});
 
 if (
   !rawToken ||
@@ -139,6 +147,8 @@ if (
   client
     .connect()
     .then(async () => {
+      botConnected = true;
+
       console.log(
         `Connected to Twitch channel: #${channelName}`
       );
@@ -146,6 +156,8 @@ if (
       await recapManager.start();
     })
     .catch((err) => {
+      botConnected = false;
+
       console.error(
         'Failed to connect to Twitch:',
         err
@@ -157,14 +169,95 @@ if (
 // HEALTH CHECK
 // ==========================================
 
-app.get(
-  '/health',
-  (req, res) => {
-    res
-      .status(200)
-      .send('OK');
+app.get('/health', (req, res) => {
+  res
+    .status(200)
+    .send('OK');
+});
+
+// ==========================================
+// PUBLIC STATUS ENDPOINT
+// ==========================================
+
+app.get('/status', (req, res) => {
+  const recapStatus =
+    recapManager.getStatus();
+
+  res.json({
+    success: true,
+    qwert: {
+      live:
+        recapStatus.streamLive,
+      statusKnown:
+        recapStatus.streamStateInitialized,
+      twitchUrl:
+        `https://www.twitch.tv/${channelName}`
+    },
+    bot: {
+      online:
+        botConnected,
+      loggingMessages:
+        recapStatus.loggingMessages,
+      messagesInWindow:
+        recapStatus.messagesInWindow,
+      recapInProgress:
+        recapStatus.recapInProgress,
+      nextRecapAt:
+        recapStatus.nextRecapAt
+    }
+  });
+});
+
+// ==========================================
+// PASSWORD HELPER
+// ==========================================
+
+function isValidDashboardPassword(password) {
+  if (!DASHBOARD_PASSWORD) {
+    return false;
   }
-);
+
+  return (
+    password ===
+    DASHBOARD_PASSWORD
+  );
+}
+
+// ==========================================
+// MOD LOGIN ENDPOINT
+// ==========================================
+
+app.post('/mod-login', (req, res) => {
+  const { password } = req.body;
+
+  if (!DASHBOARD_PASSWORD) {
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error:
+          'DASHBOARD_PASSWORD is not configured on the server.'
+      });
+  }
+
+  if (
+    !isValidDashboardPassword(
+      password
+    )
+  ) {
+    return res
+      .status(401)
+      .json({
+        success: false,
+        error:
+          'Incorrect password!'
+      });
+  }
+
+  return res.json({
+    success: true
+  });
+});
 
 // ==========================================
 // WEB DASHBOARD
@@ -190,9 +283,10 @@ app.get('/', (req, res) => {
       padding: 20px;
       display: flex;
       justify-content: center;
-      align-items: center;
-      min-height: 80vh;
+      align-items: flex-start;
+      min-height: 100vh;
       margin: 0;
+      box-sizing: border-box;
     }
 
     .card {
@@ -201,8 +295,9 @@ app.get('/', (req, res) => {
       border-radius: 8px;
       padding: 24px;
       width: 100%;
-      max-width: 650px;
+      max-width: 700px;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      margin-top: 30px;
     }
 
     h2 {
@@ -213,6 +308,15 @@ app.get('/', (req, res) => {
     p {
       color: #adadb8;
       font-size: 14px;
+    }
+
+    a {
+      color: #bf94ff;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
     }
 
     label {
@@ -235,7 +339,7 @@ app.get('/', (req, res) => {
     }
 
     input {
-      margin-bottom: 16px;
+      margin-bottom: 10px;
     }
 
     textarea {
@@ -269,25 +373,89 @@ app.get('/', (req, res) => {
       cursor: not-allowed;
     }
 
-    .test-buttons {
-      display: flex;
-      gap: 8px;
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 20px 0;
     }
 
-    .test-buttons button,
-    #testPastedBtn {
-      background: #2f2f38;
+    .status-box {
+      background: #0e0e10;
+      border: 1px solid #26262c;
+      border-radius: 6px;
+      padding: 14px;
     }
 
-    .test-buttons button:hover,
-    #testPastedBtn:hover {
-      background: #3f3f4a;
+    .status-title {
+      color: #777783;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-bottom: 7px;
+    }
+
+    .status-value {
+      font-size: 17px;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+
+    .status-detail {
+      color: #adadb8;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .online {
+      color: #00f59b;
+    }
+
+    .offline {
+      color: #ff4f4f;
+    }
+
+    .unknown {
+      color: #f5c542;
+    }
+
+    .logging {
+      color: #00f59b;
+    }
+
+    .not-logging {
+      color: #adadb8;
+    }
+
+    .login-box {
+      margin-top: 20px;
+      padding: 18px;
+      border-radius: 6px;
+      border: 1px solid #3a3a44;
+      background: #121216;
+    }
+
+    .login-title {
+      font-weight: bold;
+      margin-bottom: 12px;
+    }
+
+    #loginStatus,
+    #chatStatus,
+    #testResult {
+      margin-top: 10px;
+      font-size: 13px;
+      word-break: break-word;
+    }
+
+    #protectedControls {
+      display: none;
     }
 
     .divider {
       border: 0;
       border-top: 1px solid #26262c;
-      margin: 20px 0;
+      margin: 22px 0;
     }
 
     .section-title {
@@ -304,11 +472,19 @@ app.get('/', (req, res) => {
       line-height: 1.4;
     }
 
-    #status,
-    #testResult {
-      margin-top: 12px;
-      font-size: 13px;
-      word-break: break-word;
+    .test-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .test-buttons button,
+    #testPastedBtn {
+      background: #2f2f38;
+    }
+
+    .test-buttons button:hover,
+    #testPastedBtn:hover {
+      background: #3f3f4a;
     }
 
     #testResult {
@@ -333,7 +509,17 @@ app.get('/', (req, res) => {
       font-size: 11px;
     }
 
-    @media (max-width: 550px) {
+    .logged-in {
+      color: #00f59b;
+      font-size: 12px;
+      margin-bottom: 14px;
+    }
+
+    @media (max-width: 600px) {
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
+
       .test-buttons {
         flex-direction: column;
         gap: 0;
@@ -344,185 +530,523 @@ app.get('/', (req, res) => {
 
 <body>
   <div class="card">
-    <h2>SqwertArmyBot Control</h2>
+    <h2>SqwertArmyBot</h2>
 
-    <p>
-      Sending to channel:
-      <strong>
-        #${channelName || 'Not configured'}
-      </strong>
-    </p>
+    <div class="status-grid">
+      <div class="status-box">
+        <div class="status-title">
+          Qwert Status
+        </div>
 
-    <p>
-      Automatic recaps:
-      <strong>
-        60 min / 150 messages for first recap,
-        then every 45 min while Qwert is live.
-      </strong>
-    </p>
+        <div
+          id="qwertStatus"
+          class="status-value unknown"
+        >
+          Checking...
+        </div>
 
-    <label for="passwordInput">
-      Password
-    </label>
+        <div
+          id="qwertStatusDetail"
+          class="status-detail"
+        >
+          Checking Twitch...
+        </div>
+      </div>
 
-    <input
-      type="password"
-      id="passwordInput"
-      placeholder="Enter password..."
-      autocomplete="current-password"
-    >
+      <div class="status-box">
+        <div class="status-title">
+          Bot Status
+        </div>
 
-    <form id="chatForm">
-      <label for="messageInput">
-        Message to Twitch
+        <div
+          id="botStatus"
+          class="status-value unknown"
+        >
+          Checking...
+        </div>
+
+        <div
+          id="botStatusDetail"
+          class="status-detail"
+        >
+          Checking bot...
+        </div>
+      </div>
+    </div>
+
+    <div class="login-box" id="loginBox">
+      <div class="login-title">
+        MOD Login
+      </div>
+
+      <label for="passwordInput">
+        MOD Password
       </label>
 
       <input
-        type="text"
-        id="messageInput"
-        placeholder="Type a message..."
-        autocomplete="off"
+        type="password"
+        id="passwordInput"
+        placeholder="Enter mod password..."
+        autocomplete="current-password"
       >
-
-      <button
-        type="submit"
-        id="sendChatBtn"
-      >
-        Send to Chat
-      </button>
-    </form>
-
-    <div id="status"></div>
-
-    <hr class="divider">
-
-    <div class="section-title">
-      AI Summary Testing
-    </div>
-
-    <div class="test-buttons">
-      <button
-        type="button"
-        id="testSampleBtn"
-      >
-        Test Sample Chat
-      </button>
 
       <button
         type="button"
-        id="testStoredBtn"
+        id="loginBtn"
       >
-        Test Current Recap Window
+        Login
       </button>
+
+      <div id="loginStatus"></div>
     </div>
 
-    <hr class="divider">
+    <div id="protectedControls">
+      <hr class="divider">
 
-    <div class="section-title">
-      Test Pasted Render Logs
+      <div class="logged-in">
+        ✓ MOD controls unlocked
+      </div>
+
+      <div class="section-title">
+        Send Message to Twitch
+      </div>
+
+      <form id="chatForm">
+        <input
+          type="text"
+          id="messageInput"
+          placeholder="Type a message..."
+          autocomplete="off"
+        >
+
+        <button
+          type="submit"
+          id="sendChatBtn"
+        >
+          Send to Chat
+        </button>
+      </form>
+
+      <div id="chatStatus"></div>
+
+      <hr class="divider">
+
+      <div class="section-title">
+        AI Summary Testing
+      </div>
+
+      <div class="test-buttons">
+        <button
+          type="button"
+          id="testSampleBtn"
+        >
+          Test Sample Chat
+        </button>
+
+        <button
+          type="button"
+          id="testStoredBtn"
+        >
+          Test Current Recap Window
+        </button>
+      </div>
+
+      <hr class="divider">
+
+      <div class="section-title">
+        Test Pasted Render Logs
+      </div>
+
+      <p class="hint">
+        Paste Twitch chat lines from Render here.
+        Nightbot, StreamElements, and
+        ${botUsername || 'TWITCH_BOT_USERNAME'}
+        are ignored automatically.
+        Pasted tests use the
+        ${MAX_PASTED_MESSAGES}
+        most recent valid messages.
+      </p>
+
+      <textarea
+        id="pastedChatInput"
+        placeholder="Paste Render / Twitch chat logs here..."
+      ></textarea>
+
+      <button
+        type="button"
+        id="testPastedBtn"
+      >
+        Test Pasted Chat
+      </button>
+
+      <div id="testResult"></div>
     </div>
-
-    <p class="hint">
-      Paste Twitch chat lines from Render here.
-      Nightbot, StreamElements, and
-      ${botUsername || 'TWITCH_BOT_USERNAME'}
-      are ignored automatically.
-      Pasted tests use the
-      ${MAX_PASTED_MESSAGES}
-      most recent valid messages.
-    </p>
-
-    <textarea
-      id="pastedChatInput"
-      placeholder="Paste Render / Twitch chat logs here..."
-    ></textarea>
-
-    <button
-      type="button"
-      id="testPastedBtn"
-    >
-      Test Pasted Chat
-    </button>
-
-    <div id="testResult"></div>
   </div>
 
   <script>
+    let modLoggedIn = false;
+    let modPassword = '';
+    let autoRefreshTimer = null;
+
     const passwordInput =
-      document.getElementById(
-        'passwordInput'
-      );
+      document.getElementById('passwordInput');
+
+    const loginBtn =
+      document.getElementById('loginBtn');
+
+    const loginStatus =
+      document.getElementById('loginStatus');
+
+    const loginBox =
+      document.getElementById('loginBox');
+
+    const protectedControls =
+      document.getElementById('protectedControls');
+
+    const qwertStatus =
+      document.getElementById('qwertStatus');
+
+    const qwertStatusDetail =
+      document.getElementById('qwertStatusDetail');
+
+    const botStatus =
+      document.getElementById('botStatus');
+
+    const botStatusDetail =
+      document.getElementById('botStatusDetail');
 
     const messageInput =
-      document.getElementById(
-        'messageInput'
-      );
+      document.getElementById('messageInput');
 
     const pastedChatInput =
-      document.getElementById(
-        'pastedChatInput'
-      );
+      document.getElementById('pastedChatInput');
 
     const sendChatBtn =
-      document.getElementById(
-        'sendChatBtn'
-      );
+      document.getElementById('sendChatBtn');
 
     const testSampleBtn =
-      document.getElementById(
-        'testSampleBtn'
-      );
+      document.getElementById('testSampleBtn');
 
     const testStoredBtn =
-      document.getElementById(
-        'testStoredBtn'
-      );
+      document.getElementById('testStoredBtn');
 
     const testPastedBtn =
-      document.getElementById(
-        'testPastedBtn'
-      );
+      document.getElementById('testPastedBtn');
 
-    const status =
-      document.getElementById(
-        'status'
-      );
+    const chatStatus =
+      document.getElementById('chatStatus');
 
     const testResult =
-      document.getElementById(
-        'testResult'
-      );
+      document.getElementById('testResult');
+
+    // ========================================
+    // STATUS DISPLAY
+    // ========================================
+
+    async function updateStatus() {
+      try {
+        const response =
+          await fetch('/status');
+
+        const data =
+          await response.json();
+
+        if (!data.success) {
+          throw new Error(
+            'Status request failed.'
+          );
+        }
+
+        if (!data.qwert.statusKnown) {
+          qwertStatus.textContent =
+            'CHECKING';
+
+          qwertStatus.className =
+            'status-value unknown';
+
+          qwertStatusDetail.innerHTML =
+            '<a href="' +
+            escapeHtml(data.qwert.twitchUrl) +
+            '" target="_blank" rel="noopener noreferrer">' +
+            'Open Qwert on Twitch' +
+            '</a>';
+        } else if (data.qwert.live) {
+          qwertStatus.textContent =
+            'LIVE';
+
+          qwertStatus.className =
+            'status-value online';
+
+          qwertStatusDetail.innerHTML =
+            '<a href="' +
+            escapeHtml(data.qwert.twitchUrl) +
+            '" target="_blank" rel="noopener noreferrer">' +
+            'Watch Qwert on Twitch' +
+            '</a>';
+        } else {
+          qwertStatus.textContent =
+            'OFFLINE';
+
+          qwertStatus.className =
+            'status-value offline';
+
+          qwertStatusDetail.innerHTML =
+            '<a href="' +
+            escapeHtml(data.qwert.twitchUrl) +
+            '" target="_blank" rel="noopener noreferrer">' +
+            'Open Qwert on Twitch' +
+            '</a>';
+        }
+
+        if (data.bot.online) {
+          botStatus.textContent =
+            'ONLINE';
+
+          botStatus.className =
+            'status-value online';
+        } else {
+          botStatus.textContent =
+            'OFFLINE';
+
+          botStatus.className =
+            'status-value offline';
+        }
+
+        let botDetails = '';
+
+        if (data.bot.loggingMessages) {
+          botDetails =
+            '<span class="logging">' +
+            'Logging chat for recap' +
+            '</span>' +
+            '<br>' +
+            data.bot.messagesInWindow +
+            ' message(s) in current window';
+
+          if (data.bot.recapInProgress) {
+            botDetails +=
+              '<br>Recap is being generated now';
+          } else if (data.bot.nextRecapAt) {
+            botDetails +=
+              '<br>Next recap in ' +
+              formatCountdown(
+                data.bot.nextRecapAt -
+                Date.now()
+              );
+          }
+        } else if (data.qwert.live) {
+          botDetails =
+            '<span class="not-logging">' +
+            'Not currently logging recap messages' +
+            '</span>';
+        } else {
+          botDetails =
+            '<span class="not-logging">' +
+            'Waiting for Qwert to go live' +
+            '</span>';
+        }
+
+        botStatusDetail.innerHTML =
+          botDetails;
+      } catch (err) {
+        qwertStatus.textContent =
+          'UNKNOWN';
+
+        qwertStatus.className =
+          'status-value unknown';
+
+        qwertStatusDetail.textContent =
+          'Could not load Twitch status.';
+
+        botStatus.textContent =
+          'UNKNOWN';
+
+        botStatus.className =
+          'status-value unknown';
+
+        botStatusDetail.textContent =
+          'Could not load bot status.';
+      }
+    }
+
+    function formatCountdown(milliseconds) {
+      const totalSeconds =
+        Math.max(
+          0,
+          Math.ceil(
+            milliseconds / 1000
+          )
+        );
+
+      const minutes =
+        Math.floor(
+          totalSeconds / 60
+        );
+
+      const seconds =
+        totalSeconds % 60;
+
+      if (minutes > 0) {
+        return (
+          minutes +
+          'min ' +
+          seconds +
+          's'
+        );
+      }
+
+      return seconds + 's';
+    }
+
+    // ========================================
+    // AUTO REFRESH WHILE LOGGED OUT
+    // ========================================
+
+    function startLoggedOutAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearTimeout(
+          autoRefreshTimer
+        );
+      }
+
+      autoRefreshTimer =
+        setTimeout(() => {
+          if (!modLoggedIn) {
+            window.location.reload();
+          }
+        }, 60000);
+    }
+
+    function stopLoggedOutAutoRefresh() {
+      if (autoRefreshTimer) {
+        clearTimeout(
+          autoRefreshTimer
+        );
+
+        autoRefreshTimer = null;
+      }
+    }
+
+    // ========================================
+    // MOD LOGIN
+    // ========================================
+
+    async function attemptLogin() {
+      const password =
+        passwordInput.value;
+
+      if (!password) {
+        loginStatus.style.color =
+          '#ff4f4f';
+
+        loginStatus.textContent =
+          'Enter the MOD password.';
+
+        return;
+      }
+
+      loginBtn.disabled = true;
+
+      loginStatus.style.color =
+        '#adadb8';
+
+      loginStatus.textContent =
+        'Logging in...';
+
+      try {
+        const response =
+          await fetch('/mod-login', {
+            method: 'POST',
+            headers: {
+              'Content-Type':
+                'application/json'
+            },
+            body:
+              JSON.stringify({
+                password
+              })
+          });
+
+        const data =
+          await response.json();
+
+        if (!data.success) {
+          loginStatus.style.color =
+            '#ff4f4f';
+
+          loginStatus.textContent =
+            getErrorMessage(
+              data.error
+            );
+
+          return;
+        }
+
+        modLoggedIn = true;
+        modPassword = password;
+
+        passwordInput.value = '';
+
+        loginBox.style.display =
+          'none';
+
+        protectedControls.style.display =
+          'block';
+
+        stopLoggedOutAutoRefresh();
+
+        await updateStatus();
+      } catch (err) {
+        loginStatus.style.color =
+          '#ff4f4f';
+
+        loginStatus.textContent =
+          'Failed to reach server.';
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    loginBtn.addEventListener(
+      'click',
+      attemptLogin
+    );
+
+    passwordInput.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.key === 'Enter') {
+          attemptLogin();
+        }
+      }
+    );
+
+    // ========================================
+    // SEND CHAT
+    // ========================================
 
     document
-      .getElementById(
-        'chatForm'
-      )
+      .getElementById('chatForm')
       .addEventListener(
         'submit',
         async (e) => {
           e.preventDefault();
 
-          const password =
-            passwordInput.value;
+          if (!modLoggedIn) return;
 
           const message =
             messageInput.value.trim();
 
-          if (
-            !password ||
-            !message
-          ) {
-            return;
-          }
-
-          status.style.color =
-            '#adadb8';
-
-          status.textContent =
-            'Sending...';
+          if (!message) return;
 
           sendChatBtn.disabled =
             true;
+
+          chatStatus.style.color =
+            '#adadb8';
+
+          chatStatus.textContent =
+            'Sending...';
 
           try {
             const response =
@@ -536,7 +1060,8 @@ app.get('/', (req, res) => {
                   },
                   body:
                     JSON.stringify({
-                      password,
+                      password:
+                        modPassword,
                       message
                     })
                 }
@@ -546,29 +1071,29 @@ app.get('/', (req, res) => {
               await response.json();
 
             if (data.success) {
-              status.style.color =
+              chatStatus.style.color =
                 '#00f59b';
 
-              status.textContent =
+              chatStatus.textContent =
                 'Sent to chat!';
 
               messageInput.value =
                 '';
             } else {
-              status.style.color =
+              chatStatus.style.color =
                 '#ff4f4f';
 
-              status.textContent =
+              chatStatus.textContent =
                 'Error: ' +
                 getErrorMessage(
                   data.error
                 );
             }
           } catch (err) {
-            status.style.color =
+            chatStatus.style.color =
               '#ff4f4f';
 
-            status.textContent =
+            chatStatus.textContent =
               'Failed to reach server.';
           } finally {
             sendChatBtn.disabled =
@@ -577,19 +1102,12 @@ app.get('/', (req, res) => {
         }
       );
 
-    async function runSummaryTest(
-      type
-    ) {
-      const password =
-        passwordInput.value;
+    // ========================================
+    // SUMMARY TESTS
+    // ========================================
 
-      if (!password) {
-        alert(
-          'Please enter the dashboard password first.'
-        );
-
-        return;
-      }
+    async function runSummaryTest(type) {
+      if (!modLoggedIn) return;
 
       if (
         type === 'pasted' &&
@@ -602,9 +1120,7 @@ app.get('/', (req, res) => {
         return;
       }
 
-      setTestButtonsDisabled(
-        true
-      );
+      setTestButtonsDisabled(true);
 
       testResult.style.display =
         'block';
@@ -615,9 +1131,7 @@ app.get('/', (req, res) => {
       if (type === 'sample') {
         testResult.textContent =
           'Generating summary from sample chat...';
-      } else if (
-        type === 'stored'
-      ) {
+      } else if (type === 'stored') {
         testResult.textContent =
           'Generating summary from current automatic recap window...';
       } else {
@@ -627,13 +1141,11 @@ app.get('/', (req, res) => {
 
       try {
         const body = {
-          password,
+          password: modPassword,
           type
         };
 
-        if (
-          type === 'pasted'
-        ) {
+        if (type === 'pasted') {
           body.pastedChat =
             pastedChatInput.value;
         }
@@ -648,9 +1160,7 @@ app.get('/', (req, res) => {
                   'application/json'
               },
               body:
-                JSON.stringify(
-                  body
-                )
+                JSON.stringify(body)
             }
           );
 
@@ -665,8 +1175,7 @@ app.get('/', (req, res) => {
             'Sample chat';
 
           if (
-            data.source ===
-            'stored'
+            data.source === 'stored'
           ) {
             sourceText =
               'Current recap window (' +
@@ -675,8 +1184,7 @@ app.get('/', (req, res) => {
           }
 
           if (
-            data.source ===
-            'pasted'
+            data.source === 'pasted'
           ) {
             sourceText =
               'Pasted chat (' +
@@ -699,9 +1207,7 @@ app.get('/', (req, res) => {
           let sanitizationText =
             '';
 
-          if (
-            data.sanitized
-          ) {
+          if (data.sanitized) {
             sanitizationText =
               '<span class="sanitized-warning">' +
               '⚠ Sensitive chat text was redacted before being sent to Gemini: ' +
@@ -762,17 +1268,12 @@ app.get('/', (req, res) => {
         disabled;
     }
 
-    function getErrorMessage(
-      error
-    ) {
+    function getErrorMessage(error) {
       if (!error) {
         return 'Unknown error';
       }
 
-      if (
-        typeof error ===
-        'string'
-      ) {
+      if (typeof error === 'string') {
         return error;
       }
 
@@ -782,80 +1283,44 @@ app.get('/', (req, res) => {
       );
     }
 
-    function escapeHtml(
-      value
-    ) {
+    function escapeHtml(value) {
       return String(value)
-        .replace(
-          /&/g,
-          '&amp;'
-        )
-        .replace(
-          /</g,
-          '&lt;'
-        )
-        .replace(
-          />/g,
-          '&gt;'
-        )
-        .replace(
-          /"/g,
-          '&quot;'
-        )
-        .replace(
-          /'/g,
-          '&#039;'
-        );
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     }
 
-    testSampleBtn
-      .addEventListener(
-        'click',
-        () =>
-          runSummaryTest(
-            'sample'
-          )
-      );
+    testSampleBtn.addEventListener(
+      'click',
+      () =>
+        runSummaryTest('sample')
+    );
 
-    testStoredBtn
-      .addEventListener(
-        'click',
-        () =>
-          runSummaryTest(
-            'stored'
-          )
-      );
+    testStoredBtn.addEventListener(
+      'click',
+      () =>
+        runSummaryTest('stored')
+    );
 
-    testPastedBtn
-      .addEventListener(
-        'click',
-        () =>
-          runSummaryTest(
-            'pasted'
-          )
-      );
+    testPastedBtn.addEventListener(
+      'click',
+      () =>
+        runSummaryTest('pasted')
+    );
+
+    // ========================================
+    // PAGE STARTUP
+    // ========================================
+
+    updateStatus();
+    startLoggedOutAutoRefresh();
   </script>
 </body>
 </html>
   `);
 });
-
-// ==========================================
-// PASSWORD HELPER
-// ==========================================
-
-function isValidDashboardPassword(
-  password
-) {
-  if (!DASHBOARD_PASSWORD) {
-    return false;
-  }
-
-  return (
-    password ===
-    DASHBOARD_PASSWORD
-  );
-}
 
 // ==========================================
 // SEND CHAT ENDPOINT
@@ -894,8 +1359,7 @@ app.post(
     }
 
     if (
-      typeof message !==
-        'string' ||
+      typeof message !== 'string' ||
       !message.trim()
     ) {
       return res
@@ -1011,9 +1475,7 @@ app.post(
         recapManager
           .getCurrentWindowLogs();
 
-      if (
-        logs.length === 0
-      ) {
+      if (logs.length === 0) {
         return res
           .status(400)
           .json({
@@ -1024,15 +1486,11 @@ app.post(
       }
 
       source = 'stored';
-
       totalValidMessages =
         logs.length;
-    } else if (
-      type === 'pasted'
-    ) {
+    } else if (type === 'pasted') {
       if (
-        typeof pastedChat !==
-          'string' ||
+        typeof pastedChat !== 'string' ||
         !pastedChat.trim()
       ) {
         return res
@@ -1054,10 +1512,7 @@ app.post(
           ]
         );
 
-      if (
-        parsed.logs.length ===
-        0
-      ) {
+      if (parsed.logs.length === 0) {
         return res
           .status(400)
           .json({
@@ -1067,30 +1522,20 @@ app.post(
           });
       }
 
-      logs =
-        parsed.logs;
-
-      source =
-        'pasted';
-
+      logs = parsed.logs;
+      source = 'pasted';
       totalValidMessages =
         parsed.totalValidMessages;
     } else {
-      logs =
-        sampleChatLogs;
-
-      source =
-        'sample';
-
+      logs = sampleChatLogs;
+      source = 'sample';
       totalValidMessages =
         logs.length;
     }
 
     try {
       const result =
-        await generateRecap(
-          logs
-        );
+        await generateRecap(logs);
 
       const fullOutput =
         SUMMARY_PREFIX +
@@ -1154,9 +1599,7 @@ client.on(
     message,
     self
   ) => {
-    if (self) {
-      return;
-    }
+    if (self) return;
 
     const rawMessage =
       (message || '').trim();
@@ -1183,12 +1626,11 @@ client.on(
     }
 
     // ========================================
-    // !RECAP NOW REPORTS NEXT AUTO RECAP
+    // !RECAP = NEXT AUTO RECAP STATUS
     // ========================================
 
     if (
-      lowerMsg ===
-        '!recap' ||
+      lowerMsg === '!recap' ||
       lowerMsg.startsWith(
         '!recap '
       )
@@ -1242,41 +1684,42 @@ process.on(
 // START SERVER
 // ==========================================
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `Web server running on port ${PORT}`
-    );
+app.listen(PORT, () => {
+  console.log(
+    `Web server running on port ${PORT}`
+  );
 
-    console.log(
-      'Gemini model: gemini-3.5-flash-lite'
-    );
+  console.log(
+    'Gemini model: gemini-3.5-flash-lite'
+  );
 
-    console.log(
-      `Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`
-    );
+  console.log(
+    `Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`
+  );
 
-    console.log(
-      'Automatic recap mode enabled.'
-    );
+  console.log(
+    'Automatic recap mode enabled.'
+  );
 
-    console.log(
-      'First recap: 60 minutes or 150 messages.'
-    );
+  console.log(
+    'First recap: 60 minutes or 150 messages.'
+  );
 
-    console.log(
-      'Recurring recap: every 45 minutes.'
-    );
+  console.log(
+    'Recurring recap: every 45 minutes.'
+  );
 
-    console.log(
-      'Stream detection: Twitch API every 30 seconds.'
-    );
+  console.log(
+    '!recap status cooldown: 5 minutes.'
+  );
 
-    if (channelName) {
-      console.log(
-        `Twitch channel: #${channelName}`
-      );
-    }
+  console.log(
+    'Stream detection: Twitch API every 30 seconds.'
+  );
+
+  if (channelName) {
+    console.log(
+      `Twitch channel: #${channelName}`
+    );
   }
-);
+});
