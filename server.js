@@ -1,5 +1,6 @@
 const express = require('express');
 const tmi = require('tmi.js');
+const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -7,9 +8,12 @@ const PORT = process.env.PORT || 3000;
 // Secret Password Configuration
 const DASHBOARD_PASSWORD = 'Cf19fdfa34s';
 
-// Middleware to parse incoming JSON data
+// Middleware to parse incoming JSON & form data
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Initialize Gemini Client
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Setup Twitch Client
 const rawToken = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').trim();
@@ -26,6 +30,22 @@ const client = new tmi.Client({
 });
 
 client.connect().catch(console.error);
+
+// ==========================================
+// CHAT LOGGING & COOLDOWN SETTINGS
+// ==========================================
+const recentChatLogs = [];
+const MAX_LOG_SIZE = 50;
+
+// Cooldown tracking for !askai
+let lastGlobalAiUse = 0;
+const userAiCooldowns = new Map();
+const AI_GLOBAL_COOLDOWN = 15 * 1000; // 15 seconds
+const AI_USER_COOLDOWN = 45 * 1000;   // 45 seconds
+
+// Cooldown tracking for !recap
+let lastRecapUse = 0;
+const RECAP_COOLDOWN = 60 * 1000;     // 60 seconds
 
 // 1. Health check endpoint for UptimeRobot
 app.get('/health', (req, res) => res.status(200).send('OK'));
@@ -105,11 +125,10 @@ app.get('/', (req, res) => {
   `);
 });
 
-// 3. Protected API Endpoint
+// 3. Protected Dashboard API Endpoint
 app.post('/send-chat', (req, res) => {
   const { password, message } = req.body;
 
-  // Verify Password
   if (password !== DASHBOARD_PASSWORD) {
     return res.status(401).json({ success: false, error: 'Incorrect password!' });
   }
@@ -118,7 +137,6 @@ app.post('/send-chat', (req, res) => {
     return res.status(400).json({ success: false, error: 'Message cannot be empty.' });
   }
 
-  // Send message to Twitch chat
   client.say(channelName, message)
     .then(() => res.json({ success: true }))
     .catch((err) => {
@@ -128,13 +146,104 @@ app.post('/send-chat', (req, res) => {
 });
 
 // 4. Twitch Chat Message Listener
-client.on('message', (channel, tags, message, self) => {
+client.on('message', async (channel, tags, message, self) => {
   if (self) return;
 
-  const lowerMsg = message.trim().toLowerCase();
+  const rawMessage = message.trim();
+  const lowerMsg = rawMessage.toLowerCase();
   const username = tags.username.toLowerCase();
+  const displayName = tags['display-name'] || tags.username;
+  const now = Date.now();
 
-  // Trigger: motmo_ says "hog reveal"
+  // Ignore Nightbot or your own bot account
+  const ignoredBots = ['nightbot', (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim()];
+  if (ignoredBots.includes(username)) return;
+
+  // ==========================================
+  // COMMAND 1: !askai <prompt>
+  // ==========================================
+  if (lowerMsg.startsWith('!askai')) {
+    // Cooldown check (silent exit if on cooldown)
+    if (now - lastGlobalAiUse < AI_GLOBAL_COOLDOWN) return;
+    const lastUserUse = userAiCooldowns.get(username) || 0;
+    if (now - lastUserUse < AI_USER_COOLDOWN) return;
+
+    const prompt = rawMessage.slice(7).trim();
+    if (!prompt) {
+      client.say(channel, `@${displayName}, please include a question! (e.g. !askai What is the capital of Japan?)`);
+      return;
+    }
+
+    // Set cooldown timestamps
+    lastGlobalAiUse = now;
+    userAiCooldowns.set(username, now);
+
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `You are a Twitch chatbot. Answer this viewer's question concisely in under 300 characters: ${prompt}`
+      });
+
+      let aiText = response.text ? response.text.trim() : 'No response from AI.';
+      if (aiText.length > 400) {
+        aiText = aiText.substring(0, 397) + '...';
+      }
+
+      client.say(channel, `@${displayName} ${aiText}`);
+    } catch (err) {
+      console.error('Gemini !askai Error:', err);
+    }
+    return;
+  }
+
+  // ==========================================
+  // COMMAND 2: !recap
+  // ==========================================
+  if (lowerMsg.startsWith('!recap')) {
+    // Cooldown check (silent exit if on cooldown)
+    if (now - lastRecapUse < RECAP_COOLDOWN) return;
+
+    if (recentChatLogs.length < 5) {
+      client.say(channel, `@${displayName}, not enough chat history yet to summarize!`);
+      return;
+    }
+
+    lastRecapUse = now;
+
+    try {
+      const chatContext = recentChatLogs.join('\n');
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `You are a Twitch stream assistant. Summarize what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Include chat sentiment/mood/vibe. Do not use hashtags. Keep it udner 400 characters:\n\n${chatContext}`
+      });
+
+      let summary = response.text ? response.text.trim() : 'Could not generate recap.';
+      if (summary.length > 400) {
+        summary = summary.substring(0, 397) + '...';
+      }
+
+      client.say(channel, `[Chat Recap]: ${summary}`);
+    } catch (err) {
+      console.error('Gemini !recap Error:', err);
+    }
+    return;
+  }
+
+  // ==========================================
+  // LOG ORGANIC CHAT MESSAGES
+  // ==========================================
+  // Store non-command messages into the rolling buffer for !recap
+  if (!rawMessage.startsWith('!')) {
+    recentChatLogs.push(`${displayName}: ${rawMessage}`);
+
+    if (recentChatLogs.length > MAX_LOG_SIZE) {
+      recentChatLogs.shift();
+    }
+  }
+
+  // ==========================================
+  // PASSIVE TRIGGERS
+  // ==========================================
   if (username === 'motmo_' && lowerMsg.includes('hog reveal')) {
     client.say(channel, 'Did Motmo_ say.. HOG REVEAL?');
   }
