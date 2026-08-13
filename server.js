@@ -46,9 +46,15 @@ async function generateRecap(chatLogs) {
   const chatContext = chatLogs.join('\n');
   const customPrompt = `You are a Twitch stream assistant. Summarize chat sentiment/mood/vibes and what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. If topics are broad, keep it concise and under 400 characters. Otherwise, try not to add unnecessary details and avoid artificially making it longer than it needs to be. If any sexual discussions are included, make it a family-friendly version:\n\n${chatContext}`;
 
+  // Explicit payload object format required by modern @google/genai SDK
   const response = await ai.models.generateContent({
-    model: 'gemini-2.0-flash',
-    contents: customPrompt
+    model: 'gemini-2.5-flash',
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: customPrompt }]
+      }
+    ]
   });
 
   let summary = response.text ? response.text.trim() : 'Could not generate recap.';
