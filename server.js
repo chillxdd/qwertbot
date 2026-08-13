@@ -51,11 +51,18 @@ if (!rawToken || !channelName || !botUsername) {
 }
 
 // ==========================================
-// CHAT LOGGING & COOLDOWN
+// CHAT LOGGING & RECAP WINDOW
 // ==========================================
 
 const recentChatLogs = [];
-const MAX_LOG_SIZE = 50;
+
+const RECAP_LOOKBACK = 20 * 60 * 1000;
+const MAX_RECAP_MESSAGES = 150;
+const CHAT_MEMORY_RETENTION = 60 * 60 * 1000;
+
+// ==========================================
+// RECAP COOLDOWN
+// ==========================================
 
 let lastRecapUse = 0;
 let currentRecapCooldown = 15 * 60 * 1000;
@@ -75,6 +82,34 @@ function isIgnoredUsername(username) {
   ].filter(Boolean);
 
   return ignoredUsers.includes((username || '').toLowerCase().trim());
+}
+
+// ==========================================
+// GET RECENT CHAT FOR RECAP
+// ==========================================
+
+function getRecentRecapLogs() {
+  const cutoff = Date.now() - RECAP_LOOKBACK;
+
+  return recentChatLogs
+    .filter((item) => item.timestamp >= cutoff)
+    .slice(-MAX_RECAP_MESSAGES)
+    .map((item) => item.text);
+}
+
+// ==========================================
+// CLEAN OLD CHAT FROM MEMORY
+// ==========================================
+
+function cleanupOldChatLogs() {
+  const cutoff = Date.now() - CHAT_MEMORY_RETENTION;
+
+  while (
+    recentChatLogs.length > 0 &&
+    recentChatLogs[0].timestamp < cutoff
+  ) {
+    recentChatLogs.shift();
+  }
 }
 
 // ==========================================
@@ -193,10 +228,10 @@ function parsePastedChat(rawText) {
   }
 
   const totalValidMessages = parsedMessages.length;
-  const truncated = totalValidMessages > 100;
+  const truncated = totalValidMessages > MAX_RECAP_MESSAGES;
 
   return {
-    logs: parsedMessages.slice(-100),
+    logs: parsedMessages.slice(-MAX_RECAP_MESSAGES),
     totalValidMessages,
     truncated
   };
@@ -512,10 +547,10 @@ async function generateRecap(chatLogs) {
   summary = summary.replace(/^AI Summary:\s*/i, '');
   summary = summary.replace(/^Chat Recap:\s*/i, '');
 
-  // Force-remove fake chronology even if Gemini ignores the prompt.
+  // Remove fake chronology even if Gemini ignores the prompt.
   summary = cleanRecapWording(summary);
 
-  // If Gemini ends with an ellipsis, back up to the previous complete sentence.
+  // If Gemini ends with an ellipsis, back up to the last complete sentence.
   if (/\.{3}\s*$/.test(summary)) {
     const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
 
@@ -779,8 +814,8 @@ app.get('/', (req, res) => {
     <p class="hint">
       Paste Twitch chat lines from Render here. Nightbot, StreamElements,
       and ${botUsername || 'TWITCH_BOT_USERNAME'} are ignored automatically.
-      If more than 100 valid chat messages are found, only the 100 most recent
-      are sent to Gemini.
+      If more than ${MAX_RECAP_MESSAGES} valid chat messages are found,
+      only the ${MAX_RECAP_MESSAGES} most recent are sent to Gemini.
     </p>
 
     <textarea
@@ -839,7 +874,8 @@ app.get('/', (req, res) => {
           messageInput.value = '';
         } else {
           status.style.color = '#ff4f4f';
-          status.textContent = 'Error: ' + getErrorMessage(data.error);
+          status.textContent =
+            'Error: ' + getErrorMessage(data.error);
         }
       } catch (err) {
         status.style.color = '#ff4f4f';
@@ -870,9 +906,11 @@ app.get('/', (req, res) => {
       if (type === 'sample') {
         testResult.textContent = 'Generating summary from sample chat...';
       } else if (type === 'stored') {
-        testResult.textContent = 'Generating summary from stored chat...';
+        testResult.textContent =
+          'Generating summary from recent stored chat...';
       } else {
-        testResult.textContent = 'Parsing logs and generating summary...';
+        testResult.textContent =
+          'Parsing logs and generating summary...';
       }
 
       try {
@@ -901,7 +939,7 @@ app.get('/', (req, res) => {
             sourceText =
               'Stored chat (' +
               data.messageCount +
-              ' messages)';
+              ' recent messages used)';
           }
 
           if (data.source === 'pasted') {
@@ -1105,14 +1143,16 @@ app.post('/test-summary', async (req, res) => {
   let totalValidMessages;
 
   if (type === 'stored') {
-    if (recentChatLogs.length === 0) {
+    logs = getRecentRecapLogs();
+
+    if (logs.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'No stored chat messages are available yet.'
+        error:
+          'No chat messages from the last 20 minutes are available yet.'
       });
     }
 
-    logs = [...recentChatLogs];
     source = 'stored';
     totalValidMessages = logs.length;
   } else if (type === 'pasted') {
@@ -1220,11 +1260,13 @@ client.on('message', async (channel, tags, message, self) => {
       return;
     }
 
-    if (recentChatLogs.length < 5) {
+    const recapLogs = getRecentRecapLogs();
+
+    if (recapLogs.length < 5) {
       try {
         await client.say(
           channel,
-          `@${displayName}, not enough chat history yet to summarize!`
+          `@${displayName}, not enough recent chat history yet to summarize!`
         );
       } catch (err) {
         console.error('Failed to send history warning:', err);
@@ -1237,12 +1279,16 @@ client.on('message', async (channel, tags, message, self) => {
     currentRecapCooldown = RECAP_SUCCESS_COOLDOWN;
 
     try {
-      const result = await generateRecap(recentChatLogs);
+      const result = await generateRecap(recapLogs);
       const twitchMessage = SUMMARY_PREFIX + result.summary;
 
       console.log(
         `[!recap Output for @${displayName}]:`,
         twitchMessage
+      );
+
+      console.log(
+        `[!recap Source]: ${recapLogs.length} messages from the last 20 minutes`
       );
 
       console.log(
@@ -1293,11 +1339,12 @@ client.on('message', async (channel, tags, message, self) => {
   // ==========================================
 
   if (rawMessage && !rawMessage.startsWith('!')) {
-    recentChatLogs.push(`${displayName}: ${rawMessage}`);
+    recentChatLogs.push({
+      timestamp: Date.now(),
+      text: `${displayName}: ${rawMessage}`
+    });
 
-    while (recentChatLogs.length > MAX_LOG_SIZE) {
-      recentChatLogs.shift();
-    }
+    cleanupOldChatLogs();
   }
 
   // ==========================================
@@ -1351,6 +1398,10 @@ app.listen(PORT, () => {
   console.log(
     `Chat recap limit: ${SUMMARY_TEXT_LIMIT} text chars + ` +
     `${SUMMARY_PREFIX.length} prefix chars = ${TWITCH_MESSAGE_LIMIT}`
+  );
+
+  console.log(
+    `Recap window: last 20 minutes, maximum ${MAX_RECAP_MESSAGES} messages`
   );
 
   console.log('Successful !recap cooldown: 15 minutes');
