@@ -35,7 +35,7 @@ client.connect().catch(console.error);
 // CHAT LOGGING & COOLDOWN SETTINGS
 // ==========================================
 const recentChatLogs = [];
-const MAX_LOG_SIZE = 50;
+const MAX_LOG_SIZE = 100;
 
 // Cooldown tracking for !askai (15 minutes global + user)
 let lastGlobalAiUse = 0;
@@ -155,8 +155,12 @@ client.on('message', async (channel, tags, message, self) => {
   const displayName = tags['display-name'] || tags.username;
   const now = Date.now();
 
-  // Ignore Nightbot or your own bot account
-  const ignoredBots = ['nightbot', (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim()];
+  // Ignore Nightbot, StreamElements, or your own bot account
+  const ignoredBots = [
+    'nightbot', 
+    'streamelements', 
+    (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim()
+  ];
   if (ignoredBots.includes(username)) return;
 
   // ==========================================
@@ -214,7 +218,7 @@ client.on('message', async (channel, tags, message, self) => {
       const chatContext = recentChatLogs.join('\n');
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `You are a Twitch stream assistant. Summarize what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. Keep it concise:\n\n${chatContext}`
+        contents: `You are a Twitch stream assistant. Summarize what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. Keep it concise and under 400 characters:\n\n${chatContext}`
       });
 
       let summary = response.text ? response.text.trim() : 'Could not generate recap.';
@@ -241,12 +245,6 @@ client.on('message', async (channel, tags, message, self) => {
     }
   }
 
-  // ==========================================
-  // PASSIVE TRIGGERS
-  // ==========================================
-  if (username === 'motmo_' && lowerMsg.includes('hog reveal')) {
-    client.say(channel, 'Did Motmo_ say.. HOG REVEAL?');
-  }
 });
 
 app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
