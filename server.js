@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
 
-const SUMMARY_PREFIX = 'AI Summary: ';
+const SUMMARY_PREFIX = 'Chat Recap: ';
 const TWITCH_MESSAGE_LIMIT = 500;
 const SUMMARY_TEXT_LIMIT = TWITCH_MESSAGE_LIMIT - SUMMARY_PREFIX.length;
 
