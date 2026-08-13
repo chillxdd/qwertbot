@@ -85,14 +85,16 @@ let lastRecapUse = 0;
 const RECAP_COOLDOWN = 15 * 60 * 1000;
 
 // ==========================================
-// GEMINI API HELPER
+// GEMINI INTERACTIONS API HELPER
 // ==========================================
 
 async function generateRecap(chatLogs) {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
 
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY environment variable is not set.');
+    throw new Error(
+      'GEMINI_API_KEY environment variable is not set.'
+    );
   }
 
   if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
@@ -122,25 +124,23 @@ Recent Twitch chat:
 
 ${chatContext}`;
 
-  // Standard REST v1beta endpoint using gemini-2.5-flash
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const url =
+    'https://generativelanguage.googleapis.com/v1beta/interactions';
 
   const payload = {
-    contents: [
-      {
-        parts: [
-          { text: customPrompt }
-        ]
-      }
-    ]
+    model: 'gemini-3.5-flash-lite',
+    input: customPrompt
   };
 
-  console.log(`[Gemini] Sending ${chatLogs.length} chat messages for recap...`);
+  console.log(
+    `[Gemini] Sending ${chatLogs.length} chat messages for recap...`
+  );
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
     },
     body: JSON.stringify(payload)
   });
@@ -150,11 +150,16 @@ ${chatContext}`;
   try {
     data = await response.json();
   } catch (err) {
-    throw new Error(`Gemini returned an invalid response. HTTP ${response.status}`);
+    throw new Error(
+      `Gemini returned an invalid response. HTTP ${response.status}`
+    );
   }
 
   if (!response.ok) {
-    console.error('[Gemini API Error]', JSON.stringify(data, null, 2));
+    console.error(
+      '[Gemini API Error]',
+      JSON.stringify(data, null, 2)
+    );
 
     const errorMessage =
       data?.error?.message ||
@@ -165,36 +170,65 @@ ${chatContext}`;
   }
 
   // ==========================================
-  // EXTRACT TEXT FROM RESPONSE (CANDIDATES & FALLBACKS)
+  // EXTRACT TEXT FROM INTERACTIONS RESPONSE
   // ==========================================
 
   let summary = '';
 
-  // Standard Gemini API response structure
-  if (data?.candidates?.[0]?.content?.parts) {
+  // 1. Direct top-level output string (common in Interactions API)
+  if (typeof data.output === 'string' && data.output.trim()) {
+    summary = data.output;
+  }
+
+  // 2. Array of output items (Interactions API standard)
+  if (!summary && Array.isArray(data.outputs)) {
+    for (const output of data.outputs) {
+      if (!output) continue;
+
+      if (typeof output.text === 'string' && output.text.trim()) {
+        summary += `${output.text} `;
+      } else if (typeof output.content === 'string' && output.content.trim()) {
+        summary += `${output.content} `;
+      } else if (Array.isArray(output.content)) {
+        for (const item of output.content) {
+          if (typeof item?.text === 'string' && item.text.trim()) {
+            summary += `${item.text} `;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Fallback candidates object
+  if (!summary && data?.candidates?.[0]?.content?.parts) {
     summary = data.candidates[0].content.parts
-      .map((part) => part.text || '')
+      .map(part => part.text || '')
       .join('')
       .trim();
   }
 
-  // Fallbacks for non-standard or alternative response structures
+  // 4. Other known string fields
   if (!summary) {
-    if (typeof data.output_text === 'string') summary = data.output_text.trim();
-    else if (typeof data.outputText === 'string') summary = data.outputText.trim();
-    else if (typeof data.text === 'string') summary = data.text.trim();
+    if (typeof data.output_text === 'string' && data.output_text.trim()) {
+      summary = data.output_text;
+    } else if (typeof data.outputText === 'string' && data.outputText.trim()) {
+      summary = data.outputText;
+    } else if (typeof data.text === 'string' && data.text.trim()) {
+      summary = data.text;
+    }
   }
 
-  if (!summary && Array.isArray(data.outputs)) {
-    summary = data.outputs
-      .map((out) => out?.text || out?.content || '')
-      .join(' ')
-      .trim();
-  }
+  summary = summary.trim();
 
   if (!summary) {
-    console.error('[Gemini Unexpected Response Structure]', JSON.stringify(data, null, 2));
-    throw new Error('Gemini returned a successful response but no readable text output was found.');
+    console.error(
+      '[Gemini Unexpected Response Structure]',
+      JSON.stringify(data, null, 2)
+    );
+
+    throw new Error(
+      'Gemini returned a successful response but no readable text output was found.'
+    );
   }
 
   // Twitch-friendly length limit for our recap
@@ -607,7 +641,8 @@ app.post('/send-chat', async (req, res) => {
   if (!DASHBOARD_PASSWORD) {
     return res.status(500).json({
       success: false,
-      error: 'DASHBOARD_PASSWORD is not configured on the server.'
+      error:
+        'DASHBOARD_PASSWORD is not configured on the server.'
     });
   }
 
@@ -618,7 +653,10 @@ app.post('/send-chat', async (req, res) => {
     });
   }
 
-  if (typeof message !== 'string' || !message.trim()) {
+  if (
+    typeof message !== 'string' ||
+    !message.trim()
+  ) {
     return res.status(400).json({
       success: false,
       error: 'Message cannot be empty.'
@@ -633,18 +671,28 @@ app.post('/send-chat', async (req, res) => {
   }
 
   try {
-    await client.say(channelName, message.trim());
+
+    await client.say(
+      channelName,
+      message.trim()
+    );
 
     res.json({
       success: true
     });
+
   } catch (err) {
-    console.error('Failed to send message:', err);
+
+    console.error(
+      'Failed to send message:',
+      err
+    );
 
     res.status(500).json({
       success: false,
       error: 'Failed to send to Twitch.'
     });
+
   }
 });
 
@@ -659,7 +707,8 @@ app.post('/test-gemini', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: {
-        message: 'DASHBOARD_PASSWORD is not configured on the server.'
+        message:
+          'DASHBOARD_PASSWORD is not configured on the server.'
       }
     });
   }
@@ -680,14 +729,21 @@ app.post('/test-gemini', async (req, res) => {
   ];
 
   try {
-    const summary = await generateRecap(dummyChatLogs);
+
+    const summary =
+      await generateRecap(dummyChatLogs);
 
     res.json({
       success: true,
       output: summary
     });
+
   } catch (err) {
-    console.error('Test Gemini API Error:', err);
+
+    console.error(
+      'Test Gemini API Error:',
+      err
+    );
 
     res.status(500).json({
       success: false,
@@ -697,6 +753,7 @@ app.post('/test-gemini', async (req, res) => {
         details: err.toString()
       }
     });
+
   }
 });
 
@@ -704,160 +761,251 @@ app.post('/test-gemini', async (req, res) => {
 // 5. TWITCH CHAT MESSAGE LISTENER
 // ==========================================
 
-client.on('message', async (channel, tags, message, self) => {
-  // Ignore messages sent by this bot
-  if (self) {
-    return;
-  }
+client.on(
+  'message',
+  async (channel, tags, message, self) => {
 
-  const rawMessage = (message || '').trim();
-  const lowerMsg = rawMessage.toLowerCase();
-  const username = (tags.username || '').toLowerCase().trim();
-  const displayName = tags['display-name'] || tags.username || 'viewer';
-  const now = Date.now();
+    // Ignore messages sent by this bot
+    if (self) {
+      return;
+    }
 
-  // ========================================
-  // IGNORE BOT ACCOUNTS
-  // ========================================
+    const rawMessage =
+      (message || '').trim();
 
-  const ignoredBots = [
-    'nightbot',
-    'streamelements',
-    botUsername
-  ].filter(Boolean);
+    const lowerMsg =
+      rawMessage.toLowerCase();
 
-  if (ignoredBots.includes(username)) {
-    return;
-  }
+    const username =
+      (tags.username || '')
+        .toLowerCase()
+        .trim();
 
-  // ========================================
-  // COMMAND: !recap
-  // 15-MINUTE GLOBAL COOLDOWN
-  // ========================================
+    const displayName =
+      tags['display-name'] ||
+      tags.username ||
+      'viewer';
 
-  if (lowerMsg.startsWith('!recap')) {
-    const timeElapsed = now - lastRecapUse;
+    const now =
+      Date.now();
 
-    if (timeElapsed < RECAP_COOLDOWN) {
-      const remainingMs = RECAP_COOLDOWN - timeElapsed;
-      const minutesLeft = Math.floor(remainingMs / 60000);
-      const secondsLeft = Math.floor((remainingMs % 60000) / 1000);
+    // ========================================
+    // IGNORE BOT ACCOUNTS
+    // ========================================
 
-      const timeString =
-        minutesLeft > 0
-          ? `${minutesLeft}m ${secondsLeft}s`
-          : `${secondsLeft}s`;
+    const ignoredBots = [
+      'nightbot',
+      'streamelements',
+      botUsername
+    ].filter(Boolean);
+
+    if (ignoredBots.includes(username)) {
+      return;
+    }
+
+    // ========================================
+    // COMMAND: !recap
+    // 15-MINUTE GLOBAL COOLDOWN
+    // ========================================
+
+    if (lowerMsg.startsWith('!recap')) {
+
+      const timeElapsed =
+        now - lastRecapUse;
+
+      if (timeElapsed < RECAP_COOLDOWN) {
+
+        const remainingMs =
+          RECAP_COOLDOWN - timeElapsed;
+
+        const minutesLeft =
+          Math.floor(
+            remainingMs / 60000
+          );
+
+        const secondsLeft =
+          Math.floor(
+            (remainingMs % 60000) / 1000
+          );
+
+        const timeString =
+          minutesLeft > 0
+            ? `${minutesLeft}m ${secondsLeft}s`
+            : `${secondsLeft}s`;
+
+        try {
+          await client.say(
+            channel,
+            `@${displayName}, !recap is on cooldown! Try again in ${timeString}.`
+          );
+        } catch (err) {
+          console.error(
+            'Failed to send cooldown message:',
+            err
+          );
+        }
+
+        return;
+      }
+
+      // Require at least 5 organic messages
+      if (recentChatLogs.length < 5) {
+
+        try {
+          await client.say(
+            channel,
+            `@${displayName}, not enough chat history yet to summarize!`
+          );
+        } catch (err) {
+          console.error(
+            'Failed to send chat history message:',
+            err
+          );
+        }
+
+        return;
+      }
+
+      // Apply cooldown immediately so multiple users
+      // cannot trigger Gemini simultaneously.
+      lastRecapUse = now;
 
       try {
+
+        const summary =
+          await generateRecap(
+            recentChatLogs
+          );
+
+        console.log(
+          `[!recap Output for @${displayName}]:`,
+          summary
+        );
+
         await client.say(
           channel,
-          `@${displayName}, !recap is on cooldown! Try again in ${timeString}.`
+          `[Chat Recap]: ${summary}`
         );
+
       } catch (err) {
-        console.error('Failed to send cooldown message:', err);
+
+        console.error(
+          'Gemini !recap Error:',
+          err
+        );
+
+        // Reset cooldown when Gemini itself fails,
+        // allowing another attempt instead of forcing
+        // users to wait 15 minutes for an API failure.
+        lastRecapUse = 0;
+
+        try {
+          await client.say(
+            channel,
+            `@${displayName}, failed to generate chat recap.`
+          );
+        } catch (sendErr) {
+          console.error(
+            'Failed to send Gemini error to Twitch:',
+            sendErr
+          );
+        }
+
       }
 
       return;
     }
 
-    // Require at least 5 organic messages
-    if (recentChatLogs.length < 5) {
+    // ========================================
+    // LOG ORGANIC CHAT MESSAGES
+    // ========================================
+
+    if (
+      rawMessage &&
+      !rawMessage.startsWith('!')
+    ) {
+
+      recentChatLogs.push(
+        `${displayName}: ${rawMessage}`
+      );
+
+      // Keep only the newest 50 messages
+      while (
+        recentChatLogs.length >
+        MAX_LOG_SIZE
+      ) {
+        recentChatLogs.shift();
+      }
+    }
+
+    // ========================================
+    // PASSIVE TRIGGERS
+    // ========================================
+
+    if (
+      username === 'motmo_' &&
+      lowerMsg.includes('hog reveal')
+    ) {
+
       try {
+
         await client.say(
           channel,
-          `@${displayName}, not enough chat history yet to summarize!`
+          'Did Motmo_ say.. HOG REVEAL?'
         );
+
       } catch (err) {
-        console.error('Failed to send chat history message:', err);
-      }
 
-      return;
-    }
-
-    // Apply cooldown immediately so multiple users
-    // cannot trigger Gemini simultaneously.
-    lastRecapUse = now;
-
-    try {
-      const summary = await generateRecap(recentChatLogs);
-
-      console.log(`[!recap Output for @${displayName}]:`, summary);
-
-      await client.say(
-        channel,
-        `[Chat Recap]: ${summary}`
-      );
-    } catch (err) {
-      console.error('Gemini !recap Error:', err);
-
-      // Reset cooldown when Gemini itself fails,
-      // allowing another attempt instead of forcing
-      // users to wait 15 minutes for an API failure.
-      lastRecapUse = 0;
-
-      try {
-        await client.say(
-          channel,
-          `@${displayName}, failed to generate chat recap.`
+        console.error(
+          'Passive trigger send error:',
+          err
         );
-      } catch (sendErr) {
-        console.error('Failed to send Gemini error to Twitch:', sendErr);
+
       }
     }
-
-    return;
   }
-
-  // ========================================
-  // LOG ORGANIC CHAT MESSAGES
-  // ========================================
-
-  if (rawMessage && !rawMessage.startsWith('!')) {
-    recentChatLogs.push(`${displayName}: ${rawMessage}`);
-
-    // Keep only the newest 50 messages
-    while (recentChatLogs.length > MAX_LOG_SIZE) {
-      recentChatLogs.shift();
-    }
-  }
-
-  // ========================================
-  // PASSIVE TRIGGERS
-  // ==========================================
-
-  if (username === 'motmo_' && lowerMsg.includes('hog reveal')) {
-    try {
-      await client.say(
-        channel,
-        'Did Motmo_ say.. HOG REVEAL?'
-      );
-    } catch (err) {
-      console.error('Passive trigger send error:', err);
-    }
-  }
-});
+);
 
 // ==========================================
 // GLOBAL ERROR HANDLING
 // ==========================================
 
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Promise Rejection:', reason);
-});
+process.on(
+  'unhandledRejection',
+  (reason) => {
+    console.error(
+      'Unhandled Promise Rejection:',
+      reason
+    );
+  }
+);
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-});
+process.on(
+  'uncaughtException',
+  (err) => {
+    console.error(
+      'Uncaught Exception:',
+      err
+    );
+  }
+);
 
 // ==========================================
 // START WEB SERVER
 // ==========================================
 
 app.listen(PORT, () => {
-  console.log(`Web server running on port ${PORT}`);
-  console.log('Gemini model: gemini-2.5-flash');
+  console.log(
+    `Web server running on port ${PORT}`
+  );
+
+  console.log(
+    `Gemini model: gemini-3.5-flash-lite`
+  );
 
   if (channelName) {
-    console.log(`Twitch channel: #${channelName}`);
+    console.log(
+      `Twitch channel: #${channelName}`
+    );
   }
 });
