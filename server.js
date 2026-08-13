@@ -41,23 +41,21 @@ const MAX_LOG_SIZE = 50;
 let lastRecapUse = 0;
 const RECAP_COOLDOWN = 15 * 60 * 1000; // 15 minutes in milliseconds
 
-// Helper Function for Gemini Recap
+// Helper Function for Gemini Recap using Interactions API
 async function generateRecap(chatLogs) {
   const chatContext = chatLogs.join('\n');
   const customPrompt = `You are a Twitch stream assistant. Summarize chat sentiment/mood/vibes and what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. If topics are broad, keep it concise and under 400 characters. Otherwise, try not to add unnecessary details and avoid artificially making it longer than it needs to be. If any sexual discussions are included, make it a family-friendly version:\n\n${chatContext}`;
 
-  // Explicit payload object format required by modern @google/genai SDK
-  const response = await ai.models.generateContent({
+  // Using the Interactions API endpoint as requested by Google's API migration error
+  const response = await ai.interactions.create({
     model: 'gemini-2.5-flash',
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: customPrompt }]
-      }
-    ]
+    input: customPrompt
   });
 
-  let summary = response.text ? response.text.trim() : 'Could not generate recap.';
+  // Extract response text from Interactions object
+  let summary = response.text || response.outputs?.[0]?.text || 'Could not generate recap.';
+  summary = summary.trim();
+
   if (summary.length > 400) {
     summary = summary.substring(0, 397) + '...';
   }
