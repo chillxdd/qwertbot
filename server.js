@@ -47,7 +47,7 @@ async function generateRecap(chatLogs) {
   const customPrompt = `You are a Twitch stream assistant. Summarize chat sentiment/mood/vibes and what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. If topics are broad, keep it concise and under 400 characters. Otherwise, try not to add unnecessary details and avoid artificially making it longer than it needs to be. If any sexual discussions are included, make it a family-friendly version:\n\n${chatContext}`;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.0-flash',
     contents: customPrompt
   });
 
