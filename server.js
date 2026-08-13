@@ -773,7 +773,7 @@ app.get(
   <script>
     let modLoggedIn = false;
     let modPassword = '';
-    let autoRefreshTimer = null;
+    let statusPollTimer = null;
 
     const passwordInput =
       document.getElementById(
@@ -860,10 +860,19 @@ app.get(
         'testResult'
       );
 
+    // ========================================
+    // STATUS DISPLAY
+    // ========================================
+
     async function updateStatus() {
       try {
         const response =
-          await fetch('/status');
+          await fetch(
+            '/status',
+            {
+              cache: 'no-store'
+            }
+          );
 
         const data =
           await response.json();
@@ -874,7 +883,9 @@ app.get(
           );
         }
 
-        if (!data.qwert.statusKnown) {
+        if (
+          !data.qwert.statusKnown
+        ) {
           qwertStatus.textContent =
             'CHECKING';
 
@@ -923,7 +934,9 @@ app.get(
             '</a>';
         }
 
-        if (data.bot.online) {
+        if (
+          data.bot.online
+        ) {
           botStatus.textContent =
             'ONLINE';
 
@@ -1062,40 +1075,46 @@ app.get(
       );
     }
 
-    function startLoggedOutAutoRefresh() {
+    // ========================================
+    // STATUS POLLING
+    // ========================================
+
+    function startStatusPolling() {
       if (
-        autoRefreshTimer
+        statusPollTimer
       ) {
-        clearTimeout(
-          autoRefreshTimer
+        clearInterval(
+          statusPollTimer
         );
       }
 
-      autoRefreshTimer =
-        setTimeout(
+      updateStatus();
+
+      statusPollTimer =
+        setInterval(
           () => {
-            if (
-              !modLoggedIn
-            ) {
-              window.location.reload();
-            }
+            updateStatus();
           },
-          60000
+          15000
         );
     }
 
-    function stopLoggedOutAutoRefresh() {
+    function stopStatusPolling() {
       if (
-        autoRefreshTimer
+        statusPollTimer
       ) {
-        clearTimeout(
-          autoRefreshTimer
+        clearInterval(
+          statusPollTimer
         );
 
-        autoRefreshTimer =
+        statusPollTimer =
           null;
       }
     }
+
+    // ========================================
+    // MOD LOGIN
+    // ========================================
 
     async function attemptLogin() {
       const password =
@@ -1140,7 +1159,9 @@ app.get(
         const data =
           await response.json();
 
-        if (!data.success) {
+        if (
+          !data.success
+        ) {
           loginStatus.style.color =
             '#ff4f4f';
 
@@ -1163,8 +1184,6 @@ app.get(
 
         protectedControls.style.display =
           'block';
-
-        stopLoggedOutAutoRefresh();
 
         await updateStatus();
       } catch (err) {
@@ -1195,6 +1214,10 @@ app.get(
         }
       }
     );
+
+    // ========================================
+    // SEND CHAT
+    // ========================================
 
     document
       .getElementById(
@@ -1284,6 +1307,10 @@ app.get(
           }
         }
       );
+
+    // ========================================
+    // SUMMARY TESTING
+    // ========================================
 
     async function runSummaryTest(
       type
@@ -1549,9 +1576,11 @@ app.get(
         )
     );
 
-    updateStatus();
+    // ========================================
+    // PAGE STARTUP
+    // ========================================
 
-    startLoggedOutAutoRefresh();
+    startStatusPolling();
   </script>
 </body>
 </html>
@@ -2063,6 +2092,10 @@ app.listen(
 
     console.log(
       '!stoprecap / !startrecap: moderators and broadcaster only.'
+    );
+
+    console.log(
+      'WebUI status polling: every 15 seconds.'
     );
 
     console.log(
