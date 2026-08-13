@@ -35,17 +35,11 @@ client.connect().catch(console.error);
 // CHAT LOGGING & COOLDOWN SETTINGS
 // ==========================================
 const recentChatLogs = [];
-const MAX_LOG_SIZE = 100;
+const MAX_LOG_SIZE = 50;
 
-// Cooldown tracking for !askai (15 minutes global + user)
-let lastGlobalAiUse = 0;
-const userAiCooldowns = new Map();
-const AI_GLOBAL_COOLDOWN = 15 * 60 * 1000; // 15 minutes (in milliseconds)
-const AI_USER_COOLDOWN = 15 * 60 * 1000;   // 15 minutes (in milliseconds)
-
-// Cooldown tracking for !recap
+// Cooldown tracking for !recap (15 minutes global)
 let lastRecapUse = 0;
-const RECAP_COOLDOWN = 60 * 1000;          // 60 seconds
+const RECAP_COOLDOWN = 15 * 60 * 1000; // 15 minutes (in milliseconds)
 
 // 1. Health check endpoint for UptimeRobot
 app.get('/health', (req, res) => res.status(200).send('OK'));
@@ -164,47 +158,10 @@ client.on('message', async (channel, tags, message, self) => {
   if (ignoredBots.includes(username)) return;
 
   // ==========================================
-  // COMMAND 1: !askai <prompt> (15 MIN COOLDOWN)
-  // ==========================================
-  if (lowerMsg.startsWith('!askai')) {
-    // Cooldown check (silent exit if triggered within 15 minutes)
-    if (now - lastGlobalAiUse < AI_GLOBAL_COOLDOWN) return;
-    const lastUserUse = userAiCooldowns.get(username) || 0;
-    if (now - lastUserUse < AI_USER_COOLDOWN) return;
-
-    const prompt = rawMessage.slice(7).trim();
-    if (!prompt) {
-      client.say(channel, `@${displayName}, please include a question! (e.g. !askai What is the capital of Japan?)`);
-      return;
-    }
-
-    // Set 15-minute cooldown timestamps
-    lastGlobalAiUse = now;
-    userAiCooldowns.set(username, now);
-
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `You are a Twitch chatbot. Answer this viewer's question concisely in under 300 characters: ${prompt}`
-      });
-
-      let aiText = response.text ? response.text.trim() : 'No response from AI.';
-      if (aiText.length > 400) {
-        aiText = aiText.substring(0, 397) + '...';
-      }
-
-      client.say(channel, `@${displayName} ${aiText}`);
-    } catch (err) {
-      console.error('Gemini !askai Error:', err);
-    }
-    return;
-  }
-
-  // ==========================================
-  // COMMAND 2: !recap
+  // COMMAND: !recap (15 MIN COOLDOWN)
   // ==========================================
   if (lowerMsg.startsWith('!recap')) {
-    // Cooldown check (silent exit if on cooldown)
+    // Silent exit if triggered within 15 minutes of last use
     if (now - lastRecapUse < RECAP_COOLDOWN) return;
 
     if (recentChatLogs.length < 5) {
@@ -216,9 +173,11 @@ client.on('message', async (channel, tags, message, self) => {
 
     try {
       const chatContext = recentChatLogs.join('\n');
+      const customPrompt = `You are a Twitch stream assistant. Summarize chat sentiment/mood/vibes and what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. If topics are broad, keep it concise and under 400 characters. Otherwise, try not to add unnecessary details and avoid artificially making it longer than it needs to be. If any sexual discussions are included, make it a family-friendly version:\n\n${chatContext}`;
+
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: `You are a Twitch stream assistant. Summarize what chat has been talking about in 1 to 2 short sentences based on these recent viewer messages. Do not use hashtags. Keep it concise and under 400 characters:\n\n${chatContext}`
+        contents: customPrompt
       });
 
       let summary = response.text ? response.text.trim() : 'Could not generate recap.';
@@ -226,7 +185,11 @@ client.on('message', async (channel, tags, message, self) => {
         summary = summary.substring(0, 397) + '...';
       }
 
-      client.say(channel, `[Chat Recap]: ${summary}`);
+      // 🔍 TEST LOG: Print output to Render logs
+      console.log(`[TEST !recap Output for @${displayName}]:`, summary);
+
+      // Send output to Twitch
+      // client.say(channel, `[Chat Recap]: ${summary}`);
     } catch (err) {
       console.error('Gemini !recap Error:', err);
     }
@@ -244,7 +207,6 @@ client.on('message', async (channel, tags, message, self) => {
       recentChatLogs.shift();
     }
   }
-
 });
 
 app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
