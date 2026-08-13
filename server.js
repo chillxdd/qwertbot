@@ -26,7 +26,12 @@ if (!DASHBOARD_PASSWORD) {
   );
 }
 
-app.use(express.json({ limit: '1mb' }));
+app.use(
+  express.json({
+    limit: '1mb'
+  })
+);
+
 app.use(
   express.urlencoded({
     extended: true,
@@ -40,7 +45,8 @@ app.use(
 
 const rawToken =
   (
-    process.env.TWITCH_BOT_ACCESS_TOKEN ||
+    process.env
+      .TWITCH_BOT_ACCESS_TOKEN ||
     ''
   ).trim();
 
@@ -59,24 +65,26 @@ const channelName =
 
 const botUsername =
   (
-    process.env.TWITCH_BOT_USERNAME ||
+    process.env
+      .TWITCH_BOT_USERNAME ||
     ''
   )
     .toLowerCase()
     .trim();
 
-const client = new tmi.Client({
-  options: {
-    debug: true
-  },
-  identity: {
-    username: botUsername,
-    password: pass
-  },
-  channels: channelName
-    ? [channelName]
-    : []
-});
+const client =
+  new tmi.Client({
+    options: {
+      debug: true
+    },
+    identity: {
+      username: botUsername,
+      password: pass
+    },
+    channels: channelName
+      ? [channelName]
+      : []
+  });
 
 let botConnected = false;
 
@@ -84,7 +92,9 @@ let botConnected = false;
 // IGNORED CHAT USERS
 // ==========================================
 
-function isIgnoredUsername(username) {
+function isIgnoredUsername(
+  username
+) {
   const ignoredUsers = [
     'nightbot',
     'streamelements',
@@ -99,6 +109,29 @@ function isIgnoredUsername(username) {
 }
 
 // ==========================================
+// MOD / BROADCASTER CHECK
+// ==========================================
+
+function isModOrBroadcaster(
+  tags
+) {
+  const badges =
+    tags.badges || {};
+
+  const isBroadcaster =
+    badges.broadcaster === '1';
+
+  const isModerator =
+    tags.mod === true ||
+    badges.moderator === '1';
+
+  return (
+    isBroadcaster ||
+    isModerator
+  );
+}
+
+// ==========================================
 // AUTOMATIC RECAP MANAGER
 // ==========================================
 
@@ -107,29 +140,36 @@ const recapManager =
     client,
     channelName,
     botUsername,
-    twitchAccessToken: rawToken
+    twitchAccessToken:
+      rawToken
   });
 
 // ==========================================
 // TWITCH CONNECTION
 // ==========================================
 
-client.on('connected', () => {
-  botConnected = true;
+client.on(
+  'connected',
+  () => {
+    botConnected = true;
 
-  console.log(
-    '[Bot] Twitch chat connection is online.'
-  );
-});
+    console.log(
+      '[Bot] Twitch chat connection is online.'
+    );
+  }
+);
 
-client.on('disconnected', (reason) => {
-  botConnected = false;
+client.on(
+  'disconnected',
+  (reason) => {
+    botConnected = false;
 
-  console.log(
-    '[Bot] Twitch chat disconnected:',
-    reason
-  );
-});
+    console.log(
+      '[Bot] Twitch chat disconnected:',
+      reason
+    );
+  }
+);
 
 if (
   !rawToken ||
@@ -146,73 +186,106 @@ if (
 } else {
   client
     .connect()
-    .then(async () => {
-      botConnected = true;
+    .then(
+      async () => {
+        botConnected = true;
 
-      console.log(
-        `Connected to Twitch channel: #${channelName}`
-      );
+        console.log(
+          `Connected to Twitch channel: #${channelName}`
+        );
 
-      await recapManager.start();
-    })
-    .catch((err) => {
-      botConnected = false;
+        await recapManager.start();
+      }
+    )
+    .catch(
+      (err) => {
+        botConnected = false;
 
-      console.error(
-        'Failed to connect to Twitch:',
-        err
-      );
-    });
+        console.error(
+          'Failed to connect to Twitch:',
+          err
+        );
+      }
+    );
 }
 
 // ==========================================
 // HEALTH CHECK
 // ==========================================
 
-app.get('/health', (req, res) => {
-  res
-    .status(200)
-    .send('OK');
-});
+app.get(
+  '/health',
+  (req, res) => {
+    res
+      .status(200)
+      .send('OK');
+  }
+);
 
 // ==========================================
 // PUBLIC STATUS ENDPOINT
 // ==========================================
 
-app.get('/status', (req, res) => {
-  const recapStatus =
-    recapManager.getStatus();
+app.get(
+  '/status',
+  (req, res) => {
+    const recapStatus =
+      recapManager.getStatus();
 
-  res.json({
-    success: true,
-    qwert: {
-      live:
-        recapStatus.streamLive,
-      statusKnown:
-        recapStatus.streamStateInitialized,
-      twitchUrl:
-        `https://www.twitch.tv/${channelName}`
-    },
-    bot: {
-      online:
-        botConnected,
-      loggingMessages:
-        recapStatus.loggingMessages,
-      messagesInWindow:
-        recapStatus.messagesInWindow,
-      recapInProgress:
-        recapStatus.recapInProgress,
-      nextRecapAt:
-        recapStatus.nextRecapAt
-    }
-  });
-});
+    res.json({
+      success: true,
+
+      qwert: {
+        live:
+          recapStatus.streamLive,
+
+        statusKnown:
+          recapStatus
+            .streamStateInitialized,
+
+        twitchUrl:
+          `https://www.twitch.tv/${channelName}`
+      },
+
+      bot: {
+        online:
+          botConnected,
+
+        loggingMessages:
+          recapStatus
+            .loggingMessages,
+
+        recapPaused:
+          recapStatus
+            .recapPaused,
+
+        messagesInWindow:
+          recapStatus
+            .messagesInWindow,
+
+        recapInProgress:
+          recapStatus
+            .recapInProgress,
+
+        nextRecapAt:
+          recapStatus
+            .nextRecapAt,
+
+        pausedRemainingMs:
+          recapStatus
+            .pausedRemainingMs
+      }
+    });
+  }
+);
 
 // ==========================================
 // PASSWORD HELPER
 // ==========================================
 
-function isValidDashboardPassword(password) {
+function isValidDashboardPassword(
+  password
+) {
   if (!DASHBOARD_PASSWORD) {
     return false;
   }
@@ -227,44 +300,51 @@ function isValidDashboardPassword(password) {
 // MOD LOGIN ENDPOINT
 // ==========================================
 
-app.post('/mod-login', (req, res) => {
-  const { password } = req.body;
-
-  if (!DASHBOARD_PASSWORD) {
-    return res
-      .status(500)
-      .json({
-        success: false,
-        error:
-          'DASHBOARD_PASSWORD is not configured on the server.'
-      });
-  }
-
-  if (
-    !isValidDashboardPassword(
+app.post(
+  '/mod-login',
+  (req, res) => {
+    const {
       password
-    )
-  ) {
-    return res
-      .status(401)
-      .json({
-        success: false,
-        error:
-          'Incorrect password!'
-      });
-  }
+    } = req.body;
 
-  return res.json({
-    success: true
-  });
-});
+    if (!DASHBOARD_PASSWORD) {
+      return res
+        .status(500)
+        .json({
+          success: false,
+          error:
+            'DASHBOARD_PASSWORD is not configured on the server.'
+        });
+    }
+
+    if (
+      !isValidDashboardPassword(
+        password
+      )
+    ) {
+      return res
+        .status(401)
+        .json({
+          success: false,
+          error:
+            'Incorrect password!'
+        });
+    }
+
+    return res.json({
+      success: true
+    });
+  }
+);
 
 // ==========================================
 // WEB DASHBOARD
 // ==========================================
 
-app.get('/', (req, res) => {
-  res.send(`
+app.get(
+  '/',
+  (req, res) => {
+    res.send(`
 <!DOCTYPE html>
 <html>
 <head>
@@ -296,7 +376,7 @@ app.get('/', (req, res) => {
       padding: 24px;
       width: 100%;
       max-width: 700px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
       margin-top: 30px;
     }
 
@@ -421,6 +501,10 @@ app.get('/', (req, res) => {
 
     .logging {
       color: #00f59b;
+    }
+
+    .paused {
+      color: #f5c542;
     }
 
     .not-logging {
@@ -574,7 +658,10 @@ app.get('/', (req, res) => {
       </div>
     </div>
 
-    <div class="login-box" id="loginBox">
+    <div
+      class="login-box"
+      id="loginBox"
+    >
       <div class="login-title">
         MOD Login
       </div>
@@ -689,59 +776,89 @@ app.get('/', (req, res) => {
     let autoRefreshTimer = null;
 
     const passwordInput =
-      document.getElementById('passwordInput');
+      document.getElementById(
+        'passwordInput'
+      );
 
     const loginBtn =
-      document.getElementById('loginBtn');
+      document.getElementById(
+        'loginBtn'
+      );
 
     const loginStatus =
-      document.getElementById('loginStatus');
+      document.getElementById(
+        'loginStatus'
+      );
 
     const loginBox =
-      document.getElementById('loginBox');
+      document.getElementById(
+        'loginBox'
+      );
 
     const protectedControls =
-      document.getElementById('protectedControls');
+      document.getElementById(
+        'protectedControls'
+      );
 
     const qwertStatus =
-      document.getElementById('qwertStatus');
+      document.getElementById(
+        'qwertStatus'
+      );
 
     const qwertStatusDetail =
-      document.getElementById('qwertStatusDetail');
+      document.getElementById(
+        'qwertStatusDetail'
+      );
 
     const botStatus =
-      document.getElementById('botStatus');
+      document.getElementById(
+        'botStatus'
+      );
 
     const botStatusDetail =
-      document.getElementById('botStatusDetail');
+      document.getElementById(
+        'botStatusDetail'
+      );
 
     const messageInput =
-      document.getElementById('messageInput');
+      document.getElementById(
+        'messageInput'
+      );
 
     const pastedChatInput =
-      document.getElementById('pastedChatInput');
+      document.getElementById(
+        'pastedChatInput'
+      );
 
     const sendChatBtn =
-      document.getElementById('sendChatBtn');
+      document.getElementById(
+        'sendChatBtn'
+      );
 
     const testSampleBtn =
-      document.getElementById('testSampleBtn');
+      document.getElementById(
+        'testSampleBtn'
+      );
 
     const testStoredBtn =
-      document.getElementById('testStoredBtn');
+      document.getElementById(
+        'testStoredBtn'
+      );
 
     const testPastedBtn =
-      document.getElementById('testPastedBtn');
+      document.getElementById(
+        'testPastedBtn'
+      );
 
     const chatStatus =
-      document.getElementById('chatStatus');
+      document.getElementById(
+        'chatStatus'
+      );
 
     const testResult =
-      document.getElementById('testResult');
-
-    // ========================================
-    // STATUS DISPLAY
-    // ========================================
+      document.getElementById(
+        'testResult'
+      );
 
     async function updateStatus() {
       try {
@@ -766,11 +883,15 @@ app.get('/', (req, res) => {
 
           qwertStatusDetail.innerHTML =
             '<a href="' +
-            escapeHtml(data.qwert.twitchUrl) +
+            escapeHtml(
+              data.qwert.twitchUrl
+            ) +
             '" target="_blank" rel="noopener noreferrer">' +
             'Open Qwert on Twitch' +
             '</a>';
-        } else if (data.qwert.live) {
+        } else if (
+          data.qwert.live
+        ) {
           qwertStatus.textContent =
             'LIVE';
 
@@ -779,7 +900,9 @@ app.get('/', (req, res) => {
 
           qwertStatusDetail.innerHTML =
             '<a href="' +
-            escapeHtml(data.qwert.twitchUrl) +
+            escapeHtml(
+              data.qwert.twitchUrl
+            ) +
             '" target="_blank" rel="noopener noreferrer">' +
             'Watch Qwert on Twitch' +
             '</a>';
@@ -792,7 +915,9 @@ app.get('/', (req, res) => {
 
           qwertStatusDetail.innerHTML =
             '<a href="' +
-            escapeHtml(data.qwert.twitchUrl) +
+            escapeHtml(
+              data.qwert.twitchUrl
+            ) +
             '" target="_blank" rel="noopener noreferrer">' +
             'Open Qwert on Twitch' +
             '</a>';
@@ -814,7 +939,32 @@ app.get('/', (req, res) => {
 
         let botDetails = '';
 
-        if (data.bot.loggingMessages) {
+        if (
+          data.bot.recapPaused
+        ) {
+          botDetails =
+            '<span class="paused">' +
+            'Automatic recaps PAUSED' +
+            '</span>' +
+            '<br>' +
+            data.bot.messagesInWindow +
+            ' message(s) preserved';
+
+          if (
+            data.bot.pausedRemainingMs !==
+            null
+          ) {
+            botDetails +=
+              '<br>Frozen timer: ' +
+              formatCountdown(
+                data.bot
+                  .pausedRemainingMs
+              ) +
+              ' remaining';
+          }
+        } else if (
+          data.bot.loggingMessages
+        ) {
           botDetails =
             '<span class="logging">' +
             'Logging chat for recap' +
@@ -823,10 +973,14 @@ app.get('/', (req, res) => {
             data.bot.messagesInWindow +
             ' message(s) in current window';
 
-          if (data.bot.recapInProgress) {
+          if (
+            data.bot.recapInProgress
+          ) {
             botDetails +=
               '<br>Recap is being generated now';
-          } else if (data.bot.nextRecapAt) {
+          } else if (
+            data.bot.nextRecapAt
+          ) {
             botDetails +=
               '<br>Next recap in ' +
               formatCountdown(
@@ -834,7 +988,9 @@ app.get('/', (req, res) => {
                 Date.now()
               );
           }
-        } else if (data.qwert.live) {
+        } else if (
+          data.qwert.live
+        ) {
           botDetails =
             '<span class="not-logging">' +
             'Not currently logging recap messages' +
@@ -869,22 +1025,27 @@ app.get('/', (req, res) => {
       }
     }
 
-    function formatCountdown(milliseconds) {
+    function formatCountdown(
+      milliseconds
+    ) {
       const totalSeconds =
         Math.max(
           0,
           Math.ceil(
-            milliseconds / 1000
+            milliseconds /
+            1000
           )
         );
 
       const minutes =
         Math.floor(
-          totalSeconds / 60
+          totalSeconds /
+          60
         );
 
       const seconds =
-        totalSeconds % 60;
+        totalSeconds %
+        60;
 
       if (minutes > 0) {
         return (
@@ -895,41 +1056,46 @@ app.get('/', (req, res) => {
         );
       }
 
-      return seconds + 's';
+      return (
+        seconds +
+        's'
+      );
     }
 
-    // ========================================
-    // AUTO REFRESH WHILE LOGGED OUT
-    // ========================================
-
     function startLoggedOutAutoRefresh() {
-      if (autoRefreshTimer) {
+      if (
+        autoRefreshTimer
+      ) {
         clearTimeout(
           autoRefreshTimer
         );
       }
 
       autoRefreshTimer =
-        setTimeout(() => {
-          if (!modLoggedIn) {
-            window.location.reload();
-          }
-        }, 60000);
+        setTimeout(
+          () => {
+            if (
+              !modLoggedIn
+            ) {
+              window.location.reload();
+            }
+          },
+          60000
+        );
     }
 
     function stopLoggedOutAutoRefresh() {
-      if (autoRefreshTimer) {
+      if (
+        autoRefreshTimer
+      ) {
         clearTimeout(
           autoRefreshTimer
         );
 
-        autoRefreshTimer = null;
+        autoRefreshTimer =
+          null;
       }
     }
-
-    // ========================================
-    // MOD LOGIN
-    // ========================================
 
     async function attemptLogin() {
       const password =
@@ -945,7 +1111,8 @@ app.get('/', (req, res) => {
         return;
       }
 
-      loginBtn.disabled = true;
+      loginBtn.disabled =
+        true;
 
       loginStatus.style.color =
         '#adadb8';
@@ -955,17 +1122,20 @@ app.get('/', (req, res) => {
 
       try {
         const response =
-          await fetch('/mod-login', {
-            method: 'POST',
-            headers: {
-              'Content-Type':
-                'application/json'
-            },
-            body:
-              JSON.stringify({
-                password
-              })
-          });
+          await fetch(
+            '/mod-login',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type':
+                  'application/json'
+              },
+              body:
+                JSON.stringify({
+                  password
+                })
+            }
+          );
 
         const data =
           await response.json();
@@ -985,7 +1155,8 @@ app.get('/', (req, res) => {
         modLoggedIn = true;
         modPassword = password;
 
-        passwordInput.value = '';
+        passwordInput.value =
+          '';
 
         loginBox.style.display =
           'none';
@@ -1003,7 +1174,8 @@ app.get('/', (req, res) => {
         loginStatus.textContent =
           'Failed to reach server.';
       } finally {
-        loginBtn.disabled = false;
+        loginBtn.disabled =
+          false;
       }
     }
 
@@ -1015,29 +1187,34 @@ app.get('/', (req, res) => {
     passwordInput.addEventListener(
       'keydown',
       (event) => {
-        if (event.key === 'Enter') {
+        if (
+          event.key ===
+          'Enter'
+        ) {
           attemptLogin();
         }
       }
     );
 
-    // ========================================
-    // SEND CHAT
-    // ========================================
-
     document
-      .getElementById('chatForm')
+      .getElementById(
+        'chatForm'
+      )
       .addEventListener(
         'submit',
         async (e) => {
           e.preventDefault();
 
-          if (!modLoggedIn) return;
+          if (!modLoggedIn) {
+            return;
+          }
 
           const message =
             messageInput.value.trim();
 
-          if (!message) return;
+          if (!message) {
+            return;
+          }
 
           sendChatBtn.disabled =
             true;
@@ -1053,15 +1230,19 @@ app.get('/', (req, res) => {
               await fetch(
                 '/send-chat',
                 {
-                  method: 'POST',
+                  method:
+                    'POST',
+
                   headers: {
                     'Content-Type':
                       'application/json'
                   },
+
                   body:
                     JSON.stringify({
                       password:
                         modPassword,
+
                       message
                     })
                 }
@@ -1070,7 +1251,9 @@ app.get('/', (req, res) => {
             const data =
               await response.json();
 
-            if (data.success) {
+            if (
+              data.success
+            ) {
               chatStatus.style.color =
                 '#00f59b';
 
@@ -1102,16 +1285,19 @@ app.get('/', (req, res) => {
         }
       );
 
-    // ========================================
-    // SUMMARY TESTS
-    // ========================================
-
-    async function runSummaryTest(type) {
-      if (!modLoggedIn) return;
+    async function runSummaryTest(
+      type
+    ) {
+      if (!modLoggedIn) {
+        return;
+      }
 
       if (
-        type === 'pasted' &&
-        !pastedChatInput.value.trim()
+        type ===
+          'pasted' &&
+        !pastedChatInput
+          .value
+          .trim()
       ) {
         alert(
           'Paste some Render chat logs first.'
@@ -1120,7 +1306,9 @@ app.get('/', (req, res) => {
         return;
       }
 
-      setTestButtonsDisabled(true);
+      setTestButtonsDisabled(
+        true
+      );
 
       testResult.style.display =
         'block';
@@ -1128,10 +1316,14 @@ app.get('/', (req, res) => {
       testResult.style.color =
         '#adadb8';
 
-      if (type === 'sample') {
+      if (
+        type === 'sample'
+      ) {
         testResult.textContent =
           'Generating summary from sample chat...';
-      } else if (type === 'stored') {
+      } else if (
+        type === 'stored'
+      ) {
         testResult.textContent =
           'Generating summary from current automatic recap window...';
       } else {
@@ -1141,11 +1333,16 @@ app.get('/', (req, res) => {
 
       try {
         const body = {
-          password: modPassword,
+          password:
+            modPassword,
+
           type
         };
 
-        if (type === 'pasted') {
+        if (
+          type ===
+          'pasted'
+        ) {
           body.pastedChat =
             pastedChatInput.value;
         }
@@ -1154,20 +1351,27 @@ app.get('/', (req, res) => {
           await fetch(
             '/test-summary',
             {
-              method: 'POST',
+              method:
+                'POST',
+
               headers: {
                 'Content-Type':
                   'application/json'
               },
+
               body:
-                JSON.stringify(body)
+                JSON.stringify(
+                  body
+                )
             }
           );
 
         const data =
           await response.json();
 
-        if (data.success) {
+        if (
+          data.success
+        ) {
           testResult.style.color =
             '#fff';
 
@@ -1175,7 +1379,8 @@ app.get('/', (req, res) => {
             'Sample chat';
 
           if (
-            data.source === 'stored'
+            data.source ===
+            'stored'
           ) {
             sourceText =
               'Current recap window (' +
@@ -1184,7 +1389,8 @@ app.get('/', (req, res) => {
           }
 
           if (
-            data.source === 'pasted'
+            data.source ===
+            'pasted'
           ) {
             sourceText =
               'Pasted chat (' +
@@ -1201,13 +1407,16 @@ app.get('/', (req, res) => {
                 ' valid messages';
             }
 
-            sourceText += ')';
+            sourceText +=
+              ')';
           }
 
           let sanitizationText =
             '';
 
-          if (data.sanitized) {
+          if (
+            data.sanitized
+          ) {
             sanitizationText =
               '<span class="sanitized-warning">' +
               '⚠ Sensitive chat text was redacted before being sent to Gemini: ' +
@@ -1268,59 +1477,87 @@ app.get('/', (req, res) => {
         disabled;
     }
 
-    function getErrorMessage(error) {
+    function getErrorMessage(
+      error
+    ) {
       if (!error) {
         return 'Unknown error';
       }
 
-      if (typeof error === 'string') {
+      if (
+        typeof error ===
+        'string'
+      ) {
         return error;
       }
 
       return (
         error.message ||
-        JSON.stringify(error)
+        JSON.stringify(
+          error
+        )
       );
     }
 
-    function escapeHtml(value) {
+    function escapeHtml(
+      value
+    ) {
       return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+        .replace(
+          /&/g,
+          '&amp;'
+        )
+        .replace(
+          /</g,
+          '&lt;'
+        )
+        .replace(
+          />/g,
+          '&gt;'
+        )
+        .replace(
+          /"/g,
+          '&quot;'
+        )
+        .replace(
+          /'/g,
+          '&#039;'
+        );
     }
 
     testSampleBtn.addEventListener(
       'click',
       () =>
-        runSummaryTest('sample')
+        runSummaryTest(
+          'sample'
+        )
     );
 
     testStoredBtn.addEventListener(
       'click',
       () =>
-        runSummaryTest('stored')
+        runSummaryTest(
+          'stored'
+        )
     );
 
     testPastedBtn.addEventListener(
       'click',
       () =>
-        runSummaryTest('pasted')
+        runSummaryTest(
+          'pasted'
+        )
     );
 
-    // ========================================
-    // PAGE STARTUP
-    // ========================================
-
     updateStatus();
+
     startLoggedOutAutoRefresh();
   </script>
 </body>
 </html>
-  `);
-});
+    `);
+  }
+);
 
 // ==========================================
 // SEND CHAT ENDPOINT
@@ -1334,11 +1571,14 @@ app.post(
       message
     } = req.body;
 
-    if (!DASHBOARD_PASSWORD) {
+    if (
+      !DASHBOARD_PASSWORD
+    ) {
       return res
         .status(500)
         .json({
           success: false,
+
           error:
             'DASHBOARD_PASSWORD is not configured on the server.'
         });
@@ -1353,19 +1593,22 @@ app.post(
         .status(401)
         .json({
           success: false,
+
           error:
             'Incorrect password!'
         });
     }
 
     if (
-      typeof message !== 'string' ||
+      typeof message !==
+        'string' ||
       !message.trim()
     ) {
       return res
         .status(400)
         .json({
           success: false,
+
           error:
             'Message cannot be empty.'
         });
@@ -1376,6 +1619,7 @@ app.post(
         .status(500)
         .json({
           success: false,
+
           error:
             'TWITCH_CHANNEL is not configured.'
         });
@@ -1400,6 +1644,7 @@ app.post(
         .status(500)
         .json({
           success: false,
+
           error:
             'Failed to send to Twitch.'
         });
@@ -1420,11 +1665,14 @@ app.post(
       pastedChat
     } = req.body;
 
-    if (!DASHBOARD_PASSWORD) {
+    if (
+      !DASHBOARD_PASSWORD
+    ) {
       return res
         .status(500)
         .json({
           success: false,
+
           error:
             'DASHBOARD_PASSWORD is not configured on the server.'
         });
@@ -1439,6 +1687,7 @@ app.post(
         .status(401)
         .json({
           success: false,
+
           error:
             'Incorrect password!'
         });
@@ -1457,46 +1706,59 @@ app.post(
       'heifer54321: WW',
       'dumb_boyy: n opole?',
       'coosgoose: @Motmo_ Hahaha he was a formidable foe, he put in more work than I to be sure'
-    ].filter((line) => {
-      const username =
-        line.split(':')[0];
+    ].filter(
+      (line) => {
+        const username =
+          line.split(':')[0];
 
-      return !isIgnoredUsername(
-        username
-      );
-    });
+        return !isIgnoredUsername(
+          username
+        );
+      }
+    );
 
     let logs;
     let source;
     let totalValidMessages;
 
-    if (type === 'stored') {
+    if (
+      type === 'stored'
+    ) {
       logs =
         recapManager
           .getCurrentWindowLogs();
 
-      if (logs.length === 0) {
+      if (
+        logs.length === 0
+      ) {
         return res
           .status(400)
           .json({
             success: false,
+
             error:
               'There are currently no messages in the active automatic recap window.'
           });
       }
 
-      source = 'stored';
+      source =
+        'stored';
+
       totalValidMessages =
         logs.length;
-    } else if (type === 'pasted') {
+    } else if (
+      type === 'pasted'
+    ) {
       if (
-        typeof pastedChat !== 'string' ||
+        typeof pastedChat !==
+          'string' ||
         !pastedChat.trim()
       ) {
         return res
           .status(400)
           .json({
             success: false,
+
             error:
               'No pasted chat logs were provided.'
           });
@@ -1512,30 +1774,44 @@ app.post(
           ]
         );
 
-      if (parsed.logs.length === 0) {
+      if (
+        parsed.logs.length ===
+        0
+      ) {
         return res
           .status(400)
           .json({
             success: false,
+
             error:
               'No recognizable Twitch chat messages were found.'
           });
       }
 
-      logs = parsed.logs;
-      source = 'pasted';
+      logs =
+        parsed.logs;
+
+      source =
+        'pasted';
+
       totalValidMessages =
         parsed.totalValidMessages;
     } else {
-      logs = sampleChatLogs;
-      source = 'sample';
+      logs =
+        sampleChatLogs;
+
+      source =
+        'sample';
+
       totalValidMessages =
         logs.length;
     }
 
     try {
       const result =
-        await generateRecap(logs);
+        await generateRecap(
+          logs
+        );
 
       const fullOutput =
         SUMMARY_PREFIX +
@@ -1543,22 +1819,33 @@ app.post(
 
       return res.json({
         success: true,
+
         source,
+
         messageCount:
           logs.length,
+
         totalValidMessages,
+
         output:
           fullOutput,
+
         characterCount:
           fullOutput.length,
+
         sanitized:
-          result.sanitization
+          result
+            .sanitization
             .sanitized,
+
         censoredCount:
-          result.sanitization
+          result
+            .sanitization
             .censoredCount,
+
         affectedMessages:
-          result.sanitization
+          result
+            .sanitization
             .affectedMessages
       });
     } catch (err) {
@@ -1571,13 +1858,17 @@ app.post(
         .status(500)
         .json({
           success: false,
+
           error: {
             message:
               err.message,
+
             name:
               err.name,
+
             details:
               err.toString(),
+
             inputBlocked:
               err.inputBlocked ||
               false
@@ -1599,13 +1890,17 @@ client.on(
     message,
     self
   ) => {
-    if (self) return;
+    if (self) {
+      return;
+    }
 
     const rawMessage =
-      (message || '').trim();
+      (message || '')
+        .trim();
 
     const lowerMsg =
-      rawMessage.toLowerCase();
+      rawMessage
+        .toLowerCase();
 
     const username =
       (tags.username || '')
@@ -1626,11 +1921,62 @@ client.on(
     }
 
     // ========================================
+    // MOD: !STOPRECAP
+    // ========================================
+
+    if (
+      lowerMsg ===
+        '!stoprecap'
+    ) {
+      if (
+        !isModOrBroadcaster(
+          tags
+        )
+      ) {
+        return;
+      }
+
+      await recapManager
+        .stopRecap({
+          channel,
+          displayName
+        });
+
+      return;
+    }
+
+    // ========================================
+    // MOD: !STARTRECAP
+    // ========================================
+
+    if (
+      lowerMsg ===
+        '!startrecap'
+    ) {
+      if (
+        !isModOrBroadcaster(
+          tags
+        )
+      ) {
+        return;
+      }
+
+      await recapManager
+        .startRecap({
+          channel,
+          displayName
+        });
+
+      return;
+    }
+
+    // ========================================
     // !RECAP = NEXT AUTO RECAP STATUS
     // ========================================
 
     if (
-      lowerMsg === '!recap' ||
+      lowerMsg ===
+        '!recap' ||
       lowerMsg.startsWith(
         '!recap '
       )
@@ -1684,42 +2030,49 @@ process.on(
 // START SERVER
 // ==========================================
 
-app.listen(PORT, () => {
-  console.log(
-    `Web server running on port ${PORT}`
-  );
-
-  console.log(
-    'Gemini model: gemini-3.5-flash-lite'
-  );
-
-  console.log(
-    `Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`
-  );
-
-  console.log(
-    'Automatic recap mode enabled.'
-  );
-
-  console.log(
-    'First recap: 60 minutes or 150 messages.'
-  );
-
-  console.log(
-    'Recurring recap: every 45 minutes.'
-  );
-
-  console.log(
-    '!recap status cooldown: 5 minutes.'
-  );
-
-  console.log(
-    'Stream detection: Twitch API every 30 seconds.'
-  );
-
-  if (channelName) {
+app.listen(
+  PORT,
+  () => {
     console.log(
-      `Twitch channel: #${channelName}`
+      `Web server running on port ${PORT}`
     );
+
+    console.log(
+      'Gemini model: gemini-3.5-flash-lite'
+    );
+
+    console.log(
+      `Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`
+    );
+
+    console.log(
+      'Automatic recap mode enabled.'
+    );
+
+    console.log(
+      'First recap: 60 minutes or 150 messages.'
+    );
+
+    console.log(
+      'Recurring recap: every 45 minutes.'
+    );
+
+    console.log(
+      '!recap status cooldown: 5 minutes.'
+    );
+
+    console.log(
+      '!stoprecap / !startrecap: moderators and broadcaster only.'
+    );
+
+    console.log(
+      'Stream detection: Twitch API every 30 seconds.'
+    );
+
+    if (channelName) {
+      console.log(
+        `Twitch channel: #${channelName}`
+      );
+    }
   }
-});
+);
