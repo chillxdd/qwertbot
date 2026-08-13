@@ -5,48 +5,33 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ==========================================
-// ENVIRONMENT / CONFIGURATION
+// CONFIGURATION
 // ==========================================
 
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
+const SUMMARY_PREFIX = 'AI Summary: ';
+const TWITCH_MESSAGE_LIMIT = 500;
+const SUMMARY_TEXT_LIMIT = TWITCH_MESSAGE_LIMIT - SUMMARY_PREFIX.length;
 
 if (!DASHBOARD_PASSWORD) {
-  console.warn(
-    'WARNING: DASHBOARD_PASSWORD environment variable is not set. ' +
-    'Dashboard actions will not work until it is configured.'
-  );
+  console.warn('WARNING: DASHBOARD_PASSWORD environment variable is not set.');
 }
 
-// ==========================================
-// MIDDLEWARE
-// ==========================================
-
-// Parse incoming JSON & form data
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Larger limit so pasted Render logs can be tested.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // ==========================================
 // TWITCH CONFIGURATION
 // ==========================================
 
 const rawToken = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').trim();
-
-const pass = rawToken.startsWith('oauth:')
-  ? rawToken
-  : `oauth:${rawToken}`;
-
-const channelName = (process.env.TWITCH_CHANNEL || '')
-  .toLowerCase()
-  .trim();
-
-const botUsername = (process.env.TWITCH_BOT_USERNAME || '')
-  .toLowerCase()
-  .trim();
+const pass = rawToken.startsWith('oauth:') ? rawToken : `oauth:${rawToken}`;
+const channelName = (process.env.TWITCH_CHANNEL || '').toLowerCase().trim();
+const botUsername = (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim();
 
 const client = new tmi.Client({
-  options: {
-    debug: true
-  },
+  options: { debug: true },
   identity: {
     username: botUsername,
     password: pass
@@ -54,47 +39,128 @@ const client = new tmi.Client({
   channels: channelName ? [channelName] : []
 });
 
-// Connect to Twitch only if required configuration exists
 if (!rawToken || !channelName || !botUsername) {
+  console.warn('WARNING: Twitch configuration is incomplete.');
   console.warn(
-    'WARNING: Twitch environment variables are incomplete. ' +
-    'Make sure TWITCH_BOT_ACCESS_TOKEN, TWITCH_CHANNEL, and ' +
-    'TWITCH_BOT_USERNAME are configured.'
+    'Required variables: TWITCH_BOT_ACCESS_TOKEN, TWITCH_CHANNEL, TWITCH_BOT_USERNAME'
   );
 } else {
-  client
-    .connect()
-    .then(() => {
-      console.log(`Connected to Twitch channel: #${channelName}`);
-    })
-    .catch((err) => {
-      console.error('Failed to connect to Twitch:', err);
-    });
+  client.connect()
+    .then(() => console.log(`Connected to Twitch channel: #${channelName}`))
+    .catch((err) => console.error('Failed to connect to Twitch:', err));
 }
 
 // ==========================================
-// CHAT LOGGING & COOLDOWN SETTINGS
+// CHAT LOGGING & COOLDOWN
 // ==========================================
 
 const recentChatLogs = [];
 const MAX_LOG_SIZE = 50;
 
-// Global !recap cooldown: 15 minutes
 let lastRecapUse = 0;
-
 const RECAP_COOLDOWN = 15 * 60 * 1000;
 
 // ==========================================
-// GEMINI INTERACTIONS API HELPER
+// IGNORED CHAT USERS
+// ==========================================
+
+function isIgnoredUsername(username) {
+  const ignoredUsers = [
+    'nightbot',
+    'streamelements',
+    botUsername
+  ].filter(Boolean);
+
+  return ignoredUsers.includes((username || '').toLowerCase().trim());
+}
+
+// ==========================================
+// PARSE PASTED RENDER / TWITCH LOGS
+// ==========================================
+
+function parsePastedChat(rawText) {
+  if (typeof rawText !== 'string' || !rawText.trim()) {
+    return [];
+  }
+
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const parsedMessages = [];
+
+  for (const originalLine of lines) {
+    // Remove ANSI terminal color codes if Render included any.
+    const line = originalLine.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').trim();
+
+    let username = '';
+    let message = '';
+
+    // Common TMI / Render format:
+    // info: [#channel] <username>: message
+    // [#channel] <username>: message
+    // <username>: message
+    let match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
+
+    if (match) {
+      username = match[1];
+      message = match[2];
+    }
+
+    // Simple copied format:
+    // username: message
+    if (!username) {
+      match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
+
+      if (match) {
+        username = match[1];
+        message = match[2];
+      }
+    }
+
+    // Alternate channel-prefixed format:
+    // [#channel] username: message
+    if (!username) {
+      match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
+
+      if (match) {
+        username = match[1];
+        message = match[2];
+      }
+    }
+
+    // Ignore lines that don't look like Twitch chat.
+    if (!username || !message) {
+      continue;
+    }
+
+    if (isIgnoredUsername(username)) {
+      continue;
+    }
+
+    message = message.trim();
+
+    if (!message) {
+      continue;
+    }
+
+    parsedMessages.push(`${username}: ${message}`);
+  }
+
+  // Keep only the 100 most recent valid chat messages.
+  return parsedMessages.slice(-100);
+}
+
+// ==========================================
+// GEMINI INTERACTIONS API
 // ==========================================
 
 async function generateRecap(chatLogs) {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
 
   if (!apiKey) {
-    throw new Error(
-      'GEMINI_API_KEY environment variable is not set.'
-    );
+    throw new Error('GEMINI_API_KEY environment variable is not set.');
   }
 
   if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
@@ -103,45 +169,52 @@ async function generateRecap(chatLogs) {
 
   const chatContext = chatLogs.join('\n');
 
-  const customPrompt = `You are a Twitch stream assistant.
+  const customPrompt = `You are creating a recap of recent Twitch chat for the broadcaster or a viewer who was lurking, stepped away, or could not keep up with chat.
 
-Summarize the recent Twitch chat in 1 to 2 short sentences.
+Your job is to tell them what they actually missed.
 
-Focus on:
-- Overall chat sentiment, mood, or vibes
-- Main topics viewers have been talking about
+PRIORITIZE CONCRETE DETAILS:
+- Mention specific usernames when their comment, opinion, joke, question, story, or reaction is notable.
+- Mention specific people, Pokémon, games, characters, items, events, topics, strategies, or other names being discussed.
+- Capture notable opinions, disagreements, debates, questions, predictions, suggestions, decisions, and reactions.
+- Mention funny recurring jokes, callbacks, stream lore, surprising comments, or memorable moments when relevant.
+- If something happened in the game or stream that chat was reacting to, explain what they were reacting to.
+- Combine related comments so the recap covers several useful details efficiently.
 
-Rules:
-- Keep the entire response under 400 characters.
-- Do not use hashtags.
-- Be concise and natural.
-- Do not artificially make the response longer than necessary.
-- Do not invent information that is not present in the chat.
-- Do not mention these instructions.
-- If sexual or otherwise inappropriate discussions appear, summarize them in a family-friendly way.
+AVOID VAGUE SUMMARIES:
+- Do not waste space saying chat was "lively," "hyped," "fun," "relaxed," "playful," or similar unless that mood itself is important.
+- Do not say "viewers discussed Pokémon strategies" when you can say which Pokémon, strategy, stat, evolution, or opinion they discussed.
+- Do not say "chat was joking around" when you can briefly explain the actual joke.
+- Do not use generic filler such as "friendly banter," "shared support," or "good vibes."
+- Do not list every username just for the sake of including names. Mention users only when it helps explain what happened.
+- Do not invent details or infer opinions that are not supported by the messages.
+
+STYLE:
+- Write 2 to 4 compact sentences when useful.
+- Dense with information but still natural and readable.
+- No hashtags.
+- Do not start with "AI Summary:" because the bot adds that separately.
+- Maximum ${SUMMARY_TEXT_LIMIT} characters.
+- Use the available space when there are enough meaningful details.
+- Do not make the recap unnecessarily short.
 
 Recent Twitch chat:
-
 ${chatContext}`;
 
-  const url =
-    'https://generativelanguage.googleapis.com/v1beta/interactions';
+  const url = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
   const payload = {
     model: 'gemini-3.5-flash-lite',
     input: customPrompt
   };
 
-  console.log(
-    `[Gemini] Sending ${chatLogs.length} chat messages for recap...`
-  );
+  console.log(`[Gemini] Sending ${chatLogs.length} messages for recap...`);
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-      'Api-Revision': '2026-05-20'
+      'x-goog-api-key': apiKey
     },
     body: JSON.stringify(payload)
   });
@@ -152,15 +225,12 @@ ${chatContext}`;
     data = await response.json();
   } catch (err) {
     throw new Error(
-      `Gemini returned an invalid response. HTTP ${response.status}`
+      `Gemini returned an invalid JSON response. HTTP ${response.status}`
     );
   }
 
   if (!response.ok) {
-    console.error(
-      '[Gemini API Error]',
-      JSON.stringify(data, null, 2)
-    );
+    console.error('[Gemini API Error]', JSON.stringify(data, null, 2));
 
     const errorMessage =
       data?.error?.message ||
@@ -176,36 +246,43 @@ ${chatContext}`;
 
   let summary = '';
 
-  // Current Interactions API REST schema:
-  // steps[] -> model_output -> content[] -> text
   if (Array.isArray(data.steps)) {
     for (const step of data.steps) {
-      if (
-        step?.type === 'model_output' &&
-        Array.isArray(step.content)
-      ) {
-        for (const item of step.content) {
-          if (
-            item?.type === 'text' &&
-            typeof item.text === 'string' &&
-            item.text.trim()
-          ) {
-            summary += `${item.text} `;
-          }
+      if (step?.type !== 'model_output' || !Array.isArray(step.content)) {
+        continue;
+      }
+
+      for (const item of step.content) {
+        if (
+          item?.type === 'text' &&
+          typeof item.text === 'string' &&
+          item.text.trim()
+        ) {
+          summary += `${item.text} `;
         }
       }
     }
   }
 
-  // Older / SDK-style fallbacks
+  // Fallback response formats.
   if (!summary && typeof data.output_text === 'string') {
     summary = data.output_text;
   }
+
   if (!summary && typeof data.outputText === 'string') {
     summary = data.outputText;
   }
+
   if (!summary && typeof data.text === 'string') {
     summary = data.text;
+  }
+
+  if (!summary && Array.isArray(data.outputs)) {
+    for (const output of data.outputs) {
+      if (typeof output?.text === 'string') {
+        summary += `${output.text} `;
+      }
+    }
   }
 
   summary = summary.trim();
@@ -221,9 +298,12 @@ ${chatContext}`;
     );
   }
 
-  // Twitch-friendly length limit for our recap
-  if (summary.length > 400) {
-    summary = summary.substring(0, 397) + '...';
+  // Prevent duplicated prefix.
+  summary = summary.replace(/^AI Summary:\s*/i, '');
+
+  // Guarantee that "AI Summary: " + recap stays within Twitch's 500-char limit.
+  if (summary.length > SUMMARY_TEXT_LIMIT) {
+    summary = summary.substring(0, SUMMARY_TEXT_LIMIT - 3).trimEnd() + '...';
   }
 
   console.log('[Gemini Recap]', summary);
@@ -232,7 +312,7 @@ ${chatContext}`;
 }
 
 // ==========================================
-// 1. HEALTH CHECK
+// HEALTH CHECK
 // ==========================================
 
 app.get('/health', (req, res) => {
@@ -240,377 +320,414 @@ app.get('/health', (req, res) => {
 });
 
 // ==========================================
-// 2. WEB DASHBOARD
+// WEB DASHBOARD
 // ==========================================
 
 app.get('/', (req, res) => {
   res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>SqwertArmyBot Dashboard</title>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>SqwertArmyBot Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
-      <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1"
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f0f12;
+      color: #fff;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 80vh;
+      margin: 0;
+    }
+
+    .card {
+      background: #18181b;
+      border: 1px solid #26262c;
+      border-radius: 8px;
+      padding: 24px;
+      width: 100%;
+      max-width: 600px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    h2 {
+      margin-top: 0;
+      color: #9146ff;
+    }
+
+    p {
+      color: #adadb8;
+      font-size: 14px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: #adadb8;
+      margin-bottom: 6px;
+    }
+
+    input, textarea {
+      width: 100%;
+      padding: 12px;
+      border-radius: 4px;
+      border: 1px solid #3a3a44;
+      background: #0e0e10;
+      color: #fff;
+      box-sizing: border-box;
+      font-size: 14px;
+      font-family: Arial, sans-serif;
+    }
+
+    input {
+      margin-bottom: 16px;
+    }
+
+    textarea {
+      min-height: 280px;
+      resize: vertical;
+      font-family: Consolas, Monaco, monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      margin-bottom: 8px;
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #9146ff;
+      border: none;
+      color: white;
+      border-radius: 4px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    button:hover {
+      background: #772ce8;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .test-buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    .test-buttons button,
+    #testPastedBtn {
+      background: #2f2f38;
+    }
+
+    .test-buttons button:hover,
+    #testPastedBtn:hover {
+      background: #3f3f4a;
+    }
+
+    .divider {
+      border: 0;
+      border-top: 1px solid #26262c;
+      margin: 20px 0;
+    }
+
+    .section-title {
+      color: #adadb8;
+      font-size: 12px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+
+    .hint {
+      color: #777783;
+      font-size: 11px;
+      margin: 0 0 10px;
+      line-height: 1.4;
+    }
+
+    #status, #testResult {
+      margin-top: 12px;
+      font-size: 13px;
+      word-break: break-word;
+    }
+
+    #testResult {
+      background: #0e0e10;
+      border-radius: 4px;
+      padding: 12px;
+      display: none;
+      line-height: 1.45;
+    }
+
+    .char-count {
+      display: block;
+      color: #777783;
+      margin-top: 8px;
+      font-size: 11px;
+    }
+
+    @media (max-width: 550px) {
+      .test-buttons {
+        flex-direction: column;
+        gap: 0;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <h2>SqwertArmyBot Control</h2>
+
+    <p>
+      Sending to channel:
+      <strong>#${channelName || 'Not configured'}</strong>
+    </p>
+
+    <label for="passwordInput">Password</label>
+    <input
+      type="password"
+      id="passwordInput"
+      placeholder="Enter password..."
+      autocomplete="current-password"
+    >
+
+    <form id="chatForm">
+      <label for="messageInput">Message to Twitch</label>
+      <input
+        type="text"
+        id="messageInput"
+        placeholder="Type a message..."
+        autocomplete="off"
       >
 
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          background: #0f0f12;
-          color: #fff;
-          padding: 20px;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          min-height: 80vh;
-          margin: 0;
+      <button type="submit" id="sendChatBtn">
+        Send to Chat
+      </button>
+    </form>
+
+    <div id="status"></div>
+
+    <hr class="divider">
+
+    <div class="section-title">AI Summary Testing</div>
+
+    <div class="test-buttons">
+      <button type="button" id="testSampleBtn">
+        Test Sample Chat
+      </button>
+
+      <button type="button" id="testStoredBtn">
+        Test Stored Chat
+      </button>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section-title">Test Pasted Render Logs</div>
+
+    <p class="hint">
+      Paste Twitch chat lines from Render here. Nightbot, StreamElements,
+      and ${botUsername || 'TWITCH_BOT_USERNAME'} are ignored automatically.
+      If more than 100 valid chat messages are pasted, only the 100 most recent are used.
+    </p>
+
+    <textarea
+      id="pastedChatInput"
+      placeholder="Paste Render / Twitch chat logs here..."
+    ></textarea>
+
+    <button type="button" id="testPastedBtn">
+      Test Pasted Chat
+    </button>
+
+    <div id="testResult"></div>
+  </div>
+
+  <script>
+    const passwordInput = document.getElementById('passwordInput');
+    const messageInput = document.getElementById('messageInput');
+    const pastedChatInput = document.getElementById('pastedChatInput');
+
+    const sendChatBtn = document.getElementById('sendChatBtn');
+    const testSampleBtn = document.getElementById('testSampleBtn');
+    const testStoredBtn = document.getElementById('testStoredBtn');
+    const testPastedBtn = document.getElementById('testPastedBtn');
+
+    const status = document.getElementById('status');
+    const testResult = document.getElementById('testResult');
+
+    document.getElementById('chatForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const password = passwordInput.value;
+      const message = messageInput.value.trim();
+
+      if (!password || !message) {
+        return;
+      }
+
+      status.style.color = '#adadb8';
+      status.textContent = 'Sending...';
+      sendChatBtn.disabled = true;
+
+      try {
+        const response = await fetch('/send-chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ password, message })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          status.style.color = '#00f59b';
+          status.textContent = 'Sent to chat!';
+          messageInput.value = '';
+        } else {
+          status.style.color = '#ff4f4f';
+          status.textContent = 'Error: ' + getErrorMessage(data.error);
+        }
+      } catch (err) {
+        status.style.color = '#ff4f4f';
+        status.textContent = 'Failed to reach server.';
+      } finally {
+        sendChatBtn.disabled = false;
+      }
+    });
+
+    async function runSummaryTest(type) {
+      const password = passwordInput.value;
+
+      if (!password) {
+        alert('Please enter the dashboard password first.');
+        return;
+      }
+
+      if (type === 'pasted' && !pastedChatInput.value.trim()) {
+        alert('Paste some Render chat logs first.');
+        return;
+      }
+
+      setTestButtonsDisabled(true);
+
+      testResult.style.display = 'block';
+      testResult.style.color = '#adadb8';
+
+      if (type === 'sample') {
+        testResult.textContent = 'Generating summary from sample chat...';
+      } else if (type === 'stored') {
+        testResult.textContent = 'Generating summary from stored chat...';
+      } else {
+        testResult.textContent = 'Parsing logs and generating summary...';
+      }
+
+      try {
+        const body = {
+          password,
+          type
+        };
+
+        if (type === 'pasted') {
+          body.pastedChat = pastedChatInput.value;
         }
 
-        .card {
-          background: #18181b;
-          border: 1px solid #26262c;
-          border-radius: 8px;
-          padding: 24px;
-          width: 100%;
-          max-width: 450px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        }
-
-        h2 {
-          margin-top: 0;
-          color: #9146ff;
-        }
-
-        p {
-          color: #adadb8;
-          font-size: 14px;
-        }
-
-        label {
-          font-size: 12px;
-          color: #adadb8;
-        }
-
-        input {
-          width: 100%;
-          padding: 12px;
-          margin: 8px 0 16px 0;
-          border-radius: 4px;
-          border: 1px solid #3a3a44;
-          background: #0e0e10;
-          color: #fff;
-          box-sizing: border-box;
-          font-size: 14px;
-        }
-
-        button {
-          width: 100%;
-          padding: 12px;
-          background: #9146ff;
-          border: none;
-          color: white;
-          border-radius: 4px;
-          font-weight: bold;
-          cursor: pointer;
-          font-size: 14px;
-          margin-bottom: 8px;
-        }
-
-        button:hover {
-          background: #772ce8;
-        }
-
-        button:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .btn-test {
-          background: #2f2f38;
-        }
-
-        .btn-test:hover {
-          background: #3f3f4a;
-        }
-
-        #status,
-        #testResult {
-          margin-top: 12px;
-          font-size: 13px;
-          word-break: break-word;
-        }
-
-        pre {
-          background: #0e0e10;
-          padding: 10px;
-          border-radius: 4px;
-          color: #adadb8;
-          white-space: pre-wrap;
-          overflow-wrap: anywhere;
-          font-size: 12px;
-        }
-
-        hr {
-          border: 0;
-          border-top: 1px solid #26262c;
-          margin: 16px 0;
-        }
-      </style>
-    </head>
-
-    <body>
-      <div class="card">
-
-        <h2>SqwertArmyBot Control</h2>
-
-        <p>
-          Sending to channel:
-          <strong>#${channelName || 'Not configured'}</strong>
-        </p>
-
-        <label for="passwordInput">
-          Password
-        </label>
-
-        <input
-          type="password"
-          id="passwordInput"
-          placeholder="Enter password..."
-          autocomplete="current-password"
-          required
-        >
-
-        <form id="chatForm">
-
-          <label for="messageInput">
-            Message to Twitch
-          </label>
-
-          <input
-            type="text"
-            id="messageInput"
-            placeholder="Type a message..."
-            autocomplete="off"
-          >
-
-          <button
-            type="submit"
-            id="sendChatBtn"
-          >
-            Send to Chat
-          </button>
-
-        </form>
-
-        <hr>
-
-        <button
-          type="button"
-          class="btn-test"
-          id="testGeminiBtn"
-        >
-          ⚡ Test Gemini API
-        </button>
-
-        <div id="status"></div>
-        <div id="testResult"></div>
-
-      </div>
-
-      <script>
-        const passwordInput =
-          document.getElementById('passwordInput');
-
-        const status =
-          document.getElementById('status');
-
-        const testResult =
-          document.getElementById('testResult');
-
-        const sendChatBtn =
-          document.getElementById('sendChatBtn');
-
-        const testGeminiBtn =
-          document.getElementById('testGeminiBtn');
-
-        // ======================================
-        // SEND MESSAGE TO TWITCH
-        // ======================================
-
-        document
-          .getElementById('chatForm')
-          .addEventListener('submit', async (e) => {
-
-            e.preventDefault();
-
-            const password =
-              passwordInput.value;
-
-            const input =
-              document.getElementById('messageInput');
-
-            const message =
-              input.value.trim();
-
-            if (!message || !password) {
-              return;
-            }
-
-            status.style.color = '#adadb8';
-            status.textContent = 'Sending...';
-
-            sendChatBtn.disabled = true;
-
-            try {
-
-              const response = await fetch('/send-chat', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                  password,
-                  message
-                })
-              });
-
-              const data = await response.json();
-
-              if (data.success) {
-
-                status.style.color = '#00f59b';
-                status.textContent = 'Sent to chat!';
-
-                input.value = '';
-
-              } else {
-
-                status.style.color = '#ff4f4f';
-                status.textContent =
-                  'Error: ' +
-                  (data.error || 'Unknown error');
-
-              }
-
-            } catch (err) {
-
-              status.style.color = '#ff4f4f';
-              status.textContent =
-                'Failed to reach server.';
-
-            } finally {
-
-              sendChatBtn.disabled = false;
-
-            }
-          });
-
-        // ======================================
-        // TEST GEMINI
-        // ======================================
-
-        testGeminiBtn.addEventListener(
-          'click',
-          async () => {
-
-            const password =
-              passwordInput.value;
-
-            if (!password) {
-              alert(
-                'Please enter the dashboard password first.'
-              );
-              return;
-            }
-
-            testGeminiBtn.disabled = true;
-
-            testResult.innerHTML =
-              '<span style="color:#adadb8;">' +
-              'Testing Gemini API...' +
-              '</span>';
-
-            try {
-
-              const response = await fetch(
-                '/test-gemini',
-                {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type':
-                      'application/json'
-                  },
-                  body: JSON.stringify({
-                    password
-                  })
-                }
-              );
-
-              const data =
-                await response.json();
-
-              if (data.success) {
-
-                testResult.innerHTML =
-                  '<strong style="color:#00f59b;">' +
-                  'API Success!' +
-                  '</strong>' +
-                  '<pre>' +
-                  escapeHtml(data.output) +
-                  '</pre>';
-
-              } else {
-
-                testResult.innerHTML =
-                  '<strong style="color:#ff4f4f;">' +
-                  'API Error Details:' +
-                  '</strong>' +
-                  '<pre>' +
-                  escapeHtml(
-                    JSON.stringify(
-                      data.error,
-                      null,
-                      2
-                    )
-                  ) +
-                  '</pre>';
-
-              }
-
-            } catch (err) {
-
-              testResult.innerHTML =
-                '<span style="color:#ff4f4f;">' +
-                'Failed to connect to backend endpoint.' +
-                '</span>';
-
-            } finally {
-
-              testGeminiBtn.disabled = false;
-
-            }
+        const response = await fetch('/test-summary', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          testResult.style.color = '#fff';
+
+          let sourceText = 'Sample chat';
+
+          if (data.source === 'stored') {
+            sourceText = 'Stored chat (' + data.messageCount + ' messages)';
           }
-        );
 
-        // Prevent Gemini output from injecting HTML
-        function escapeHtml(value) {
-          return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+          if (data.source === 'pasted') {
+            sourceText =
+              'Pasted chat (' +
+              data.messageCount +
+              ' messages used';
+
+            if (data.truncated) {
+              sourceText += ', limited to most recent 100';
+            }
+
+            sourceText += ')';
+          }
+
+          testResult.innerHTML =
+            '<strong style="color:#00f59b;">' +
+            escapeHtml(sourceText) +
+            '</strong><br><br>' +
+            escapeHtml(data.output) +
+            '<span class="char-count">' +
+            data.characterCount +
+            ' / 500 characters' +
+            '</span>';
+        } else {
+          testResult.style.color = '#ff4f4f';
+          testResult.textContent = 'Error: ' + getErrorMessage(data.error);
         }
-      </script>
-    </body>
-    </html>
+      } catch (err) {
+        testResult.style.color = '#ff4f4f';
+        testResult.textContent = 'Failed to reach server.';
+      } finally {
+        setTestButtonsDisabled(false);
+      }
+    }
+
+    function setTestButtonsDisabled(disabled) {
+      testSampleBtn.disabled = disabled;
+      testStoredBtn.disabled = disabled;
+      testPastedBtn.disabled = disabled;
+    }
+
+    function getErrorMessage(error) {
+      if (!error) return 'Unknown error';
+      if (typeof error === 'string') return error;
+
+      return error.message || JSON.stringify(error);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    testSampleBtn.addEventListener('click', () => runSummaryTest('sample'));
+    testStoredBtn.addEventListener('click', () => runSummaryTest('stored'));
+    testPastedBtn.addEventListener('click', () => runSummaryTest('pasted'));
+  </script>
+</body>
+</html>
   `);
 });
 
 // ==========================================
-// PASSWORD CHECK HELPER
+// PASSWORD HELPER
 // ==========================================
 
 function isValidDashboardPassword(password) {
@@ -622,7 +739,7 @@ function isValidDashboardPassword(password) {
 }
 
 // ==========================================
-// 3. SEND CHAT ENDPOINT
+// SEND CHAT ENDPOINT
 // ==========================================
 
 app.post('/send-chat', async (req, res) => {
@@ -631,8 +748,7 @@ app.post('/send-chat', async (req, res) => {
   if (!DASHBOARD_PASSWORD) {
     return res.status(500).json({
       success: false,
-      error:
-        'DASHBOARD_PASSWORD is not configured on the server.'
+      error: 'DASHBOARD_PASSWORD is not configured on the server.'
     });
   }
 
@@ -643,10 +759,7 @@ app.post('/send-chat', async (req, res) => {
     });
   }
 
-  if (
-    typeof message !== 'string' ||
-    !message.trim()
-  ) {
+  if (typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({
       success: false,
       error: 'Message cannot be empty.'
@@ -661,45 +774,32 @@ app.post('/send-chat', async (req, res) => {
   }
 
   try {
+    await client.say(channelName, message.trim());
 
-    await client.say(
-      channelName,
-      message.trim()
-    );
-
-    res.json({
+    return res.json({
       success: true
     });
-
   } catch (err) {
+    console.error('Failed to send message:', err);
 
-    console.error(
-      'Failed to send message:',
-      err
-    );
-
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to send to Twitch.'
     });
-
   }
 });
 
 // ==========================================
-// 4. GEMINI TEST ENDPOINT
+// SUMMARY TEST ENDPOINT
 // ==========================================
 
-app.post('/test-gemini', async (req, res) => {
-  const { password } = req.body;
+app.post('/test-summary', async (req, res) => {
+  const { password, type, pastedChat } = req.body;
 
   if (!DASHBOARD_PASSWORD) {
     return res.status(500).json({
       success: false,
-      error: {
-        message:
-          'DASHBOARD_PASSWORD is not configured on the server.'
-      }
+      error: 'DASHBOARD_PASSWORD is not configured on the server.'
     });
   }
 
@@ -710,32 +810,89 @@ app.post('/test-gemini', async (req, res) => {
     });
   }
 
-  const dummyChatLogs = [
-    'Viewer1: Hey everyone! Great stream today!',
-    'Viewer2: What game are we playing next?',
-    'Viewer3: The gameplay earlier was insane lmao',
-    'Viewer4: vibing in chat, hype stream!',
-    'Viewer5: GGs in chat!'
+  const sampleChatLogs = [
+    'PikaFan92: I still think Jolteon is better here because the speed matters more than bulk.',
+    'Motmo_: nah Vaporeon survives basically everything though lol',
+    'Sqwert: I was thinking Jolteon too but I already used one last run.',
+    'RetroGamer: Did you ever finish that Emerald Nuzlocke you talked about?',
+    'PikaFan92: wait that crit actually saved the entire fight',
+    'BreadWizard: FBI OPEN UP',
+    'Motmo_: not the FBI again, hide the basement',
+    'RetroGamer: the basement lore has returned',
+    'JessPlays: Are you evolving Eevee now or waiting for another move?',
+    'Sqwert: probably waiting, I want to check the moveset first',
+    'PikaFan92: smart, evolving now might lock you out of Bite',
+    'BreadWizard: President Snorlax would fix the economy by sleeping through every meeting',
+    'Motmo_: Gengar for president, no contest',
+    'JessPlays: Gengar would absolutely commit tax fraud though',
+    'RetroGamer: that is apparently a campaign promise now'
   ];
 
+  let logs;
+  let source;
+  let truncated = false;
+
+  if (type === 'stored') {
+    if (recentChatLogs.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No stored chat messages are available yet.'
+      });
+    }
+
+    logs = [...recentChatLogs];
+    source = 'stored';
+  } else if (type === 'pasted') {
+    if (typeof pastedChat !== 'string' || !pastedChat.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'No pasted chat logs were provided.'
+      });
+    }
+
+    const allParsedLogs = parsePastedChat(pastedChat);
+
+    if (allParsedLogs.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'No recognizable Twitch chat messages were found. Expected lines such as "<username>: message" or "username: message".'
+      });
+    }
+
+    /*
+     * parsePastedChat already caps the result at 100.
+     * Check raw recognizable count separately so WebUI can report truncation.
+     */
+    const rawLineCount = pastedChat
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean).length;
+
+    logs = allParsedLogs;
+    source = 'pasted';
+    truncated = rawLineCount > 100 && logs.length === 100;
+  } else {
+    logs = sampleChatLogs;
+    source = 'sample';
+  }
+
   try {
+    const summary = await generateRecap(logs);
+    const fullOutput = SUMMARY_PREFIX + summary;
 
-    const summary =
-      await generateRecap(dummyChatLogs);
-
-    res.json({
+    return res.json({
       success: true,
-      output: summary
+      source,
+      messageCount: logs.length,
+      truncated,
+      output: fullOutput,
+      characterCount: fullOutput.length
     });
-
   } catch (err) {
+    console.error('Summary test error:', err);
 
-    console.error(
-      'Test Gemini API Error:',
-      err
-    );
-
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: {
         message: err.message,
@@ -743,259 +900,147 @@ app.post('/test-gemini', async (req, res) => {
         details: err.toString()
       }
     });
-
   }
 });
 
 // ==========================================
-// 5. TWITCH CHAT MESSAGE LISTENER
+// TWITCH MESSAGE LISTENER
 // ==========================================
 
-client.on(
-  'message',
-  async (channel, tags, message, self) => {
+client.on('message', async (channel, tags, message, self) => {
+  if (self) {
+    return;
+  }
 
-    // Ignore messages sent by this bot
-    if (self) {
-      return;
-    }
+  const rawMessage = (message || '').trim();
+  const lowerMsg = rawMessage.toLowerCase();
+  const username = (tags.username || '').toLowerCase().trim();
+  const displayName = tags['display-name'] || tags.username || 'viewer';
+  const now = Date.now();
 
-    const rawMessage =
-      (message || '').trim();
+  if (isIgnoredUsername(username)) {
+    return;
+  }
 
-    const lowerMsg =
-      rawMessage.toLowerCase();
+  // ==========================================
+  // COMMAND: !recap
+  // ==========================================
 
-    const username =
-      (tags.username || '')
-        .toLowerCase()
-        .trim();
+  if (lowerMsg.startsWith('!recap')) {
+    const timeElapsed = now - lastRecapUse;
 
-    const displayName =
-      tags['display-name'] ||
-      tags.username ||
-      'viewer';
+    if (timeElapsed < RECAP_COOLDOWN) {
+      const remainingMs = RECAP_COOLDOWN - timeElapsed;
+      const minutesLeft = Math.floor(remainingMs / 60000);
+      const secondsLeft = Math.floor((remainingMs % 60000) / 1000);
 
-    const now =
-      Date.now();
-
-    // ========================================
-    // IGNORE BOT ACCOUNTS
-    // ========================================
-
-    const ignoredBots = [
-      'nightbot',
-      'streamelements',
-      botUsername
-    ].filter(Boolean);
-
-    if (ignoredBots.includes(username)) {
-      return;
-    }
-
-    // ========================================
-    // COMMAND: !recap
-    // 15-MINUTE GLOBAL COOLDOWN
-    // ========================================
-
-    if (lowerMsg.startsWith('!recap')) {
-
-      const timeElapsed =
-        now - lastRecapUse;
-
-      if (timeElapsed < RECAP_COOLDOWN) {
-
-        const remainingMs =
-          RECAP_COOLDOWN - timeElapsed;
-
-        const minutesLeft =
-          Math.floor(
-            remainingMs / 60000
-          );
-
-        const secondsLeft =
-          Math.floor(
-            (remainingMs % 60000) / 1000
-          );
-
-        const timeString =
-          minutesLeft > 0
-            ? `${minutesLeft}m ${secondsLeft}s`
-            : `${secondsLeft}s`;
-
-        try {
-          await client.say(
-            channel,
-            `@${displayName}, !recap is on cooldown! Try again in ${timeString}.`
-          );
-        } catch (err) {
-          console.error(
-            'Failed to send cooldown message:',
-            err
-          );
-        }
-
-        return;
-      }
-
-      // Require at least 5 organic messages
-      if (recentChatLogs.length < 5) {
-
-        try {
-          await client.say(
-            channel,
-            `@${displayName}, not enough chat history yet to summarize!`
-          );
-        } catch (err) {
-          console.error(
-            'Failed to send chat history message:',
-            err
-          );
-        }
-
-        return;
-      }
-
-      // Apply cooldown immediately so multiple users
-      // cannot trigger Gemini simultaneously.
-      lastRecapUse = now;
+      const timeString = minutesLeft > 0
+        ? `${minutesLeft}m ${secondsLeft}s`
+        : `${secondsLeft}s`;
 
       try {
-
-        const summary =
-          await generateRecap(
-            recentChatLogs
-          );
-
-        console.log(
-          `[!recap Output for @${displayName}]:`,
-          summary
-        );
-
         await client.say(
           channel,
-          `[Chat Recap]: ${summary}`
+          `@${displayName}, !recap is on cooldown! Try again in ${timeString}.`
         );
-
       } catch (err) {
-
-        console.error(
-          'Gemini !recap Error:',
-          err
-        );
-
-        // Reset cooldown when Gemini itself fails,
-        // allowing another attempt instead of forcing
-        // users to wait 15 minutes for an API failure.
-        lastRecapUse = 0;
-
-        try {
-          await client.say(
-            channel,
-            `@${displayName}, failed to generate chat recap.`
-          );
-        } catch (sendErr) {
-          console.error(
-            'Failed to send Gemini error to Twitch:',
-            sendErr
-          );
-        }
-
+        console.error('Failed to send cooldown message:', err);
       }
 
       return;
     }
 
-    // ========================================
-    // LOG ORGANIC CHAT MESSAGES
-    // ========================================
-
-    if (
-      rawMessage &&
-      !rawMessage.startsWith('!')
-    ) {
-
-      recentChatLogs.push(
-        `${displayName}: ${rawMessage}`
-      );
-
-      // Keep only the newest 50 messages
-      while (
-        recentChatLogs.length >
-        MAX_LOG_SIZE
-      ) {
-        recentChatLogs.shift();
-      }
-    }
-
-    // ========================================
-    // PASSIVE TRIGGERS
-    // ========================================
-
-    if (
-      username === 'motmo_' &&
-      lowerMsg.includes('hog reveal')
-    ) {
-
+    if (recentChatLogs.length < 5) {
       try {
-
         await client.say(
           channel,
-          'Did Motmo_ say.. HOG REVEAL?'
+          `@${displayName}, not enough chat history yet to summarize!`
         );
-
       } catch (err) {
+        console.error('Failed to send history warning:', err);
+      }
 
-        console.error(
-          'Passive trigger send error:',
-          err
+      return;
+    }
+
+    lastRecapUse = now;
+
+    try {
+      const summary = await generateRecap(recentChatLogs);
+      const twitchMessage = SUMMARY_PREFIX + summary;
+
+      console.log(`[!recap Output for @${displayName}]:`, twitchMessage);
+      console.log(`[!recap Length]: ${twitchMessage.length}/500`);
+
+      await client.say(channel, twitchMessage);
+    } catch (err) {
+      console.error('Gemini !recap Error:', err);
+
+      // Allow retry if Gemini itself failed.
+      lastRecapUse = 0;
+
+      try {
+        await client.say(
+          channel,
+          `@${displayName}, failed to generate chat recap.`
         );
-
+      } catch (sendErr) {
+        console.error('Failed to send Gemini error to Twitch:', sendErr);
       }
     }
+
+    return;
   }
-);
+
+  // ==========================================
+  // LOG ORGANIC CHAT MESSAGES
+  // ==========================================
+
+  if (rawMessage && !rawMessage.startsWith('!')) {
+    recentChatLogs.push(`${displayName}: ${rawMessage}`);
+
+    while (recentChatLogs.length > MAX_LOG_SIZE) {
+      recentChatLogs.shift();
+    }
+  }
+
+  // ==========================================
+  // PASSIVE TRIGGERS
+  // ==========================================
+
+  if (username === 'motmo_' && lowerMsg.includes('hog reveal')) {
+    try {
+      await client.say(channel, 'Did Motmo_ say.. HOG REVEAL?');
+    } catch (err) {
+      console.error('Passive trigger error:', err);
+    }
+  }
+});
 
 // ==========================================
-// GLOBAL ERROR HANDLING
+// PROCESS ERROR LOGGING
 // ==========================================
 
-process.on(
-  'unhandledRejection',
-  (reason) => {
-    console.error(
-      'Unhandled Promise Rejection:',
-      reason
-    );
-  }
-);
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Promise Rejection:', reason);
+});
 
-process.on(
-  'uncaughtException',
-  (err) => {
-    console.error(
-      'Uncaught Exception:',
-      err
-    );
-  }
-);
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
 
 // ==========================================
-// START WEB SERVER
+// START SERVER
 // ==========================================
 
 app.listen(PORT, () => {
+  console.log(`Web server running on port ${PORT}`);
+  console.log('Gemini model: gemini-3.5-flash-lite');
   console.log(
-    `Web server running on port ${PORT}`
-  );
-
-  console.log(
-    `Gemini model: gemini-3.5-flash-lite`
+    `AI summary limit: ${SUMMARY_TEXT_LIMIT} + ${SUMMARY_PREFIX.length} prefix chars = 500`
   );
 
   if (channelName) {
-    console.log(
-      `Twitch channel: #${channelName}`
-    );
+    console.log(`Twitch channel: #${channelName}`);
   }
 });
