@@ -165,7 +165,7 @@ client.on('message', async (channel, tags, message, self) => {
     if (now - lastRecapUse < RECAP_COOLDOWN) return;
 
     if (recentChatLogs.length < 5) {
-      client.say(channel, `@${displayName}, not enough chat history yet to summarize!`);
+      // client.say(channel, `@${displayName}, not enough chat history yet to summarize!`);
       return;
     }
 
