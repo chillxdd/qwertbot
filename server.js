@@ -1380,27 +1380,6 @@ client.on('message', async (channel, tags, message, self) => {
 
     cleanupOldChatLogs();
   }
-
-  // ==========================================
-  // PASSIVE TRIGGERS
-  // ==========================================
-
-  if (
-    username === 'motmo_' &&
-    lowerMsg.includes('hog reveal')
-  ) {
-    try {
-      await client.say(
-        channel,
-        'Did Motmo_ say.. HOG REVEAL?'
-      );
-    } catch (err) {
-      console.error(
-        'Passive trigger error:',
-        err
-      );
-    }
-  }
 });
 
 // ==========================================
