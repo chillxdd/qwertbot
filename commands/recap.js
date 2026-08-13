@@ -7,6 +7,8 @@ const FIRST_RECAP_MESSAGE_TRIGGER = 150;
 const RECURRING_RECAP_DELAY = 45 * 60 * 1000;
 const RECAP_FAILURE_RETRY_DELAY = 5 * 60 * 1000;
 
+const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
+
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
 
@@ -41,10 +43,7 @@ function sanitizeChatForGemini(chatLogs) {
       });
     }
 
-    if (messageChanged) {
-      affectedMessages++;
-    }
-
+    if (messageChanged) affectedMessages++;
     return sanitized;
   });
 
@@ -219,9 +218,7 @@ ${chatContext}`;
   try {
     data = await response.json();
   } catch (err) {
-    throw new Error(
-      `Gemini returned invalid JSON. HTTP ${response.status}`
-    );
+    throw new Error(`Gemini returned invalid JSON. HTTP ${response.status}`);
   }
 
   if (!response.ok) {
@@ -235,7 +232,6 @@ ${chatContext}`;
     const error = new Error(errorMessage);
     error.status = response.status;
     error.geminiData = data;
-
     throw error;
   }
 
@@ -251,12 +247,7 @@ function extractGeminiText(data) {
 
   if (Array.isArray(data.steps)) {
     for (const step of data.steps) {
-      if (
-        step?.type !== 'model_output' ||
-        !Array.isArray(step.content)
-      ) {
-        continue;
-      }
+      if (step?.type !== 'model_output' || !Array.isArray(step.content)) continue;
 
       for (const item of step.content) {
         if (
@@ -316,14 +307,9 @@ function cleanRecapWording(summary) {
 // ==========================================
 
 function enforceSummaryLimit(summary) {
-  if (summary.length <= SUMMARY_TEXT_LIMIT) {
-    return summary;
-  }
+  if (summary.length <= SUMMARY_TEXT_LIMIT) return summary;
 
-  const withinLimit = summary.substring(
-    0,
-    SUMMARY_TEXT_LIMIT
-  );
+  const withinLimit = summary.substring(0, SUMMARY_TEXT_LIMIT);
 
   const lastSentenceEnd = Math.max(
     withinLimit.lastIndexOf('.'),
@@ -332,17 +318,13 @@ function enforceSummaryLimit(summary) {
   );
 
   if (lastSentenceEnd >= 0) {
-    return withinLimit
-      .substring(0, lastSentenceEnd + 1)
-      .trim();
+    return withinLimit.substring(0, lastSentenceEnd + 1).trim();
   }
 
   const lastSpace = withinLimit.lastIndexOf(' ');
 
   if (lastSpace > 0) {
-    return withinLimit
-      .substring(0, lastSpace)
-      .trim();
+    return withinLimit.substring(0, lastSpace).trim();
   }
 
   return withinLimit.trim();
@@ -354,13 +336,10 @@ function enforceSummaryLimit(summary) {
 
 async function generateRecap(chatLogs) {
   if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
-    throw new Error(
-      'No chat logs were provided to Gemini.'
-    );
+    throw new Error('No chat logs were provided to Gemini.');
   }
 
-  const sanitization =
-    sanitizeChatForGemini(chatLogs);
+  const sanitization = sanitizeChatForGemini(chatLogs);
 
   if (sanitization.sanitized) {
     console.log(
@@ -372,9 +351,7 @@ async function generateRecap(chatLogs) {
   let data;
 
   try {
-    data = await callGemini(
-      sanitization.logs
-    );
+    data = await callGemini(sanitization.logs);
   } catch (err) {
     const message = err.message || '';
 
@@ -389,23 +366,17 @@ async function generateRecap(chatLogs) {
       );
 
       blockedError.inputBlocked = true;
-      blockedError.sanitization =
-        sanitization;
-
+      blockedError.sanitization = sanitization;
       throw blockedError;
     }
 
     throw err;
   }
 
-  let summary =
-    extractGeminiText(data);
+  let summary = extractGeminiText(data);
 
   if (!summary) {
-    console.error(
-      '[Gemini Unexpected Response]',
-      JSON.stringify(data, null, 2)
-    );
+    console.error('[Gemini Unexpected Response]', JSON.stringify(data, null, 2));
 
     throw new Error(
       'Gemini returned a successful response but no readable text output was found.'
@@ -416,12 +387,10 @@ async function generateRecap(chatLogs) {
     .replace(/^AI Summary:\s*/i, '')
     .replace(/^Chat Recap:\s*/i, '');
 
-  summary =
-    cleanRecapWording(summary);
+  summary = cleanRecapWording(summary);
 
   if (/\.{3}\s*$/.test(summary)) {
-    const withoutEllipsis =
-      summary.replace(/\s*\.{3}\s*$/, '');
+    const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
 
     const lastSentenceEnd = Math.max(
       withoutEllipsis.lastIndexOf('.'),
@@ -436,17 +405,10 @@ async function generateRecap(chatLogs) {
     }
   }
 
-  summary =
-    enforceSummaryLimit(summary);
+  summary = enforceSummaryLimit(summary);
 
-  console.log(
-    '[Gemini Recap]',
-    summary
-  );
-
-  console.log(
-    `[Gemini Recap Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`
-  );
+  console.log('[Gemini Recap]', summary);
+  console.log(`[Gemini Recap Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
 
   return {
     summary,
@@ -458,14 +420,8 @@ async function generateRecap(chatLogs) {
 // PARSE PASTED RENDER LOGS
 // ==========================================
 
-function parsePastedChat(
-  rawText,
-  ignoredUsernames = []
-) {
-  if (
-    typeof rawText !== 'string' ||
-    !rawText.trim()
-  ) {
+function parsePastedChat(rawText, ignoredUsernames = []) {
+  if (typeof rawText !== 'string' || !rawText.trim()) {
     return {
       logs: [],
       totalValidMessages: 0,
@@ -475,9 +431,7 @@ function parsePastedChat(
 
   const ignored = ignoredUsernames
     .filter(Boolean)
-    .map((name) =>
-      name.toLowerCase().trim()
-    );
+    .map((name) => name.toLowerCase().trim());
 
   const lines = rawText
     .split(/\r?\n/)
@@ -488,19 +442,14 @@ function parsePastedChat(
 
   for (const originalLine of lines) {
     const line = originalLine
-      .replace(
-        /\x1B\[[0-9;]*[A-Za-z]/g,
-        ''
-      )
+      .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
       .trim();
 
     let username = '';
     let message = '';
     let match;
 
-    match = line.match(
-      /<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/
-    );
+    match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
 
     if (match) {
       username = match[1];
@@ -508,9 +457,7 @@ function parsePastedChat(
     }
 
     if (!username) {
-      match = line.match(
-        /^([A-Za-z0-9_]{1,25}):\s*(.+)$/
-      );
+      match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
       if (match) {
         username = match[1];
@@ -519,9 +466,7 @@ function parsePastedChat(
     }
 
     if (!username) {
-      match = line.match(
-        /\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/
-      );
+      match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
 
       if (match) {
         username = match[1];
@@ -529,40 +474,23 @@ function parsePastedChat(
       }
     }
 
-    if (!username || !message) {
-      continue;
-    }
+    if (!username || !message) continue;
 
-    if (
-      ignored.includes(
-        username.toLowerCase()
-      )
-    ) {
-      continue;
-    }
+    if (ignored.includes(username.toLowerCase())) continue;
 
     message = message.trim();
 
-    if (!message) {
-      continue;
-    }
+    if (!message) continue;
 
-    parsedMessages.push(
-      `${username}: ${message}`
-    );
+    parsedMessages.push(`${username}: ${message}`);
   }
 
-  const totalValidMessages =
-    parsedMessages.length;
+  const totalValidMessages = parsedMessages.length;
 
   return {
-    logs: parsedMessages.slice(
-      -MAX_PASTED_MESSAGES
-    ),
+    logs: parsedMessages.slice(-MAX_PASTED_MESSAGES),
     totalValidMessages,
-    truncated:
-      totalValidMessages >
-      MAX_PASTED_MESSAGES
+    truncated: totalValidMessages > MAX_PASTED_MESSAGES
   };
 }
 
@@ -571,17 +499,9 @@ function parsePastedChat(
 // ==========================================
 
 function formatCountdown(milliseconds) {
-  const totalSeconds = Math.max(
-    0,
-    Math.ceil(milliseconds / 1000)
-  );
-
-  const minutes = Math.floor(
-    totalSeconds / 60
-  );
-
-  const seconds =
-    totalSeconds % 60;
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
 
   if (minutes > 0) {
     return `${minutes}min ${seconds}s`;
@@ -600,16 +520,14 @@ function createRecapManager({
   botUsername,
   twitchAccessToken
 }) {
-  const accessToken =
-    (twitchAccessToken || '')
-      .replace(/^oauth:/i, '')
-      .trim();
+  const accessToken = (twitchAccessToken || '')
+    .replace(/^oauth:/i, '')
+    .trim();
 
   let twitchClientId = '';
 
   let streamStateInitialized = false;
   let streamLive = false;
-
   let recapMessages = [];
   let messageSequence = 0;
 
@@ -623,23 +541,22 @@ function createRecapManager({
   let streamPollTimer = null;
   let tokenValidationTimer = null;
 
+  let lastRecapCommandUse = 0;
+
   // ========================================
   // TWITCH TOKEN VALIDATION
   // ========================================
 
   async function validateTwitchToken() {
     if (!accessToken) {
-      throw new Error(
-        'TWITCH_BOT_ACCESS_TOKEN is missing.'
-      );
+      throw new Error('TWITCH_BOT_ACCESS_TOKEN is missing.');
     }
 
     const response = await fetch(
       'https://id.twitch.tv/oauth2/validate',
       {
         headers: {
-          Authorization:
-            `Bearer ${accessToken}`
+          Authorization: `Bearer ${accessToken}`
         }
       }
     );
@@ -650,8 +567,7 @@ function createRecapManager({
       );
     }
 
-    const data =
-      await response.json();
+    const data = await response.json();
 
     if (!data.client_id) {
       throw new Error(
@@ -659,12 +575,9 @@ function createRecapManager({
       );
     }
 
-    twitchClientId =
-      data.client_id;
+    twitchClientId = data.client_id;
 
-    console.log(
-      '[Recap] Twitch OAuth token validated.'
-    );
+    console.log('[Recap] Twitch OAuth token validated.');
 
     return data;
   }
@@ -673,9 +586,7 @@ function createRecapManager({
   // TWITCH STREAM STATUS
   // ========================================
 
-  async function fetchStreamStatus(
-    allowRetry = true
-  ) {
+  async function fetchStreamStatus(allowRetry = true) {
     if (!twitchClientId) {
       await validateTwitchToken();
     }
@@ -686,28 +597,19 @@ function createRecapManager({
         user_login: channelName
       }).toString();
 
-    const response = await fetch(
-      url,
-      {
-        headers: {
-          Authorization:
-            `Bearer ${accessToken}`,
-          'Client-Id':
-            twitchClientId
-        }
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Client-Id': twitchClientId
       }
-    );
+    });
 
-    if (
-      response.status === 401 &&
-      allowRetry
-    ) {
+    if (response.status === 401 && allowRetry) {
       console.warn(
         '[Recap] Twitch API returned 401. Revalidating token.'
       );
 
       await validateTwitchToken();
-
       return fetchStreamStatus(false);
     }
 
@@ -717,19 +619,16 @@ function createRecapManager({
       );
     }
 
-    const data =
-      await response.json();
+    const data = await response.json();
 
     const stream =
-      Array.isArray(data.data) &&
-      data.data.length > 0
+      Array.isArray(data.data) && data.data.length > 0
         ? data.data[0]
         : null;
 
     return {
       live: Boolean(stream),
-      startedAt:
-        stream?.started_at || null
+      startedAt: stream?.started_at || null
     };
   }
 
@@ -749,26 +648,20 @@ function createRecapManager({
 
     nextRecapAt = timestamp;
 
-    const delay = Math.max(
-      0,
-      timestamp - Date.now()
-    );
+    const delay = Math.max(0, timestamp - Date.now());
 
-    recapTimer = setTimeout(
-      () => {
-        sendAutomaticRecap(
-          firstRecapSent
-            ? '45-minute timer'
-            : '1-hour timer'
-        ).catch((err) => {
-          console.error(
-            '[Recap] Scheduled recap error:',
-            err
-          );
-        });
-      },
-      delay
-    );
+    recapTimer = setTimeout(() => {
+      sendAutomaticRecap(
+        firstRecapSent
+          ? '45-minute timer'
+          : '1-hour timer'
+      ).catch((err) => {
+        console.error(
+          '[Recap] Scheduled recap error:',
+          err
+        );
+      });
+    }, delay);
   }
 
   // ========================================
@@ -782,46 +675,27 @@ function createRecapManager({
     clearRecapTimer();
 
     streamLive = true;
-
     recapMessages = [];
     messageSequence = 0;
 
     firstRecapSent = false;
     recapInProgress = false;
 
-    /*
-     * If the bot was already running and saw
-     * the offline -> online transition, Twitch's
-     * started_at timestamp is safe to use.
-     *
-     * If Render/bot starts while Qwert is
-     * already live, we cannot recover chat from
-     * before the bot started, so the recap clock
-     * starts from detection time instead.
-     */
-    if (
-      detectedStartedAt &&
-      !alreadyLiveAtStartup
-    ) {
-      const parsed =
-        Date.parse(detectedStartedAt);
+    if (detectedStartedAt && !alreadyLiveAtStartup) {
+      const parsed = Date.parse(detectedStartedAt);
 
-      streamSessionStartedAt =
-        Number.isNaN(parsed)
-          ? Date.now()
-          : parsed;
+      streamSessionStartedAt = Number.isNaN(parsed)
+        ? Date.now()
+        : parsed;
     } else {
-      streamSessionStartedAt =
-        Date.now();
+      streamSessionStartedAt = Date.now();
     }
 
     nextRecapAt =
       streamSessionStartedAt +
       FIRST_RECAP_DELAY;
 
-    scheduleRecapAt(
-      nextRecapAt
-    );
+    scheduleRecapAt(nextRecapAt);
 
     console.log(
       '[Recap] Qwert is LIVE. Automatic recap session started.'
@@ -840,7 +714,6 @@ function createRecapManager({
     clearRecapTimer();
 
     streamLive = false;
-
     recapMessages = [];
     messageSequence = 0;
 
@@ -861,8 +734,7 @@ function createRecapManager({
 
   async function checkStreamStatus() {
     try {
-      const status =
-        await fetchStreamStatus();
+      const status = await fetchStreamStatus();
 
       if (!streamStateInitialized) {
         streamStateInitialized = true;
@@ -883,10 +755,7 @@ function createRecapManager({
         return;
       }
 
-      if (
-        status.live &&
-        !streamLive
-      ) {
+      if (status.live && !streamLive) {
         startStreamSession(
           status.startedAt,
           false
@@ -895,10 +764,7 @@ function createRecapManager({
         return;
       }
 
-      if (
-        !status.live &&
-        streamLive
-      ) {
+      if (!status.live && streamLive) {
         endStreamSession();
       }
     } catch (err) {
@@ -917,41 +783,24 @@ function createRecapManager({
     displayName,
     rawMessage
   }) {
-    if (!streamLive) {
-      return;
-    }
+    if (!streamLive) return;
 
-    const text =
-      (rawMessage || '').trim();
+    const text = (rawMessage || '').trim();
 
-    if (
-      !text ||
-      text.startsWith('!')
-    ) {
-      return;
-    }
+    if (!text || text.startsWith('!')) return;
 
     messageSequence++;
 
     recapMessages.push({
       id: messageSequence,
       timestamp: Date.now(),
-      text:
-        `${displayName}: ${text}`
+      text: `${displayName}: ${text}`
     });
 
-    /*
-     * Only the FIRST recap may be triggered
-     * early by hitting 150 messages.
-     *
-     * After the first recap, recaps stay on
-     * the fixed 45-minute schedule.
-     */
     if (
       !firstRecapSent &&
       !recapInProgress &&
-      recapMessages.length >=
-        FIRST_RECAP_MESSAGE_TRIGGER
+      recapMessages.length >= FIRST_RECAP_MESSAGE_TRIGGER
     ) {
       sendAutomaticRecap(
         '150-message trigger'
@@ -968,33 +817,22 @@ function createRecapManager({
   // AUTOMATIC RECAP
   // ========================================
 
-  async function sendAutomaticRecap(
-    reason
-  ) {
-    if (
-      !streamLive ||
-      recapInProgress
-    ) {
-      return;
-    }
+  async function sendAutomaticRecap(reason) {
+    if (!streamLive || recapInProgress) return;
 
     recapInProgress = true;
     clearRecapTimer();
 
-    const snapshot =
-      [...recapMessages];
+    const snapshot = [...recapMessages];
 
     const snapshotMaxId =
       snapshot.length > 0
-        ? snapshot[
-            snapshot.length - 1
-          ].id
+        ? snapshot[snapshot.length - 1].id
         : null;
 
-    const chatLogs =
-      snapshot.map(
-        (item) => item.text
-      );
+    const chatLogs = snapshot.map(
+      (item) => item.text
+    );
 
     console.log(
       `[Recap] Automatic recap triggered by ${reason}.`
@@ -1007,27 +845,19 @@ function createRecapManager({
     try {
       let twitchMessage;
 
-      if (
-        chatLogs.length === 0
-      ) {
+      if (chatLogs.length === 0) {
         twitchMessage =
           SUMMARY_PREFIX +
           'Chat was quiet this stretch—nothing notable to recap.';
       } else {
         const result =
-          await generateRecap(
-            chatLogs
-          );
+          await generateRecap(chatLogs);
 
         twitchMessage =
           SUMMARY_PREFIX +
           result.summary;
       }
 
-      /*
-       * Qwert may have gone offline while
-       * Gemini was generating the recap.
-       */
       if (!streamLive) {
         console.log(
           '[Recap] Stream ended during recap generation. Recap was not sent.'
@@ -1051,40 +881,22 @@ function createRecapManager({
         `[Recap] Length: ${twitchMessage.length}/500`
       );
 
-      /*
-       * Permanently discard ONLY messages
-       * that existed when this recap began.
-       *
-       * Any chat that arrived while Gemini
-       * was generating stays for the next
-       * recap window.
-       */
-      if (
-        snapshotMaxId !== null
-      ) {
+      if (snapshotMaxId !== null) {
         recapMessages =
           recapMessages.filter(
             (item) =>
-              item.id >
-              snapshotMaxId
+              item.id > snapshotMaxId
           );
       }
 
       firstRecapSent = true;
       recapInProgress = false;
 
-      /*
-       * Every recap after the first one is
-       * exactly 45 minutes after the previous
-       * successful recap.
-       */
       nextRecapAt =
         Date.now() +
         RECURRING_RECAP_DELAY;
 
-      scheduleRecapAt(
-        nextRecapAt
-      );
+      scheduleRecapAt(nextRecapAt);
 
       console.log(
         '[Recap] Previous recap messages marked as used.'
@@ -1101,19 +913,11 @@ function createRecapManager({
 
       recapInProgress = false;
 
-      /*
-       * Keep the existing messages if Gemini
-       * or Twitch fails. Retry automatically
-       * five minutes later instead of losing
-       * the recap window.
-       */
       nextRecapAt =
         Date.now() +
         RECAP_FAILURE_RETRY_DELAY;
 
-      scheduleRecapAt(
-        nextRecapAt
-      );
+      scheduleRecapAt(nextRecapAt);
 
       console.log(
         '[Recap] Retrying automatic recap in 5 minutes.'
@@ -1129,6 +933,28 @@ function createRecapManager({
     channel,
     displayName
   }) {
+    const now = Date.now();
+    const elapsed =
+      now - lastRecapCommandUse;
+
+    if (
+      lastRecapCommandUse > 0 &&
+      elapsed < RECAP_COMMAND_COOLDOWN
+    ) {
+      const remaining =
+        RECAP_COMMAND_COOLDOWN -
+        elapsed;
+
+      await client.say(
+        channel,
+        `@${displayName}, !recap is on cooldown! Try again in ${formatCountdown(remaining)}.`
+      );
+
+      return;
+    }
+
+    lastRecapCommandUse = now;
+
     try {
       if (!streamLive) {
         await client.say(
@@ -1185,12 +1011,31 @@ function createRecapManager({
   }
 
   // ========================================
-  // CURRENT WINDOW FOR WEB TEST
+  // DASHBOARD STATUS
   // ========================================
 
+  function getStatus() {
+    return {
+      streamStateInitialized,
+      streamLive,
+      loggingMessages:
+        streamStateInitialized &&
+        streamLive,
+      recapInProgress,
+      firstRecapSent,
+      messagesInWindow:
+        recapMessages.length,
+      nextRecapAt:
+        nextRecapAt || null,
+      streamSessionStartedAt:
+        streamSessionStartedAt || null
+    };
+  }
+
   function getCurrentWindowLogs() {
-    return recapMessages
-      .map((item) => item.text);
+    return recapMessages.map(
+      (item) => item.text
+    );
   }
 
   // ========================================
@@ -1198,10 +1043,7 @@ function createRecapManager({
   // ========================================
 
   async function start() {
-    if (
-      !channelName ||
-      !accessToken
-    ) {
+    if (!channelName || !accessToken) {
       console.error(
         '[Recap] Cannot start automatic recaps: Twitch configuration is incomplete.'
       );
@@ -1229,18 +1071,15 @@ function createRecapManager({
       );
 
     tokenValidationTimer =
-      setInterval(
-        () => {
-          validateTwitchToken()
-            .catch((err) => {
-              console.error(
-                '[Recap] Hourly Twitch token validation failed:',
-                err
-              );
-            });
-        },
-        TOKEN_VALIDATION_INTERVAL
-      );
+      setInterval(() => {
+        validateTwitchToken()
+          .catch((err) => {
+            console.error(
+              '[Recap] Hourly Twitch token validation failed:',
+              err
+            );
+          });
+      }, TOKEN_VALIDATION_INTERVAL);
 
     console.log(
       '[Recap] Automatic stream detection enabled.'
@@ -1255,7 +1094,8 @@ function createRecapManager({
     start,
     recordChatMessage,
     handleRecapCommand,
-    getCurrentWindowLogs
+    getCurrentWindowLogs,
+    getStatus
   };
 }
 
