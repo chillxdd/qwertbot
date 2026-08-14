@@ -3,8 +3,7 @@ const TWITCH_MESSAGE_LIMIT = 500;
 const SUMMARY_TEXT_LIMIT = TWITCH_MESSAGE_LIMIT - SUMMARY_PREFIX.length;
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
-const FIRST_RECAP_MESSAGE_TRIGGER = 150;
-const RECURRING_RECAP_DELAY = 45 * 60 * 1000;
+const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
 const RECAP_FAILURE_RETRY_DELAY = 5 * 60 * 1000;
 
 const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
@@ -363,31 +362,19 @@ function extractGeminiText(data) {
     }
   }
 
-  if (
-    !summary &&
-    typeof data.output_text === 'string'
-  ) {
+  if (!summary && typeof data.output_text === 'string') {
     summary = data.output_text;
   }
 
-  if (
-    !summary &&
-    typeof data.outputText === 'string'
-  ) {
+  if (!summary && typeof data.outputText === 'string') {
     summary = data.outputText;
   }
 
-  if (
-    !summary &&
-    typeof data.text === 'string'
-  ) {
+  if (!summary && typeof data.text === 'string') {
     summary = data.text;
   }
 
-  if (
-    !summary &&
-    Array.isArray(data.outputs)
-  ) {
+  if (!summary && Array.isArray(data.outputs)) {
     for (const output of data.outputs) {
       if (typeof output?.text === 'string') {
         summary += `${output.text} `;
@@ -416,10 +403,6 @@ function cleanRecapWording(summary) {
     .trim();
 }
 
-// ==========================================
-// CLEAN PREFIXES
-// ==========================================
-
 function cleanRecapPrefixes(summary) {
   return summary
     .replace(/^AI Summary:\s*/i, '')
@@ -427,34 +410,22 @@ function cleanRecapPrefixes(summary) {
     .trim();
 }
 
-// ==========================================
-// CLEAN TRAILING ELLIPSIS
-// ==========================================
-
 function removeTrailingEllipsis(summary) {
   if (!/\.{3}\s*$/.test(summary)) {
     return summary;
   }
 
-  const withoutEllipsis =
-    summary.replace(
-      /\s*\.{3}\s*$/,
-      ''
-    );
+  const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
 
-  const lastSentenceEnd =
-    Math.max(
-      withoutEllipsis.lastIndexOf('.'),
-      withoutEllipsis.lastIndexOf('?'),
-      withoutEllipsis.lastIndexOf('!')
-    );
+  const lastSentenceEnd = Math.max(
+    withoutEllipsis.lastIndexOf('.'),
+    withoutEllipsis.lastIndexOf('?'),
+    withoutEllipsis.lastIndexOf('!')
+  );
 
   if (lastSentenceEnd >= 0) {
     return withoutEllipsis
-      .substring(
-        0,
-        lastSentenceEnd + 1
-      )
+      .substring(0, lastSentenceEnd + 1)
       .trim();
   }
 
@@ -466,37 +437,25 @@ function removeTrailingEllipsis(summary) {
 // ==========================================
 
 function enforceSummaryLimit(summary) {
-  if (
-    summary.length <=
-    SUMMARY_TEXT_LIMIT
-  ) {
+  if (summary.length <= SUMMARY_TEXT_LIMIT) {
     return summary;
   }
 
-  const withinLimit =
-    summary.substring(
-      0,
-      SUMMARY_TEXT_LIMIT
-    );
+  const withinLimit = summary.substring(0, SUMMARY_TEXT_LIMIT);
 
-  const lastSentenceEnd =
-    Math.max(
-      withinLimit.lastIndexOf('.'),
-      withinLimit.lastIndexOf('?'),
-      withinLimit.lastIndexOf('!')
-    );
+  const lastSentenceEnd = Math.max(
+    withinLimit.lastIndexOf('.'),
+    withinLimit.lastIndexOf('?'),
+    withinLimit.lastIndexOf('!')
+  );
 
   if (lastSentenceEnd >= 0) {
     return withinLimit
-      .substring(
-        0,
-        lastSentenceEnd + 1
-      )
+      .substring(0, lastSentenceEnd + 1)
       .trim();
   }
 
-  const lastSpace =
-    withinLimit.lastIndexOf(' ');
+  const lastSpace = withinLimit.lastIndexOf(' ');
 
   if (lastSpace > 0) {
     return withinLimit
@@ -507,34 +466,17 @@ function enforceSummaryLimit(summary) {
   return withinLimit.trim();
 }
 
-// ==========================================
-// NORMALIZE GENERATED RECAP
-// ==========================================
-
 function normalizeRecap(summary) {
-  let cleaned =
-    cleanRecapPrefixes(summary);
-
-  cleaned =
-    cleanRecapWording(cleaned);
-
-  cleaned =
-    removeTrailingEllipsis(cleaned);
-
-  cleaned =
-    enforceSummaryLimit(cleaned);
+  let cleaned = cleanRecapPrefixes(summary);
+  cleaned = cleanRecapWording(cleaned);
+  cleaned = removeTrailingEllipsis(cleaned);
+  cleaned = enforceSummaryLimit(cleaned);
 
   return cleaned;
 }
 
-// ==========================================
-// DETECT GEMINI INPUT BLOCK
-// ==========================================
-
 function isGeminiInputBlocked(err) {
-  const message =
-    (err?.message || '')
-      .toLowerCase();
+  const message = (err?.message || '').toLowerCase();
 
   return (
     message.includes('input blocked') ||
@@ -549,17 +491,11 @@ function isGeminiInputBlocked(err) {
 // ==========================================
 
 async function generateRecap(chatLogs) {
-  if (
-    !Array.isArray(chatLogs) ||
-    chatLogs.length === 0
-  ) {
-    throw new Error(
-      'No chat logs were provided to Gemini.'
-    );
+  if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
+    throw new Error('No chat logs were provided to Gemini.');
   }
 
-  const sanitization =
-    sanitizeChatForGemini(chatLogs);
+  const sanitization = sanitizeChatForGemini(chatLogs);
 
   if (sanitization.sanitized) {
     console.log(
@@ -571,22 +507,15 @@ async function generateRecap(chatLogs) {
   let primaryData;
 
   try {
-    primaryData =
-      await callGemini(
-        sanitization.logs
-      );
+    primaryData = await callGemini(sanitization.logs);
   } catch (err) {
-    if (
-      isGeminiInputBlocked(err)
-    ) {
-      const blockedError =
-        new Error(
-          'Gemini blocked the chat input even after sensitive-term redaction.'
-        );
+    if (isGeminiInputBlocked(err)) {
+      const blockedError = new Error(
+        'Gemini blocked the chat input even after sensitive-term redaction.'
+      );
 
       blockedError.inputBlocked = true;
-      blockedError.sanitization =
-        sanitization;
+      blockedError.sanitization = sanitization;
 
       throw blockedError;
     }
@@ -594,19 +523,12 @@ async function generateRecap(chatLogs) {
     throw err;
   }
 
-  let summary =
-    extractGeminiText(
-      primaryData
-    );
+  let summary = extractGeminiText(primaryData);
 
   if (!summary) {
     console.error(
       '[Gemini Unexpected Response]',
-      JSON.stringify(
-        primaryData,
-        null,
-        2
-      )
+      JSON.stringify(primaryData, null, 2)
     );
 
     throw new Error(
@@ -614,27 +536,16 @@ async function generateRecap(chatLogs) {
     );
   }
 
-  summary =
-    normalizeRecap(summary);
+  summary = normalizeRecap(summary);
 
-  console.log(
-    '[Gemini Primary Recap]',
-    summary
-  );
-
+  console.log('[Gemini Primary Recap]', summary);
   console.log(
     `[Gemini Primary Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`
   );
 
-  // ========================================
-  // AUTOMATIC EXPANSION PASS
-  // ========================================
-
   const shouldExpand =
-    summary.length <
-      RECAP_EXPANSION_THRESHOLD &&
-    sanitization.logs.length >=
-      RECAP_EXPANSION_MIN_MESSAGES;
+    summary.length < RECAP_EXPANSION_THRESHOLD &&
+    sanitization.logs.length >= RECAP_EXPANSION_MIN_MESSAGES;
 
   if (shouldExpand) {
     console.log(
@@ -642,24 +553,15 @@ async function generateRecap(chatLogs) {
     );
 
     try {
-      const expansionData =
-        await expandRecapWithGemini({
-          currentSummary:
-            summary,
-          chatLogs:
-            sanitization.logs
-        });
+      const expansionData = await expandRecapWithGemini({
+        currentSummary: summary,
+        chatLogs: sanitization.logs
+      });
 
-      let expandedSummary =
-        extractGeminiText(
-          expansionData
-        );
+      let expandedSummary = extractGeminiText(expansionData);
 
       if (expandedSummary) {
-        expandedSummary =
-          normalizeRecap(
-            expandedSummary
-          );
+        expandedSummary = normalizeRecap(expandedSummary);
 
         console.log(
           '[Gemini Expanded Recap]',
@@ -670,17 +572,8 @@ async function generateRecap(chatLogs) {
           `[Gemini Expanded Length] ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`
         );
 
-        /*
-         * Only use the expansion if it
-         * actually improved the amount
-         * of useful content.
-         */
-        if (
-          expandedSummary.length >
-          summary.length
-        ) {
-          summary =
-            expandedSummary;
+        if (expandedSummary.length > summary.length) {
+          summary = expandedSummary;
 
           console.log(
             '[Gemini] Expanded recap selected.'
@@ -696,13 +589,6 @@ async function generateRecap(chatLogs) {
         );
       }
     } catch (err) {
-      /*
-       * If the expansion itself gets
-       * blocked or otherwise fails,
-       * the valid first recap is still
-       * usable, so do not fail the
-       * entire automatic recap.
-       */
       console.error(
         '[Gemini Expansion Error]',
         err
@@ -714,16 +600,9 @@ async function generateRecap(chatLogs) {
     }
   }
 
-  summary =
-    enforceSummaryLimit(
-      summary
-    );
+  summary = enforceSummaryLimit(summary);
 
-  console.log(
-    '[Gemini Final Recap]',
-    summary
-  );
-
+  console.log('[Gemini Final Recap]', summary);
   console.log(
     `[Gemini Final Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`
   );
@@ -738,14 +617,8 @@ async function generateRecap(chatLogs) {
 // PARSE PASTED RENDER LOGS
 // ==========================================
 
-function parsePastedChat(
-  rawText,
-  ignoredUsernames = []
-) {
-  if (
-    typeof rawText !== 'string' ||
-    !rawText.trim()
-  ) {
+function parsePastedChat(rawText, ignoredUsernames = []) {
+  if (typeof rawText !== 'string' || !rawText.trim()) {
     return {
       logs: [],
       totalValidMessages: 0,
@@ -753,45 +626,29 @@ function parsePastedChat(
     };
   }
 
-  const ignored =
-    ignoredUsernames
-      .filter(Boolean)
-      .map((name) =>
-        name
-          .toLowerCase()
-          .trim()
-      );
+  const ignored = ignoredUsernames
+    .filter(Boolean)
+    .map((name) => name.toLowerCase().trim());
 
-  const lines =
-    rawText
-      .split(/\r?\n/)
-      .map((line) =>
-        line.trim()
-      )
-      .filter(Boolean);
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 
   const parsedMessages = [];
 
-  for (
-    const originalLine
-    of lines
-  ) {
-    const line =
-      originalLine
-        .replace(
-          /\x1B\[[0-9;]*[A-Za-z]/g,
-          ''
-        )
-        .trim();
+  for (const originalLine of lines) {
+    const line = originalLine
+      .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+      .trim();
 
     let username = '';
     let message = '';
     let match;
 
-    match =
-      line.match(
-        /<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/
-      );
+    match = line.match(
+      /<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/
+    );
 
     if (match) {
       username = match[1];
@@ -799,10 +656,9 @@ function parsePastedChat(
     }
 
     if (!username) {
-      match =
-        line.match(
-          /^([A-Za-z0-9_]{1,25}):\s*(.+)$/
-        );
+      match = line.match(
+        /^([A-Za-z0-9_]{1,25}):\s*(.+)$/
+      );
 
       if (match) {
         username = match[1];
@@ -811,10 +667,9 @@ function parsePastedChat(
     }
 
     if (!username) {
-      match =
-        line.match(
-          /\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/
-        );
+      match = line.match(
+        /\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/
+      );
 
       if (match) {
         username = match[1];
@@ -822,23 +677,15 @@ function parsePastedChat(
       }
     }
 
-    if (
-      !username ||
-      !message
-    ) {
+    if (!username || !message) {
       continue;
     }
 
-    if (
-      ignored.includes(
-        username.toLowerCase()
-      )
-    ) {
+    if (ignored.includes(username.toLowerCase())) {
       continue;
     }
 
-    message =
-      message.trim();
+    message = message.trim();
 
     if (!message) {
       continue;
@@ -849,20 +696,13 @@ function parsePastedChat(
     );
   }
 
-  const totalValidMessages =
-    parsedMessages.length;
+  const totalValidMessages = parsedMessages.length;
 
   return {
-    logs:
-      parsedMessages.slice(
-        -MAX_PASTED_MESSAGES
-      ),
-
+    logs: parsedMessages.slice(-MAX_PASTED_MESSAGES),
     totalValidMessages,
-
     truncated:
-      totalValidMessages >
-      MAX_PASTED_MESSAGES
+      totalValidMessages > MAX_PASTED_MESSAGES
   };
 }
 
@@ -870,24 +710,17 @@ function parsePastedChat(
 // COUNTDOWN FORMATTER
 // ==========================================
 
-function formatCountdown(
-  milliseconds
-) {
-  const totalSeconds =
-    Math.max(
-      0,
-      Math.ceil(
-        milliseconds / 1000
-      )
-    );
+function formatCountdown(milliseconds) {
+  const totalSeconds = Math.max(
+    0,
+    Math.ceil(milliseconds / 1000)
+  );
 
-  const minutes =
-    Math.floor(
-      totalSeconds / 60
-    );
+  const minutes = Math.floor(
+    totalSeconds / 60
+  );
 
-  const seconds =
-    totalSeconds % 60;
+  const seconds = totalSeconds % 60;
 
   if (minutes > 0) {
     return `${minutes}min ${seconds}s`;
@@ -906,13 +739,9 @@ function createRecapManager({
   botUsername,
   twitchAccessToken
 }) {
-  const accessToken =
-    (twitchAccessToken || '')
-      .replace(
-        /^oauth:/i,
-        ''
-      )
-      .trim();
+  const accessToken = (twitchAccessToken || '')
+    .replace(/^oauth:/i, '')
+    .trim();
 
   let twitchClientId = '';
 
@@ -944,16 +773,15 @@ function createRecapManager({
       );
     }
 
-    const response =
-      await fetch(
-        'https://id.twitch.tv/oauth2/validate',
-        {
-          headers: {
-            Authorization:
-              `Bearer ${accessToken}`
-          }
+    const response = await fetch(
+      'https://id.twitch.tv/oauth2/validate',
+      {
+        headers: {
+          Authorization:
+            `Bearer ${accessToken}`
         }
-      );
+      }
+    );
 
     if (!response.ok) {
       throw new Error(
@@ -961,8 +789,7 @@ function createRecapManager({
       );
     }
 
-    const data =
-      await response.json();
+    const data = await response.json();
 
     if (!data.client_id) {
       throw new Error(
@@ -970,8 +797,7 @@ function createRecapManager({
       );
     }
 
-    twitchClientId =
-      data.client_id;
+    twitchClientId = data.client_id;
 
     console.log(
       '[Recap] Twitch OAuth token validated.'
@@ -990,22 +816,20 @@ function createRecapManager({
     const url =
       'https://api.twitch.tv/helix/streams?' +
       new URLSearchParams({
-        user_login:
-          channelName
+        user_login: channelName
       }).toString();
 
-    const response =
-      await fetch(
-        url,
-        {
-          headers: {
-            Authorization:
-              `Bearer ${accessToken}`,
-            'Client-Id':
-              twitchClientId
-          }
+    const response = await fetch(
+      url,
+      {
+        headers: {
+          Authorization:
+            `Bearer ${accessToken}`,
+          'Client-Id':
+            twitchClientId
         }
-      );
+      }
+    );
 
     if (
       response.status === 401 &&
@@ -1017,9 +841,7 @@ function createRecapManager({
 
       await validateTwitchToken();
 
-      return fetchStreamStatus(
-        false
-      );
+      return fetchStreamStatus(false);
     }
 
     if (!response.ok) {
@@ -1028,8 +850,7 @@ function createRecapManager({
       );
     }
 
-    const data =
-      await response.json();
+    const data = await response.json();
 
     const stream =
       Array.isArray(data.data) &&
@@ -1038,60 +859,45 @@ function createRecapManager({
         : null;
 
     return {
-      live:
-        Boolean(stream),
-
+      live: Boolean(stream),
       startedAt:
-        stream?.started_at ||
-        null
+        stream?.started_at || null
     };
   }
 
   function clearRecapTimer() {
     if (recapTimer) {
-      clearTimeout(
-        recapTimer
-      );
-
+      clearTimeout(recapTimer);
       recapTimer = null;
     }
   }
 
-  function scheduleRecapAt(
-    timestamp
-  ) {
+  function scheduleRecapAt(timestamp) {
     clearRecapTimer();
 
     if (recapPaused) {
       return;
     }
 
-    nextRecapAt =
-      timestamp;
+    nextRecapAt = timestamp;
 
-    const delay =
-      Math.max(
-        0,
-        timestamp -
-        Date.now()
-      );
+    const delay = Math.max(
+      0,
+      timestamp - Date.now()
+    );
 
-    recapTimer =
-      setTimeout(
-        () => {
-          sendAutomaticRecap(
-            firstRecapSent
-              ? '45-minute timer'
-              : '1-hour timer'
-          ).catch((err) => {
-            console.error(
-              '[Recap] Scheduled recap error:',
-              err
-            );
-          });
-        },
-        delay
-      );
+    recapTimer = setTimeout(() => {
+      sendAutomaticRecap(
+        firstRecapSent
+          ? '60-minute timer'
+          : 'first 60-minute timer'
+      ).catch((err) => {
+        console.error(
+          '[Recap] Scheduled recap error:',
+          err
+        );
+      });
+    }, delay);
   }
 
   function startStreamSession(
@@ -1115,34 +921,30 @@ function createRecapManager({
       detectedStartedAt &&
       !alreadyLiveAtStartup
     ) {
-      const parsed =
-        Date.parse(
-          detectedStartedAt
-        );
+      const parsed = Date.parse(
+        detectedStartedAt
+      );
 
       streamSessionStartedAt =
         Number.isNaN(parsed)
           ? Date.now()
           : parsed;
     } else {
-      streamSessionStartedAt =
-        Date.now();
+      streamSessionStartedAt = Date.now();
     }
 
     nextRecapAt =
       streamSessionStartedAt +
       FIRST_RECAP_DELAY;
 
-    scheduleRecapAt(
-      nextRecapAt
-    );
+    scheduleRecapAt(nextRecapAt);
 
     console.log(
       '[Recap] Qwert is LIVE. Automatic recap session started.'
     );
 
     console.log(
-      '[Recap] First recap will send after 60 minutes or 150 messages, whichever comes first.'
+      '[Recap] First recap will send after 60 minutes.'
     );
   }
 
@@ -1170,8 +972,7 @@ function createRecapManager({
 
   async function checkStreamStatus() {
     try {
-      const status =
-        await fetchStreamStatus();
+      const status = await fetchStreamStatus();
 
       if (!streamStateInitialized) {
         streamStateInitialized = true;
@@ -1192,10 +993,7 @@ function createRecapManager({
         return;
       }
 
-      if (
-        status.live &&
-        !streamLive
-      ) {
+      if (status.live && !streamLive) {
         startStreamSession(
           status.startedAt,
           false
@@ -1204,10 +1002,7 @@ function createRecapManager({
         return;
       }
 
-      if (
-        !status.live &&
-        streamLive
-      ) {
+      if (!status.live && streamLive) {
         endStreamSession();
       }
     } catch (err) {
@@ -1233,8 +1028,7 @@ function createRecapManager({
 
       return {
         success: false,
-        message:
-          'Qwert is offline.'
+        message: 'Qwert is offline.'
       };
     }
 
@@ -1272,8 +1066,7 @@ function createRecapManager({
       nextRecapAt
         ? Math.max(
             0,
-            nextRecapAt -
-            Date.now()
+            nextRecapAt - Date.now()
           )
         : 0;
 
@@ -1322,8 +1115,7 @@ function createRecapManager({
 
       return {
         success: false,
-        message:
-          'Qwert is offline.'
+        message: 'Qwert is offline.'
       };
     }
 
@@ -1344,11 +1136,10 @@ function createRecapManager({
 
     recapPaused = false;
 
-    const resumeDelay =
-      Math.max(
-        1000,
-        pausedRemainingMs
-      );
+    const resumeDelay = Math.max(
+      1000,
+      pausedRemainingMs
+    );
 
     nextRecapAt =
       Date.now() +
@@ -1356,9 +1147,7 @@ function createRecapManager({
 
     pausedRemainingMs = 0;
 
-    scheduleRecapAt(
-      nextRecapAt
-    );
+    scheduleRecapAt(nextRecapAt);
 
     console.log(
       `[Recap] Resumed by ${displayName}.`
@@ -1377,21 +1166,6 @@ function createRecapManager({
         channel,
         `@${displayName}, automatic chat recaps resumed where they left off. Next recap in ${formatCountdown(resumeDelay)}.`
       );
-    }
-
-    if (
-      !firstRecapSent &&
-      recapMessages.length >=
-      FIRST_RECAP_MESSAGE_TRIGGER
-    ) {
-      sendAutomaticRecap(
-        '150-message trigger after resume'
-      ).catch((err) => {
-        console.error(
-          '[Recap] Resume recap error:',
-          err
-        );
-      });
     }
 
     return {
@@ -1413,8 +1187,7 @@ function createRecapManager({
     }
 
     const text =
-      (rawMessage || '')
-        .trim();
+      (rawMessage || '').trim();
 
     if (!text) {
       return;
@@ -1423,54 +1196,26 @@ function createRecapManager({
     messageSequence++;
 
     recapMessages.push({
-      id:
-        messageSequence,
-
-      timestamp:
-        Date.now(),
-
+      id: messageSequence,
+      timestamp: Date.now(),
       text:
         `${displayName}: ${text}`
     });
-
-    if (
-      !firstRecapSent &&
-      !recapInProgress &&
-      recapMessages.length >=
-      FIRST_RECAP_MESSAGE_TRIGGER
-    ) {
-      sendAutomaticRecap(
-        '150-message trigger'
-      ).catch((err) => {
-        console.error(
-          '[Recap] 150-message recap error:',
-          err
-        );
-      });
-    }
   }
 
-  function discardSnapshot(
-    snapshotMaxId
-  ) {
-    if (
-      snapshotMaxId ===
-      null
-    ) {
+  function discardSnapshot(snapshotMaxId) {
+    if (snapshotMaxId === null) {
       return;
     }
 
     recapMessages =
       recapMessages.filter(
         (item) =>
-          item.id >
-          snapshotMaxId
+          item.id > snapshotMaxId
       );
   }
 
-  async function sendAutomaticRecap(
-    reason
-  ) {
+  async function sendAutomaticRecap(reason) {
     if (
       !streamLive ||
       recapPaused ||
@@ -1495,8 +1240,7 @@ function createRecapManager({
 
     const chatLogs =
       snapshot.map(
-        (item) =>
-          item.text
+        (item) => item.text
       );
 
     console.log(
@@ -1510,17 +1254,13 @@ function createRecapManager({
     try {
       let twitchMessage;
 
-      if (
-        chatLogs.length === 0
-      ) {
+      if (chatLogs.length === 0) {
         twitchMessage =
           SUMMARY_PREFIX +
           'Chat was quiet this stretch—nothing notable to recap.';
       } else {
         const result =
-          await generateRecap(
-            chatLogs
-          );
+          await generateRecap(chatLogs);
 
         twitchMessage =
           SUMMARY_PREFIX +
@@ -1551,9 +1291,7 @@ function createRecapManager({
         `[Recap] Length: ${twitchMessage.length}/500`
       );
 
-      discardSnapshot(
-        snapshotMaxId
-      );
+      discardSnapshot(snapshotMaxId);
 
       firstRecapSent = true;
       recapInProgress = false;
@@ -1562,16 +1300,14 @@ function createRecapManager({
         Date.now() +
         RECURRING_RECAP_DELAY;
 
-      scheduleRecapAt(
-        nextRecapAt
-      );
+      scheduleRecapAt(nextRecapAt);
 
       console.log(
         '[Recap] Previous recap messages marked as used.'
       );
 
       console.log(
-        '[Recap] Next automatic recap scheduled in 45 minutes.'
+        '[Recap] Next automatic recap scheduled in 60 minutes.'
       );
     } catch (err) {
       console.error(
@@ -1582,9 +1318,7 @@ function createRecapManager({
       if (err.inputBlocked) {
         recapInProgress = false;
 
-        discardSnapshot(
-          snapshotMaxId
-        );
+        discardSnapshot(snapshotMaxId);
 
         firstRecapSent = true;
 
@@ -1592,7 +1326,7 @@ function createRecapManager({
           try {
             await client.say(
               channelName,
-              "The chat recap was blocked due to sensitive terms found in chat. I'll try again in 45 minutes. We might have to keep it family friendly, children. LUL"
+              "The chat recap was blocked due to sensitive terms found in chat. I'll try again in 60 minutes. We might have to keep it family friendly, children. LUL"
             );
           } catch (sendErr) {
             console.error(
@@ -1605,16 +1339,14 @@ function createRecapManager({
             Date.now() +
             RECURRING_RECAP_DELAY;
 
-          scheduleRecapAt(
-            nextRecapAt
-          );
+          scheduleRecapAt(nextRecapAt);
 
           console.log(
             '[Recap] Blocked recap window discarded.'
           );
 
           console.log(
-            '[Recap] Fresh recap window started. Next attempt in 45 minutes.'
+            '[Recap] Fresh recap window started. Next attempt in 60 minutes.'
           );
         }
 
@@ -1627,9 +1359,7 @@ function createRecapManager({
         Date.now() +
         RECAP_FAILURE_RETRY_DELAY;
 
-      scheduleRecapAt(
-        nextRecapAt
-      );
+      scheduleRecapAt(nextRecapAt);
 
       console.log(
         '[Recap] Retrying automatic recap in 5 minutes.'
@@ -1641,9 +1371,7 @@ function createRecapManager({
     channel,
     displayName
   }) {
-    const now =
-      Date.now();
-
+    const now = Date.now();
     const elapsed =
       now -
       lastRecapCommandUse;
@@ -1665,8 +1393,7 @@ function createRecapManager({
       return;
     }
 
-    lastRecapCommandUse =
-      now;
+    lastRecapCommandUse = now;
 
     try {
       if (!streamLive) {
@@ -1711,15 +1438,6 @@ function createRecapManager({
           Date.now()
         );
 
-      if (!firstRecapSent) {
-        await client.say(
-          channel,
-          `@${displayName}, the next chat recap will be sent in ${timeRemaining}, or sooner if chat reaches ${FIRST_RECAP_MESSAGE_TRIGGER} messages.`
-        );
-
-        return;
-      }
-
       await client.say(
         channel,
         `@${displayName}, the next chat recap will be sent in ${timeRemaining}.`
@@ -1752,8 +1470,7 @@ function createRecapManager({
       nextRecapAt:
         recapPaused
           ? null
-          : nextRecapAt ||
-            null,
+          : nextRecapAt || null,
 
       pausedRemainingMs:
         recapPaused
@@ -1768,8 +1485,7 @@ function createRecapManager({
 
   function getCurrentWindowLogs() {
     return recapMessages.map(
-      (item) =>
-        item.text
+      (item) => item.text
     );
   }
 
@@ -1798,25 +1514,23 @@ function createRecapManager({
 
     await checkStreamStatus();
 
-    streamPollTimer =
-      setInterval(
-        checkStreamStatus,
-        STREAM_STATUS_POLL_INTERVAL
-      );
+    streamPollTimer = setInterval(
+      checkStreamStatus,
+      STREAM_STATUS_POLL_INTERVAL
+    );
 
-    tokenValidationTimer =
-      setInterval(
-        () => {
-          validateTwitchToken()
-            .catch((err) => {
-              console.error(
-                '[Recap] Hourly Twitch token validation failed:',
-                err
-              );
-            });
-        },
-        TOKEN_VALIDATION_INTERVAL
-      );
+    tokenValidationTimer = setInterval(
+      () => {
+        validateTwitchToken()
+          .catch((err) => {
+            console.error(
+              '[Recap] Hourly Twitch token validation failed:',
+              err
+            );
+          });
+      },
+      TOKEN_VALIDATION_INTERVAL
+    );
 
     console.log(
       '[Recap] Automatic stream detection enabled.'
@@ -1824,6 +1538,10 @@ function createRecapManager({
 
     console.log(
       '[Recap] Twitch stream status will be checked every 30 seconds.'
+    );
+
+    console.log(
+      '[Recap] Automatic recap cadence: every 60 minutes.'
     );
   }
 
