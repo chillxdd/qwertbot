@@ -157,7 +157,7 @@ MESSAGE ORDER AND RECENCY:
 - Message order indicates recency, NOT a narrative timeline.
 - Do NOT use words such as "later," "later on," "earlier," "afterward," "afterwards," "subsequently," "eventually," "then," or "before that" merely because one message appears after another.
 - Do not imply that separate topics happened in distinct chronological phases unless the chat explicitly establishes that sequence.
-- Prefer neutral connectors such as "also," "while," "and," or "meanwhile" when combining topics.
+- Prefer neutral connectors such as "also," "while," and "meanwhile" when combining topics.
 - Messages near the bottom are simply the most recent messages in the supplied chat window.
 
 IMPORTANCE FILTER:
@@ -172,6 +172,7 @@ Prioritize details that are:
 - Something chat reacted strongly to.
 - A clear win, loss, clutch moment, mistake, discovery, or other notable game-related reaction.
 - Useful context for understanding what chat was broadly focused on.
+- Sexual jokes, innuendo, suggestive fake commands, or mildly NSFW banter when they became a notable or recurring part of chat.
 
 Deprioritize or omit:
 - Routine greetings and farewells.
@@ -208,18 +209,33 @@ PRIORITIZE CONCRETE DETAILS:
 - If chat is reacting to something, describe only what the messages actually establish they are reacting to.
 - Combine related comments efficiently, but do not merge unrelated comments into a new claim.
 
+SEXUAL / SUGGESTIVE CHAT:
+- Twitch chat may include sexual jokes, innuendo, suggestive banter, horny humor, or mildly NSFW fake commands.
+- These topics MAY be included when they were funny, repeated, memorable, or a meaningful part of the conversation.
+- Do NOT erase the fact that sexual or suggestive banter happened merely to make the recap family-friendly.
+- Preserve the joke or topic when it matters.
+- However, paraphrase very explicit wording into milder, non-graphic language instead of repeating graphic sexual wording verbatim.
+- Prefer phrasing such as "chat got suggestive," "there was some horny banter," "chat made an NSFW joke," "the conversation took a suggestive turn," or a softened description of the actual joke.
+- Mild sexual words or innuendo are acceptable when natural and useful.
+- Avoid graphic descriptions of sexual acts or explicit anatomical detail.
+- Do not make a harmless joke sound more serious, graphic, or explicit than the source chat.
+- Do not moralize about sexual banter.
+- Treat it like any other chat topic: include it only if it is actually recap-worthy.
+
 AVOID VAGUE SUMMARIES:
 - Do not waste space describing mood when specific useful information is available.
 - Do not say "viewers discussed strategies" when the specific strategy or opinion is worth mentioning.
 - Do not say "chat was joking around" when the actual joke can be briefly described.
 - Avoid filler such as "friendly banter," "shared support," "good vibes," or similar generic language.
 - Do not force specificity when a broader summary would better represent the conversation.
+- If sexual or suggestive humor was important, do not hide it behind meaningless phrases like "chat got silly." Briefly describe the nature of the joke in softened language instead.
 
 CENSORED CHAT:
 - Some messages may contain the literal text "[censored]".
 - Keep surrounding context when useful.
 - Do not guess, restore, reconstruct, or repeat the censored word.
-- It is okay to omit the censored detail entirely.
+- You may still summarize the surrounding joke or topic if the remaining context clearly supports it.
+- It is okay to omit the censored detail entirely when too much context is missing.
 
 BEFORE WRITING THE RECAP:
 Internally:
@@ -256,6 +272,8 @@ STYLE:
 - Do not start with "AI Summary:".
 - Never add assumptions, filler, inferred context, or fake chronology just to make the recap longer.
 - Use the available space when there are enough strong supported details.
+- Match Twitch-chat energy without becoming graphic or over-sanitized.
+- Mildly cheeky wording is fine when it accurately reflects the source conversation.
 
 Recent Twitch chat:
 ${chatContext}`;
@@ -303,6 +321,16 @@ WHAT TO ADD:
 - Interesting debates, opinions, predictions, or suggestions.
 - Useful broader context about what chat was focused on.
 - Strong representative examples from larger discussions.
+- Sexual jokes, suggestive fake commands, innuendo, or horny banter when they were genuinely noteworthy or recurring.
+
+SEXUAL / SUGGESTIVE CHAT:
+- Sexual or suggestive banter does not need to be removed just because it is NSFW.
+- If it was recap-worthy, preserve the joke or topic.
+- Paraphrase very explicit wording into milder, non-graphic language.
+- Mild sexual wording and innuendo are acceptable.
+- Prefer wording like "chat got suggestive," "some horny banter broke out," "chat made an NSFW joke," or a softened description of the actual joke.
+- Avoid graphic sexual descriptions or explicit anatomical detail.
+- Do not moralize or make the recap artificially family-friendly.
 
 DO NOT ADD:
 - Routine greetings.
@@ -327,6 +355,9 @@ STYLE:
 - Dense, natural, readable.
 - Keep the strongest existing points.
 - Add worthwhile secondary context around them.
+- Match Twitch-chat energy.
+- Mildly cheeky or suggestive phrasing is acceptable when supported.
+- Do not become graphic.
 - Do not start with "Chat Recap:" or "AI Summary:".
 
 Output ONLY the revised recap.`;
@@ -415,7 +446,10 @@ function removeTrailingEllipsis(summary) {
     return summary;
   }
 
-  const withoutEllipsis = summary.replace(/\s*\.{3}\s*$/, '');
+  const withoutEllipsis = summary.replace(
+    /\s*\.{3}\s*$/,
+    ''
+  );
 
   const lastSentenceEnd = Math.max(
     withoutEllipsis.lastIndexOf('.'),
@@ -441,7 +475,10 @@ function enforceSummaryLimit(summary) {
     return summary;
   }
 
-  const withinLimit = summary.substring(0, SUMMARY_TEXT_LIMIT);
+  const withinLimit = summary.substring(
+    0,
+    SUMMARY_TEXT_LIMIT
+  );
 
   const lastSentenceEnd = Math.max(
     withinLimit.lastIndexOf('.'),
@@ -468,6 +505,7 @@ function enforceSummaryLimit(summary) {
 
 function normalizeRecap(summary) {
   let cleaned = cleanRecapPrefixes(summary);
+
   cleaned = cleanRecapWording(cleaned);
   cleaned = removeTrailingEllipsis(cleaned);
   cleaned = enforceSummaryLimit(cleaned);
@@ -492,7 +530,9 @@ function isGeminiInputBlocked(err) {
 
 async function generateRecap(chatLogs) {
   if (!Array.isArray(chatLogs) || chatLogs.length === 0) {
-    throw new Error('No chat logs were provided to Gemini.');
+    throw new Error(
+      'No chat logs were provided to Gemini.'
+    );
   }
 
   const sanitization = sanitizeChatForGemini(chatLogs);
@@ -507,7 +547,9 @@ async function generateRecap(chatLogs) {
   let primaryData;
 
   try {
-    primaryData = await callGemini(sanitization.logs);
+    primaryData = await callGemini(
+      sanitization.logs
+    );
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error(
@@ -538,7 +580,11 @@ async function generateRecap(chatLogs) {
 
   summary = normalizeRecap(summary);
 
-  console.log('[Gemini Primary Recap]', summary);
+  console.log(
+    '[Gemini Primary Recap]',
+    summary
+  );
+
   console.log(
     `[Gemini Primary Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`
   );
@@ -553,15 +599,18 @@ async function generateRecap(chatLogs) {
     );
 
     try {
-      const expansionData = await expandRecapWithGemini({
-        currentSummary: summary,
-        chatLogs: sanitization.logs
-      });
+      const expansionData =
+        await expandRecapWithGemini({
+          currentSummary: summary,
+          chatLogs: sanitization.logs
+        });
 
-      let expandedSummary = extractGeminiText(expansionData);
+      let expandedSummary =
+        extractGeminiText(expansionData);
 
       if (expandedSummary) {
-        expandedSummary = normalizeRecap(expandedSummary);
+        expandedSummary =
+          normalizeRecap(expandedSummary);
 
         console.log(
           '[Gemini Expanded Recap]',
@@ -572,7 +621,10 @@ async function generateRecap(chatLogs) {
           `[Gemini Expanded Length] ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`
         );
 
-        if (expandedSummary.length > summary.length) {
+        if (
+          expandedSummary.length >
+          summary.length
+        ) {
           summary = expandedSummary;
 
           console.log(
@@ -602,7 +654,11 @@ async function generateRecap(chatLogs) {
 
   summary = enforceSummaryLimit(summary);
 
-  console.log('[Gemini Final Recap]', summary);
+  console.log(
+    '[Gemini Final Recap]',
+    summary
+  );
+
   console.log(
     `[Gemini Final Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`
   );
@@ -617,8 +673,14 @@ async function generateRecap(chatLogs) {
 // PARSE PASTED RENDER LOGS
 // ==========================================
 
-function parsePastedChat(rawText, ignoredUsernames = []) {
-  if (typeof rawText !== 'string' || !rawText.trim()) {
+function parsePastedChat(
+  rawText,
+  ignoredUsernames = []
+) {
+  if (
+    typeof rawText !== 'string' ||
+    !rawText.trim()
+  ) {
     return {
       logs: [],
       totalValidMessages: 0,
@@ -628,7 +690,9 @@ function parsePastedChat(rawText, ignoredUsernames = []) {
 
   const ignored = ignoredUsernames
     .filter(Boolean)
-    .map((name) => name.toLowerCase().trim());
+    .map((name) =>
+      name.toLowerCase().trim()
+    );
 
   const lines = rawText
     .split(/\r?\n/)
@@ -639,7 +703,10 @@ function parsePastedChat(rawText, ignoredUsernames = []) {
 
   for (const originalLine of lines) {
     const line = originalLine
-      .replace(/\x1B\[[0-9;]*[A-Za-z]/g, '')
+      .replace(
+        /\x1B\[[0-9;]*[A-Za-z]/g,
+        ''
+      )
       .trim();
 
     let username = '';
@@ -681,7 +748,11 @@ function parsePastedChat(rawText, ignoredUsernames = []) {
       continue;
     }
 
-    if (ignored.includes(username.toLowerCase())) {
+    if (
+      ignored.includes(
+        username.toLowerCase()
+      )
+    ) {
       continue;
     }
 
@@ -696,13 +767,19 @@ function parsePastedChat(rawText, ignoredUsernames = []) {
     );
   }
 
-  const totalValidMessages = parsedMessages.length;
+  const totalValidMessages =
+    parsedMessages.length;
 
   return {
-    logs: parsedMessages.slice(-MAX_PASTED_MESSAGES),
+    logs: parsedMessages.slice(
+      -MAX_PASTED_MESSAGES
+    ),
+
     totalValidMessages,
+
     truncated:
-      totalValidMessages > MAX_PASTED_MESSAGES
+      totalValidMessages >
+      MAX_PASTED_MESSAGES
   };
 }
 
@@ -930,7 +1007,8 @@ function createRecapManager({
           ? Date.now()
           : parsed;
     } else {
-      streamSessionStartedAt = Date.now();
+      streamSessionStartedAt =
+        Date.now();
     }
 
     nextRecapAt =
@@ -972,7 +1050,8 @@ function createRecapManager({
 
   async function checkStreamStatus() {
     try {
-      const status = await fetchStreamStatus();
+      const status =
+        await fetchStreamStatus();
 
       if (!streamStateInitialized) {
         streamStateInitialized = true;
@@ -993,7 +1072,10 @@ function createRecapManager({
         return;
       }
 
-      if (status.live && !streamLive) {
+      if (
+        status.live &&
+        !streamLive
+      ) {
         startStreamSession(
           status.startedAt,
           false
@@ -1002,7 +1084,10 @@ function createRecapManager({
         return;
       }
 
-      if (!status.live && streamLive) {
+      if (
+        !status.live &&
+        streamLive
+      ) {
         endStreamSession();
       }
     } catch (err) {
@@ -1028,7 +1113,8 @@ function createRecapManager({
 
       return {
         success: false,
-        message: 'Qwert is offline.'
+        message:
+          'Qwert is offline.'
       };
     }
 
@@ -1066,7 +1152,8 @@ function createRecapManager({
       nextRecapAt
         ? Math.max(
             0,
-            nextRecapAt - Date.now()
+            nextRecapAt -
+            Date.now()
           )
         : 0;
 
@@ -1115,7 +1202,8 @@ function createRecapManager({
 
       return {
         success: false,
-        message: 'Qwert is offline.'
+        message:
+          'Qwert is offline.'
       };
     }
 
@@ -1147,7 +1235,9 @@ function createRecapManager({
 
     pausedRemainingMs = 0;
 
-    scheduleRecapAt(nextRecapAt);
+    scheduleRecapAt(
+      nextRecapAt
+    );
 
     console.log(
       `[Recap] Resumed by ${displayName}.`
@@ -1196,26 +1286,37 @@ function createRecapManager({
     messageSequence++;
 
     recapMessages.push({
-      id: messageSequence,
-      timestamp: Date.now(),
+      id:
+        messageSequence,
+
+      timestamp:
+        Date.now(),
+
       text:
         `${displayName}: ${text}`
     });
   }
 
-  function discardSnapshot(snapshotMaxId) {
-    if (snapshotMaxId === null) {
+  function discardSnapshot(
+    snapshotMaxId
+  ) {
+    if (
+      snapshotMaxId === null
+    ) {
       return;
     }
 
     recapMessages =
       recapMessages.filter(
         (item) =>
-          item.id > snapshotMaxId
+          item.id >
+          snapshotMaxId
       );
   }
 
-  async function sendAutomaticRecap(reason) {
+  async function sendAutomaticRecap(
+    reason
+  ) {
     if (
       !streamLive ||
       recapPaused ||
@@ -1240,7 +1341,8 @@ function createRecapManager({
 
     const chatLogs =
       snapshot.map(
-        (item) => item.text
+        (item) =>
+          item.text
       );
 
     console.log(
@@ -1254,13 +1356,17 @@ function createRecapManager({
     try {
       let twitchMessage;
 
-      if (chatLogs.length === 0) {
+      if (
+        chatLogs.length === 0
+      ) {
         twitchMessage =
           SUMMARY_PREFIX +
           'Chat was quiet this stretch—nothing notable to recap.';
       } else {
         const result =
-          await generateRecap(chatLogs);
+          await generateRecap(
+            chatLogs
+          );
 
         twitchMessage =
           SUMMARY_PREFIX +
@@ -1291,7 +1397,9 @@ function createRecapManager({
         `[Recap] Length: ${twitchMessage.length}/500`
       );
 
-      discardSnapshot(snapshotMaxId);
+      discardSnapshot(
+        snapshotMaxId
+      );
 
       firstRecapSent = true;
       recapInProgress = false;
@@ -1300,7 +1408,9 @@ function createRecapManager({
         Date.now() +
         RECURRING_RECAP_DELAY;
 
-      scheduleRecapAt(nextRecapAt);
+      scheduleRecapAt(
+        nextRecapAt
+      );
 
       console.log(
         '[Recap] Previous recap messages marked as used.'
@@ -1318,7 +1428,9 @@ function createRecapManager({
       if (err.inputBlocked) {
         recapInProgress = false;
 
-        discardSnapshot(snapshotMaxId);
+        discardSnapshot(
+          snapshotMaxId
+        );
 
         firstRecapSent = true;
 
@@ -1326,7 +1438,7 @@ function createRecapManager({
           try {
             await client.say(
               channelName,
-              "The chat recap was blocked due to sensitive terms found in chat. I'll try again in 60 minutes. We might have to keep it family friendly, children. LUL"
+              "The chat recap was blocked due to sensitive terms found in chat. I'll try again in 60 minutes. Y'all may have gone a little too hard for the robot. LUL"
             );
           } catch (sendErr) {
             console.error(
@@ -1339,7 +1451,9 @@ function createRecapManager({
             Date.now() +
             RECURRING_RECAP_DELAY;
 
-          scheduleRecapAt(nextRecapAt);
+          scheduleRecapAt(
+            nextRecapAt
+          );
 
           console.log(
             '[Recap] Blocked recap window discarded.'
@@ -1359,7 +1473,9 @@ function createRecapManager({
         Date.now() +
         RECAP_FAILURE_RETRY_DELAY;
 
-      scheduleRecapAt(nextRecapAt);
+      scheduleRecapAt(
+        nextRecapAt
+      );
 
       console.log(
         '[Recap] Retrying automatic recap in 5 minutes.'
@@ -1371,7 +1487,9 @@ function createRecapManager({
     channel,
     displayName
   }) {
-    const now = Date.now();
+    const now =
+      Date.now();
+
     const elapsed =
       now -
       lastRecapCommandUse;
@@ -1393,7 +1511,8 @@ function createRecapManager({
       return;
     }
 
-    lastRecapCommandUse = now;
+    lastRecapCommandUse =
+      now;
 
     try {
       if (!streamLive) {
@@ -1470,7 +1589,8 @@ function createRecapManager({
       nextRecapAt:
         recapPaused
           ? null
-          : nextRecapAt || null,
+          : nextRecapAt ||
+            null,
 
       pausedRemainingMs:
         recapPaused
@@ -1485,7 +1605,8 @@ function createRecapManager({
 
   function getCurrentWindowLogs() {
     return recapMessages.map(
-      (item) => item.text
+      (item) =>
+        item.text
     );
   }
 
@@ -1514,23 +1635,25 @@ function createRecapManager({
 
     await checkStreamStatus();
 
-    streamPollTimer = setInterval(
-      checkStreamStatus,
-      STREAM_STATUS_POLL_INTERVAL
-    );
+    streamPollTimer =
+      setInterval(
+        checkStreamStatus,
+        STREAM_STATUS_POLL_INTERVAL
+      );
 
-    tokenValidationTimer = setInterval(
-      () => {
-        validateTwitchToken()
-          .catch((err) => {
-            console.error(
-              '[Recap] Hourly Twitch token validation failed:',
-              err
-            );
-          });
-      },
-      TOKEN_VALIDATION_INTERVAL
-    );
+    tokenValidationTimer =
+      setInterval(
+        () => {
+          validateTwitchToken()
+            .catch((err) => {
+              console.error(
+                '[Recap] Hourly Twitch token validation failed:',
+                err
+              );
+            });
+        },
+        TOKEN_VALIDATION_INTERVAL
+      );
 
     console.log(
       '[Recap] Automatic stream detection enabled.'
