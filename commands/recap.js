@@ -11,6 +11,9 @@ const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
 const MAX_PASTED_MESSAGES = 150;
 const RECAP_EXPANSION_THRESHOLD = 380;
 const RECAP_EXPANSION_MIN_MESSAGES = 20;
+const ACTIVE_CHAT_MESSAGE_THRESHOLD = 100;
+const ACTIVE_CHAT_EXPANSION_THRESHOLD = 430;
+const ACTIVE_CHAT_TARGET_MIN = 440;
 
 const sensitivePatterns = [
   /\bporn(?:ography)?\b/gi,
@@ -252,7 +255,7 @@ Recent Twitch chat:
 ${chatContext}`;
 }
 
-function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = []) {
+function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], targetMin = 400) {
   return `You are revising an existing Twitch recap for Qwert so it uses more of the available space without inventing anything.
 
 ${formatStreamContext(streamContexts)}
@@ -277,7 +280,12 @@ RULES:
 - Avoid repetitive stock words such as banter, chaos, vibes, meanwhile, discussion, and debate.
 - Do not restore [censored] text.
 - Omit greetings, farewells, mundane personal updates, and weak filler.
-- Target 400-${SUMMARY_TEXT_LIMIT} characters when enough useful material exists; NEVER exceed ${SUMMARY_TEXT_LIMIT}.
+- This recap window contains ${chatLogs.length} source chat messages.
+- When enough distinct worthwhile material exists, target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters. Treat ${targetMin} as a serious target, not a suggestion.
+- Actively scan the source for notable topics, jokes, reactions, gameplay details, predictions, or recurring themes omitted from CURRENT RECAP and add the best supported ones.
+- Prefer adding another genuinely useful detail over merely rewording the same facts.
+- Do not pad, repeat, or add mundane filler just to hit the target. Accuracy still wins if the source genuinely lacks enough worthwhile material.
+- NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
 - Use 2-4 compact complete sentences. Never end with "...".
 - Do not start with "Hourly Recap:", "Chat Recap:", or "AI Summary:".
 
@@ -290,8 +298,8 @@ async function callGemini(chatLogs, streamContexts = [], twitchEvents = []) {
   return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents));
 }
 
-async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [] }) {
-  return sendGeminiPrompt(buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents));
+async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], targetMin = 400 }) {
+  return sendGeminiPrompt(buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, targetMin));
 }
 
 function extractGeminiText(data) {
@@ -444,19 +452,30 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = []) {
   console.log('[Gemini Primary Recap]', summary);
   console.log(`[Gemini Primary Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
 
+  const sourceMessageCount = sanitization.logs.length;
+  const activeChatWindow = sourceMessageCount >= ACTIVE_CHAT_MESSAGE_THRESHOLD;
+  const expansionThreshold = activeChatWindow
+    ? ACTIVE_CHAT_EXPANSION_THRESHOLD
+    : RECAP_EXPANSION_THRESHOLD;
+  const expansionTargetMin = activeChatWindow
+    ? ACTIVE_CHAT_TARGET_MIN
+    : 400;
+
   const shouldExpand =
-    summary.length < RECAP_EXPANSION_THRESHOLD &&
-    sanitization.logs.length >= RECAP_EXPANSION_MIN_MESSAGES;
+    summary.length < expansionThreshold &&
+    sourceMessageCount >= RECAP_EXPANSION_MIN_MESSAGES;
 
   if (shouldExpand) {
-    console.log(`[Gemini] Recap is under ${RECAP_EXPANSION_THRESHOLD} chars with ${sanitization.logs.length} source messages. Running expansion pass.`);
+    const activityLabel = activeChatWindow ? 'active chat window' : 'chat window';
+    console.log(`[Gemini] Recap is under ${expansionThreshold} chars with ${sourceMessageCount} source messages (${activityLabel}). Running expansion pass targeting ${expansionTargetMin}-${SUMMARY_TEXT_LIMIT} chars.`);
 
     try {
       const expansionData = await expandRecapWithGemini({
         currentSummary: summary,
         chatLogs: sanitization.logs,
         streamContexts,
-        twitchEvents
+        twitchEvents,
+        targetMin: expansionTargetMin
       });
 
       let expandedSummary = extractGeminiText(expansionData);
@@ -956,7 +975,7 @@ function createRecapManager({
         return;
       }
 
-      await client.say(channelName, twitchMessage);
+      await client.say(channelName, twitchMessage, { temporaryPin: true });
       console.log('[Recap] Sent:', twitchMessage);
       console.log(`[Recap] Length: ${twitchMessage.length}/500`);
 

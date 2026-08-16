@@ -16,6 +16,7 @@ const {
   exchangeAuthorizationCode,
   getAccessToken,
   getAuthStatus,
+  getStoredAuth,
   getValidAccessToken,
   refreshStoredToken,
   storeAuthorizationCodeResult,
@@ -30,7 +31,9 @@ const {
 } = require('./services/twitchBroadcasterAuth');
 const {
   getChatApiReadiness,
-  sendChatMessageViaApi
+  getPinnedChatMessage,
+  sendChatMessageViaApi,
+  startTemporaryChatPin
 } = require('./services/twitchChat');
 const {
   REQUIRED_EVENTSUB_SCOPES,
@@ -48,7 +51,7 @@ const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
-const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot'];
+const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages'];
 const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const FALLBACK_ACCESS_TOKEN = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').replace(/^oauth:/i, '').trim();
@@ -115,10 +118,23 @@ async function sendViaIrcFallback(channel, message, apiError) {
 }
 
 const chatClientProxy = {
-  async say(channel, message) {
+  async say(channel, message, options = {}) {
     const normalizedChannel = String(channel || '').replace(/^#/, '').toLowerCase();
     if (normalizedChannel && normalizedChannel !== channelName) {
-      throw new Error(`SqwertArmyBot is configured to send only to #${channelName}.`);
+      throw new Error(`${botUsername || 'The bot'} is configured to send only to #${channelName}.`);
+    }
+
+    const wantsTemporaryPin = options?.temporaryPin === true;
+    let previousPin = null;
+    let pinSnapshotReady = false;
+
+    if (wantsTemporaryPin && databaseConnected) {
+      try {
+        previousPin = await getPinnedChatMessage();
+        pinSnapshotReady = true;
+      } catch (pinErr) {
+        console.warn(`[Pins] Could not read the current pinned message before the recap. The recap will still send, but it will not be temporarily pinned: ${pinErr?.message || pinErr}`);
+      }
     }
 
     try {
@@ -129,6 +145,18 @@ const chatClientProxy = {
       const result = await sendChatMessageViaApi(message);
 
       console.log('[Chat] Message sent through Twitch Chat API.');
+
+      if (wantsTemporaryPin && pinSnapshotReady && result?.message_id) {
+        try {
+          await startTemporaryChatPin({
+            messageId: result.message_id,
+            previousPin,
+            displaySeconds: 60
+          });
+        } catch (pinErr) {
+          console.warn(`[Pins] Hourly recap was sent, but temporary pinning could not start: ${pinErr?.message || pinErr}`);
+        }
+      }
 
       return {
         method: 'chat_api',
@@ -791,7 +819,18 @@ app.get('/auth/twitch/callback', async (req, res) => {
     const validation = await validateAccessToken(tokenData.access_token);
     const authorizedLogin = (validation.login || '').toLowerCase().trim();
 
-    if (botUsername && authorizedLogin !== botUsername) {
+    const existingBotAuth = databaseConnected ? await getStoredAuth() : null;
+    const authorizedUserId = String(validation.user_id || '');
+    const storedBotUserId = String(existingBotAuth?.twitchUserId || '');
+
+    // Rename-proof identity check: once we know the bot's stable Twitch user ID,
+    // trust that ID instead of a changeable login name. On first authorization,
+    // fall back to TWITCH_BOT_USERNAME so the wrong account still cannot be saved.
+    if (storedBotUserId) {
+      if (!authorizedUserId || authorizedUserId !== storedBotUserId) {
+        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong Twitch account</h2><p>The Twitch account you authorized does not match the bot account already stored for this application.</p><p>Log into Twitch as <strong>${escapeHtmlServer(botUsername || 'the configured bot account')}</strong> and try again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+      }
+    } else if (botUsername && authorizedLogin !== botUsername) {
       return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong Twitch account</h2><p>You authorized <strong>${escapeHtmlServer(authorizedLogin || 'unknown')}</strong>, but TWITCH_BOT_USERNAME is <strong>${escapeHtmlServer(botUsername)}</strong>.</p><p>Log into Twitch as the bot account and try again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
     }
 
@@ -812,7 +851,7 @@ app.get('/auth/twitch/callback', async (req, res) => {
       });
     }, 500);
 
-    return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API as well as the legacy IRC connection used to receive chat.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+    return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API, the legacy IRC connection used to receive chat, and temporary hourly-recap pinning.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
   } catch (err) {
     console.error('[OAuth] Twitch callback failed:', err.message || err);
     return res.status(500).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Twitch OAuth error</h2><p>${escapeHtmlServer(err.message)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
@@ -1015,14 +1054,14 @@ app.get('/', (req, res) => {
 <html>
 <head>
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>SqwertArmyBot Dashboard</title>
+  <title>GeneralQwert's Twitch Bot</title>
   <style>
-    body{font-family:Arial,sans-serif;background:#0f0f12;color:#fff;margin:0;padding:20px;transition:padding-right .2s ease}body.chat-open{padding-right:390px}.card{max-width:760px;margin:30px auto;background:#18181b;border:1px solid #26262c;border-radius:8px;padding:24px}h2{color:#9146ff;margin-top:0}h3{font-size:13px;color:#adadb8;text-transform:uppercase;margin-top:24px}input,textarea{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px solid #3a3a44;border-radius:4px;padding:11px;margin:6px 0 10px}textarea{min-height:220px}button{background:#9146ff;color:#fff;border:0;border-radius:4px;padding:11px 14px;font-weight:bold;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#33333d}button.danger{background:#a52f36}button:disabled{opacity:.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{background:#0e0e10;border:1px solid #26262c;border-radius:6px;padding:14px}.label{font-size:11px;color:#777783;text-transform:uppercase}.value{font-size:16px;font-weight:bold;margin:5px 0}.detail{font-size:12px;color:#adadb8;line-height:1.5}.good{color:#00f59b}.bad{color:#ff4f4f}.warn{color:#f5c542}.section{border-top:1px solid #2a2a30;margin-top:20px;padding-top:18px}#protected{display:none}#testResult{white-space:pre-wrap;background:#0e0e10;padding:12px;border-radius:4px;margin-top:10px}a{color:#bf94ff}.chat-sidebar{position:fixed;top:0;right:0;width:360px;height:100vh;background:#18181b;border-left:1px solid #2a2a30;z-index:20;transform:translateX(100%);transition:transform .2s ease;display:flex;flex-direction:column}.chat-sidebar.open{transform:translateX(0)}.chat-sidebar-header{height:46px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;padding:0 12px;border-bottom:1px solid #2a2a30;font-size:13px;font-weight:bold}.chat-sidebar-header button{padding:6px 9px;margin:0;background:#33333d}.chat-sidebar iframe{border:0;width:100%;height:calc(100vh - 46px);background:#0e0e10}.chat-toggle{position:fixed;right:12px;top:14px;z-index:30;box-shadow:0 2px 12px rgba(0,0,0,.35)}body.chat-open .chat-toggle{right:372px}@media(max-width:1100px){body.chat-open{padding-right:20px}.chat-sidebar{width:min(360px,calc(100vw - 54px))}body.chat-open .chat-toggle{right:min(372px,calc(100vw - 42px))}}@media(max-width:600px){.grid{grid-template-columns:1fr}.card{margin-top:52px;padding:18px}}
+    body{font-family:Arial,sans-serif;background:#0f0f12;color:#fff;margin:0;padding:20px;transition:padding-right .2s ease}body.chat-open{padding-right:390px}.card{max-width:760px;margin:30px auto;background:#18181b;border:1px solid #26262c;border-radius:8px;padding:24px}h2{color:#9146ff;margin-top:0}h3{font-size:13px;color:#adadb8;text-transform:uppercase;margin-top:24px}input,textarea{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px solid #3a3a44;border-radius:4px;padding:11px;margin:6px 0 10px}textarea{min-height:220px}button{background:#9146ff;color:#fff;border:0;border-radius:4px;padding:11px 14px;font-weight:bold;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#33333d}button.danger{background:#a52f36}button:disabled{opacity:.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{background:#0e0e10;border:1px solid #26262c;border-radius:6px;padding:14px}.label{font-size:11px;color:#777783;text-transform:uppercase}.value{font-size:16px;font-weight:bold;margin:5px 0}.detail{font-size:12px;color:#adadb8;line-height:1.5}.good{color:#00f59b}.bad{color:#ff4f4f}.warn{color:#f5c542}.section{border-top:1px solid #2a2a30;margin-top:20px;padding-top:18px}#protected{display:none}#testResult{white-space:pre-wrap;background:#0e0e10;padding:12px;border-radius:4px;margin-top:10px}a{color:#bf94ff}.chat-sidebar{position:fixed;top:0;right:0;width:360px;height:100vh;background:#0e0e10;border-left:1px solid #2a2a30;z-index:20;transform:translateX(100%);transition:transform .2s ease;display:flex;flex-direction:column}.chat-sidebar.open{transform:translateX(0)}.chat-sidebar iframe{display:block;border:0;width:360px;min-width:360px;height:100vh;background:#0e0e10}.chat-toggle{position:fixed;right:12px;top:14px;z-index:10;box-shadow:0 2px 12px rgba(0,0,0,.35)}body.chat-open .chat-toggle{right:380px}@media(max-width:1100px){body.chat-open{padding-right:20px}.chat-sidebar{width:min(360px,calc(100vw - 54px))}.chat-sidebar iframe{width:100%;min-width:0}body.chat-open .chat-toggle{right:calc(min(360px,calc(100vw - 54px)) + 20px)}}@media(max-width:600px){.grid{grid-template-columns:1fr}.card{margin-top:52px;padding:18px}}
   </style>
 </head>
 <body>
 <div class="card">
-  <h2>SqwertArmyBot</h2>
+  <h2>GeneralQwert's Twitch Bot</h2>
   <div class="grid">
     <div class="box"><div class="label">Qwert</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
     <div class="box"><div class="label">Bot</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
@@ -1074,7 +1113,6 @@ app.get('/', (req, res) => {
 </div>
 <button id="chatToggle" class="chat-toggle secondary" type="button">Hide Chat</button>
 <aside id="chatSidebar" class="chat-sidebar open" aria-label="Twitch chat sidebar">
-  <div class="chat-sidebar-header"><span>${escapeHtmlServer(channelName || 'Qwert')} Chat</span><button id="chatClose" class="secondary" type="button">Hide</button></div>
   <iframe id="twitchChatFrame" title="${escapeHtmlServer(channelName || 'Qwert')} Twitch chat" allowfullscreen></iframe>
 </aside>
 <script>
@@ -1084,9 +1122,8 @@ function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').
 function countdown(ms){const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+'min '+(s%60)+'s'}
 function setChatOpen(open){$('chatSidebar').classList.toggle('open',open);document.body.classList.toggle('chat-open',open);$('chatToggle').textContent=open?'Hide Chat':'Show Chat';$('chatToggle').setAttribute('aria-expanded',open?'true':'false')}
 const chatParent=location.hostname;
-$('twitchChatFrame').src='https://www.twitch.tv/embed/${escapeHtmlServer(channelName || 'generalqwert')}/chat?parent='+encodeURIComponent(chatParent);
+$('twitchChatFrame').src='https://www.twitch.tv/embed/${escapeHtmlServer(channelName || 'generalqwert')}/chat?darkpopout=1&parent='+encodeURIComponent(chatParent);
 $('chatToggle').onclick=()=>setChatOpen(!$('chatSidebar').classList.contains('open'));
-$('chatClose').onclick=()=>setChatOpen(false);
 setChatOpen(true);
 async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" rel="noopener noreferrer" href="'+esc(d.qwert.twitchUrl)+'">Watch on Twitch</a><br><a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/@generalqwert/streams">Watch on YouTube</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) + '+(d.bot.twitchEventsInWindow||0)+' Twitch event(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>Bot badge + EventSub scopes granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
 $('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';status()};

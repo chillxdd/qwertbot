@@ -29,7 +29,7 @@ function getEventSubSecret() {
   // without exposing or transmitting the Twitch Client Secret itself.
   return crypto
     .createHash('sha256')
-    .update(`SqwertArmyBot:eventsub:${clientSecret}`)
+    .update(`twitchbot:eventsub:${clientSecret}`)
     .digest('hex');
 }
 

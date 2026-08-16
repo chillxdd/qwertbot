@@ -90,6 +90,41 @@ async function validateAccessToken(accessToken) {
   return data;
 }
 
+async function syncStoredIdentity(auth, validation) {
+  if (!auth || !validation) return auth;
+
+  const validatedUserId = String(validation.user_id || '');
+  const storedUserId = String(auth.twitchUserId || '');
+  const validatedLogin = String(validation.login || '').toLowerCase();
+  const storedLogin = String(auth.username || '').toLowerCase();
+
+  // Twitch usernames can change. The numeric Twitch user ID is the stable identity.
+  // Never overwrite an existing record if validation unexpectedly belongs to a
+  // different user ID, but keep the stored login current when the ID matches.
+  if (storedUserId && validatedUserId && storedUserId !== validatedUserId) {
+    const error = new Error('Validated Twitch token belongs to a different user ID than the stored bot authorization. Re-authorize the bot.');
+    error.reauthorizationRequired = true;
+    throw error;
+  }
+
+  const needsUserId = !storedUserId && Boolean(validatedUserId);
+  const needsLogin = Boolean(validatedLogin && validatedLogin !== storedLogin);
+
+  if (!needsUserId && !needsLogin) return auth;
+
+  const update = {};
+  if (needsUserId) update.twitchUserId = validatedUserId;
+  if (needsLogin) update.username = validatedLogin;
+
+  await TwitchAuth.updateOne({ provider: 'twitch' }, { $set: update });
+
+  if (needsLogin) {
+    console.log(`[OAuth] Twitch bot login updated in MongoDB to ${validatedLogin}.`);
+  }
+
+  return { ...auth, ...update };
+}
+
 async function refreshStoredToken() {
   const auth = await getStoredAuth();
 
@@ -161,7 +196,8 @@ async function getValidAccessToken({ allowRefresh = true } = {}) {
   }
 
   try {
-    await validateAccessToken(auth.accessToken);
+    const validation = await validateAccessToken(auth.accessToken);
+    await syncStoredIdentity(auth, validation);
     return auth.accessToken;
   } catch (err) {
     if (allowRefresh && err.status === 401 && auth.refreshToken) {
