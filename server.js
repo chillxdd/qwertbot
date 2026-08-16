@@ -721,7 +721,7 @@ $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
 $('sendBtn').onclick=async()=>{const message=$('chatMessage').value.trim();if(!message)return;const d=await (await fetch('/send-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,message})})).json();$('chatMsg').textContent=d.success?'Sent!':d.error;if(d.success)$('chatMessage').value=''};
-async function test(type){const body={password,type};if(type==='pasted')body.pastedChat=$('pasted').value;$('testResult').textContent='Generating...';const d=await (await fetch('/test-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();$('testResult').textContent=d.success?d.output+'\n\n'+d.characterCount+'/500 characters':(d.error?.message||d.error||'Error')}
+async function test(type){const body={password,type};if(type==='pasted')body.pastedChat=$('pasted').value;$('testResult').textContent='Generating...';const d=await (await fetch('/test-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();$('testResult').textContent=d.success?d.output+'\\n\\n'+d.characterCount+'/500 characters':(d.error?.message||d.error||'Error')}
 $('sampleBtn').onclick=()=>test('sample');$('storedBtn').onclick=()=>test('stored');$('pastedBtn').onclick=()=>test('pasted');
 status();setInterval(status,15000);
 </script>
