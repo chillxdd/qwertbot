@@ -192,9 +192,19 @@ function isKnownBotCommand(message) {
 }
 
 function isIgnoredUsername(username) {
-  return ['nightbot', 'streamelements', botUsername]
+  return ['nightbot', 'streamelements']
     .filter(Boolean)
     .includes((username || '').toLowerCase().trim());
+}
+
+function isBotHourlyRecap(username, message) {
+  const normalizedUsername = (username || '').toLowerCase().trim();
+  const normalizedMessage = (message || '').trim().toLowerCase();
+  return Boolean(
+    botUsername &&
+    normalizedUsername === botUsername &&
+    normalizedMessage.startsWith(SUMMARY_PREFIX.toLowerCase())
+  );
 }
 
 function isModOrBroadcaster(tags) {
@@ -410,7 +420,7 @@ function attachTwitchHandlers(client, generation) {
   });
 
   client.on('message', async (channel, tags, message, self) => {
-    if (generation !== twitchConnectionGeneration || self || !recapManager) return;
+    if (generation !== twitchConnectionGeneration || !recapManager) return;
 
     const rawMessage = (message || '').trim();
     const lowerMsg = rawMessage.toLowerCase();
@@ -422,7 +432,18 @@ function attachTwitchHandlers(client, generation) {
       return;
     }
 
-    if (username === 'streamelements' || username === botUsername) return;
+    if (username === 'streamelements') return;
+
+    // The bot account may also be used manually in Twitch chat. Keep those messages
+    // as normal recap context, but never feed a previously-sent hourly recap back
+    // into the next recap window. This works whether tmi.js marks the message as
+    // self=true or it arrived from another Twitch session using the same account.
+    if (isBotHourlyRecap(username, rawMessage)) return;
+
+    if (username === botUsername) {
+      recapManager.recordChatMessage({ displayName, rawMessage });
+      return;
+    }
 
     if (isKnownBotCommand(rawMessage)) {
       if (lowerMsg === '!stoprecap') {
@@ -989,11 +1010,18 @@ app.post('/test-summary', async (req, res) => {
   let totalValidMessages;
   let streamContexts = [];
   let twitchEvents = [];
+  let previousRecaps = [];
 
   if (type === 'stored') {
     logs = recapManager.getCurrentWindowLogs();
     streamContexts = recapManager.getCurrentWindowContexts();
     twitchEvents = recapManager.getCurrentWindowEvents();
+    try {
+      previousRecaps = await recapManager.getCurrentStreamRecapHistory(5);
+    } catch (historyErr) {
+      console.error('Could not load previous recap history for WebUI current-window test:', historyErr.message || historyErr);
+      previousRecaps = [];
+    }
     if (logs.length === 0 && twitchEvents.length === 0) {
       return res.status(400).json({ success: false, error: 'There are currently no messages or Twitch events in the active automatic recap window.' });
     }
@@ -1004,7 +1032,13 @@ app.post('/test-summary', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No pasted chat logs were provided.' });
     }
 
-    const parsed = parsePastedChat(pastedChat, ['nightbot', 'streamelements', botUsername]);
+    const parsed = parsePastedChat(pastedChat, ['nightbot', 'streamelements']);
+    parsed.logs = parsed.logs.filter((line) => {
+      const match = line.match(/^([^:]+):\s*(.*)$/);
+      if (!match) return true;
+      return !isBotHourlyRecap(match[1], match[2]);
+    });
+    parsed.totalValidMessages = parsed.logs.length;
     if (parsed.logs.length === 0) {
       return res.status(400).json({ success: false, error: 'No recognizable Twitch chat messages were found.' });
     }
@@ -1019,7 +1053,7 @@ app.post('/test-summary', async (req, res) => {
   }
 
   try {
-    const result = await generateRecap(logs, streamContexts, twitchEvents);
+    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps);
     const fullOutput = SUMMARY_PREFIX + result.summary;
 
     res.json({
@@ -1029,6 +1063,7 @@ app.post('/test-summary', async (req, res) => {
       totalValidMessages,
       streamContextCount: streamContexts.length,
       twitchEventCount: twitchEvents.length,
+      previousRecapContextCount: previousRecaps.length,
       output: fullOutput,
       characterCount: fullOutput.length,
       sanitized: result.sanitization.sanitized,

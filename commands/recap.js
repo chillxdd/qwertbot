@@ -1,3 +1,5 @@
+const { getRecentStreamRecaps, saveStreamRecap, clearStreamRecapsByChannel } = require('../services/streamRecapHistory');
+
 const SUMMARY_PREFIX = 'Hourly Recap: ';
 const TWITCH_MESSAGE_LIMIT = 500;
 const SUMMARY_TEXT_LIMIT = TWITCH_MESSAGE_LIMIT - SUMMARY_PREFIX.length;
@@ -102,6 +104,26 @@ function formatTwitchEvents(twitchEvents = []) {
   return `VERIFIED TWITCH EVENTS DURING THIS RECAP WINDOW:\n${lines.join('\n')}\n\nTWITCH EVENT RULES:\n- These EventSub records are verified Twitch facts and may be stated as facts.\n- Chat is still the source for viewer reactions, jokes, interpretations, and surrounding discussion.\n- Do not invent a reaction to an event unless chat supports it.\n- Do not infer that an event caused a separate chat topic merely because they occurred near each other.\n- Group routine follows rather than listing every follower unless an individual follow became relevant in chat.\n- Subs, gift subs, cheers, raids, and Hype Trains may be named when useful and supported by these verified records.`;
 }
 
+function formatPreviousRecaps(previousRecaps = []) {
+  if (!Array.isArray(previousRecaps) || previousRecaps.length === 0) {
+    return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\nNo earlier hourly recaps are available for this stream.`;
+  }
+
+  const lines = previousRecaps
+    .map((recap, index) => {
+      const sequence = Number(recap?.sequence) || index + 1;
+      const text = String(recap?.text || '').trim();
+      return text ? `- Earlier recap ${sequence}: ${text}` : '';
+    })
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\nNo earlier hourly recaps are available for this stream.`;
+  }
+
+  return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\n${lines.join('\n')}\n\nPREVIOUS RECAP RULES:\n- These earlier recaps are continuity context only. They are NOT evidence that anything happened again in the current hour.\n- Use them to recognize callbacks, recurring jokes, names, or ongoing themes and to avoid unnecessarily repeating old recap material.\n- Every factual claim in the CURRENT recap must still be supported by the CURRENT source chat or CURRENT verified Twitch events.\n- Do not carry an old event, result, opinion, relationship, or joke into the current recap unless the current source supports that it continued or returned.\n- If an older recap conflicts with the current source, trust the current source.\n- Do not waste space re-explaining old context unless it helps make a current-hour callback understandable.`;
+}
+
 async function sendGeminiPrompt(prompt) {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
@@ -136,10 +158,11 @@ async function sendGeminiPrompt(prompt) {
   return data;
 }
 
-function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = []) {
+function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = []) {
   const chatContext = chatLogs.join('\n');
   const streamContext = formatStreamContext(streamContexts);
   const eventContext = formatTwitchEvents(twitchEvents);
+  const previousRecapContext = formatPreviousRecaps(previousRecaps);
 
   return `You are creating a factual, useful Twitch chat recap for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
 
@@ -151,9 +174,12 @@ ${streamContext}
 
 ${eventContext}
 
+${previousRecapContext}
+
 SOURCE-OF-TRUTH RULE:
 The supplied chat messages are the source of truth for chat claims, reactions, jokes, viewer opinions, and discussion.
 The VERIFIED TWITCH EVENTS section is also a source of truth for the Twitch events explicitly listed there.
+Previous hourly recaps are continuity context only and are NOT a source of truth for the current hour.
 Twitch title/category metadata is background context only and is never proof that an event happened.
 Accuracy is more important than sounding polished or narratively complete.
 
@@ -255,12 +281,14 @@ Recent Twitch chat:
 ${chatContext}`;
 }
 
-function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], targetMin = 400) {
+function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], targetMin = 400) {
   return `You are revising an existing Twitch recap for Qwert so it uses more of the available space without inventing anything.
 
 ${formatStreamContext(streamContexts)}
 
 ${formatTwitchEvents(twitchEvents)}
+
+${formatPreviousRecaps(previousRecaps)}
 
 CURRENT RECAP:
 ${currentSummary}
@@ -269,8 +297,9 @@ SOURCE CHAT:
 ${chatLogs.join('\n')}
 
 RULES:
-- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for specific events and claims. Stream metadata is context only.
+- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for CURRENT-HOUR specific events and claims. Stream metadata and previous hourly recaps are context only.
 - Keep accurate existing facts; correct unsupported implications.
+- Do not import an event or detail from an earlier recap unless the current source chat or current verified events support it in this hour.
 - Add only noteworthy details directly supported by chat.
 - Preserve ambiguity and exact labels. "favorites" must not become "team" unless chat establishes team.
 - Do not infer chronology from message order.
@@ -294,12 +323,12 @@ Before outputting, silently verify every causal link and every specific noun/lab
 Output ONLY the revised recap.`;
 }
 
-async function callGemini(chatLogs, streamContexts = [], twitchEvents = []) {
-  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents));
+async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = []) {
+  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps));
 }
 
-async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], targetMin = 400 }) {
-  return sendGeminiPrompt(buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, targetMin));
+async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], targetMin = 400 }) {
+  return sendGeminiPrompt(buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, targetMin));
 }
 
 function extractGeminiText(data) {
@@ -414,7 +443,7 @@ function isGeminiInputBlocked(err) {
   );
 }
 
-async function generateRecap(chatLogs, streamContexts = [], twitchEvents = []) {
+async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = []) {
   if ((!Array.isArray(chatLogs) || chatLogs.length === 0) && (!Array.isArray(twitchEvents) || twitchEvents.length === 0)) {
     throw new Error('No chat logs or verified Twitch events were provided to Gemini.');
   }
@@ -430,7 +459,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = []) {
   let primaryData;
 
   try {
-    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents);
+    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps);
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error('Gemini blocked the chat input even after sensitive-term redaction.');
@@ -475,6 +504,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = []) {
         chatLogs: sanitization.logs,
         streamContexts,
         twitchEvents,
+        previousRecaps,
         targetMin: expansionTargetMin
       });
 
@@ -579,6 +609,7 @@ function createRecapManager({
   let currentStreamTitle = '';
   let currentStreamCategory = '';
   let currentStreamGameId = '';
+  let currentStreamId = '';
   let recapMessages = [];
   let messageSequence = 0;
   let streamContexts = [];
@@ -690,6 +721,7 @@ function createRecapManager({
 
     return {
       live: Boolean(stream),
+      streamId: stream?.id || '',
       startedAt: stream?.started_at || null,
       title: stream?.title || '',
       category: stream?.game_name || '',
@@ -750,6 +782,7 @@ function createRecapManager({
     recapPaused = false;
     pausedRemainingMs = 0;
 
+    currentStreamId = String(status?.streamId || '').trim();
     currentStreamTitle = String(status?.title || '').trim();
     currentStreamCategory = String(status?.category || '').trim();
     currentStreamGameId = String(status?.gameId || '').trim();
@@ -779,6 +812,7 @@ function createRecapManager({
   function endStreamSession() {
     clearRecapTimer();
     streamLive = false;
+    currentStreamId = '';
     currentStreamTitle = '';
     currentStreamCategory = '';
     currentStreamGameId = '';
@@ -794,6 +828,9 @@ function createRecapManager({
     pausedRemainingMs = 0;
     streamSessionStartedAt = 0;
     nextRecapAt = 0;
+    clearStreamRecapsByChannel(channelName)
+      .then((result) => console.log(`[Recap] Cleared ${result?.deletedCount || 0} stored stream recap session(s) from MongoDB.`))
+      .catch((err) => console.error('[Recap] Could not clear stored stream recap history after stream end:', err.message || err));
     console.log('[Recap] Qwert is OFFLINE. Automatic recap session stopped and recap history cleared.');
   }
 
@@ -806,6 +843,11 @@ function createRecapManager({
         if (status.live) startStreamSession(status, true);
         else {
           streamLive = false;
+          clearStreamRecapsByChannel(channelName)
+            .then((result) => {
+              if (result?.deletedCount) console.log(`[Recap] Removed ${result.deletedCount} stale stored recap session(s) while Qwert is offline.`);
+            })
+            .catch((err) => console.error('[Recap] Could not clear stale stream recap history:', err.message || err));
           console.log('[Recap] Qwert is currently offline. Waiting for stream start.');
         }
         return;
@@ -961,12 +1003,25 @@ function createRecapManager({
 
     try {
       let twitchMessage;
+      let recapSummaryBody;
+      let previousRecaps = [];
+
+      if (currentStreamId) {
+        try {
+          previousRecaps = await getRecentStreamRecaps({ streamId: currentStreamId, limit: 5 });
+          console.log(`[Recap] Loaded ${previousRecaps.length} previous hourly recap(s) from this stream for continuity context.`);
+        } catch (historyErr) {
+          console.error('[Recap] Could not load previous stream recap context. Continuing without it:', historyErr.message || historyErr);
+        }
+      }
 
       if (chatLogs.length === 0 && eventSnapshot.length === 0) {
-        twitchMessage = SUMMARY_PREFIX + 'Chat was quiet this hour—nothing notable to recap.';
+        recapSummaryBody = 'Chat was quiet this hour—nothing notable to recap.';
+        twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       } else {
-        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot);
-        twitchMessage = SUMMARY_PREFIX + result.summary;
+        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps);
+        recapSummaryBody = result.summary;
+        twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
 
       if (!streamLive) {
@@ -978,6 +1033,20 @@ function createRecapManager({
       await client.say(channelName, twitchMessage, { temporaryPin: true });
       console.log('[Recap] Sent:', twitchMessage);
       console.log(`[Recap] Length: ${twitchMessage.length}/500`);
+
+      if (currentStreamId && recapSummaryBody) {
+        try {
+          await saveStreamRecap({
+            streamId: currentStreamId,
+            channelName,
+            startedAt: streamSessionStartedAt || null,
+            text: recapSummaryBody
+          });
+          console.log('[Recap] Stored this hourly recap in MongoDB for same-stream continuity context.');
+        } catch (historyErr) {
+          console.error('[Recap] Recap sent successfully, but MongoDB history storage failed:', historyErr.message || historyErr);
+        }
+      }
 
       discardMessageSnapshot(snapshotMaxId);
       discardContextSnapshot(snapshotMaxContextId);
@@ -1055,6 +1124,7 @@ function createRecapManager({
     return {
       streamStateInitialized,
       streamLive,
+      currentStreamId: currentStreamId || null,
       currentStreamTitle: currentStreamTitle || null,
       currentStreamCategory: currentStreamCategory || null,
       currentStreamGameId: currentStreamGameId || null,
@@ -1085,6 +1155,11 @@ function createRecapManager({
       category: item.category,
       gameId: item.gameId
     }));
+  }
+
+  async function getCurrentStreamRecapHistory(limit = 5) {
+    if (!currentStreamId) return [];
+    return getRecentStreamRecaps({ streamId: currentStreamId, limit });
   }
 
   async function start() {
@@ -1124,6 +1199,7 @@ function createRecapManager({
     getCurrentWindowLogs,
     getCurrentWindowContexts,
     getCurrentWindowEvents,
+    getCurrentStreamRecapHistory,
     getStatus
   };
 }
