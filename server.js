@@ -37,6 +37,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
+const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim();
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
@@ -49,6 +50,10 @@ const botUsername = (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim()
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+if (!QWERT_OAUTH_LINK_SECRET) {
+  console.warn('WARNING: QWERT_OAUTH_LINK_SECRET is not set. Private Qwert broadcaster authorization will be unavailable.');
+}
 
 const oauthStates = new Map();
 const broadcasterOauthStates = new Map();
@@ -106,6 +111,16 @@ function isModOrBroadcaster(tags) {
 
 function isValidDashboardPassword(password) {
   return Boolean(DASHBOARD_PASSWORD && password === DASHBOARD_PASSWORD);
+}
+
+function isValidQwertOAuthSecret(value) {
+  if (!QWERT_OAUTH_LINK_SECRET || typeof value !== 'string') return false;
+
+  const provided = Buffer.from(value);
+  const expected = Buffer.from(QWERT_OAUTH_LINK_SECRET);
+
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
 }
 
 function escapeHtmlServer(value) {
@@ -623,13 +638,35 @@ app.get('/auth/twitch/callback', async (req, res) => {
   }
 });
 
-app.get('/auth/broadcaster/start' , (req, res) => {
+app.get('/authorize-qwert', async (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  if (!QWERT_OAUTH_LINK_SECRET) {
+    return res.status(503).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Broadcaster authorization is not configured</h2><p>QWERT_OAUTH_LINK_SECRET is missing on the server.</p></body></html>`);
+  }
+
+  if (!isValidQwertOAuthSecret(String(req.query.key || ''))) {
+    return res.status(403).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Invalid authorization link</h2><p>This private Qwert authorization link is invalid.</p></body></html>`);
+  }
+
   if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
     return res.status(500).send('TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET is not configured.');
   }
 
   if (!databaseConnected) {
     return res.status(500).send('MongoDB is not connected.');
+  }
+
+  try {
+    const existing = await getBroadcasterAuthStatus();
+    const scopes = Array.isArray(existing.scopes) ? existing.scopes : [];
+    const alreadyAuthorized = existing.stored && TWITCH_BROADCASTER_SCOPES.every((scope) => scopes.includes(scope));
+
+    if (alreadyAuthorized) {
+      return res.status(410).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Authorization link already used</h2><p><strong>${escapeHtmlServer(existing.username || channelName || 'Qwert')}</strong> has already granted <strong>channel:bot</strong>.</p><p>This private authorization link is no longer needed.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+    }
+  } catch (err) {
+    console.error('[OAuth] Could not check existing broadcaster authorization:', err.message || err);
+    return res.status(500).send('Could not verify broadcaster authorization status.');
   }
 
   const state = createBroadcasterOAuthState();
@@ -643,6 +680,10 @@ app.get('/auth/broadcaster/start' , (req, res) => {
   });
 
   res.redirect(`https://id.twitch.tv/oauth2/authorize?${params.toString()}`);
+});
+
+app.get('/auth/broadcaster/start', (req, res) => {
+  return res.status(404).send('Broadcaster OAuth is available only through the private Qwert authorization link.');
 });
 
 
@@ -804,9 +845,7 @@ app.get('/', (req, res) => {
 
   <div class="section">
     <h3>Qwert Broadcaster Authorization</h3>
-    <div class="detail">Qwert can use this without the MOD password. Twitch must be logged into <strong>${escapeHtmlServer(channelName || 'the broadcaster account')}</strong>. This grants only <strong>channel:bot</strong>, which lets SqwertArmyBot send through Twitch's official Chat API with the bot badge.</div>
-    <button id="broadcasterOauthBtn" class="secondary">Authorize Qwert for Bot Badge</button>
-    <div id="broadcasterOauthMsg" class="detail"></div>
+    <div class="detail">Broadcaster authorization is protected by a private one-time link. The public dashboard cannot start Qwert's OAuth flow. Once <strong>${escapeHtmlServer(channelName || 'the broadcaster account')}</strong> successfully grants <strong>channel:bot</strong>, the private link stops working.</div>
   </div>
 
   <div id="login" class="section">
@@ -853,9 +892,8 @@ let password='';let loggedIn=false;
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function countdown(ms){const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+'min '+(s%60)+'s'}
-async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" href="'+esc(d.qwert.twitchUrl)+'">Open Twitch</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>channel:bot granted'):'Qwert must authorize channel:bot';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
+async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" href="'+esc(d.qwert.twitchUrl)+'">Open Twitch</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>channel:bot granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
 $('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';status()};
-$('broadcasterOauthBtn').onclick=()=>{location.href='/auth/broadcaster/start'};
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
