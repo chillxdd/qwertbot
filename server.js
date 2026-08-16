@@ -32,6 +32,13 @@ const {
   getChatApiReadiness,
   sendChatMessageViaApi
 } = require('./services/twitchChat');
+const {
+  REQUIRED_EVENTSUB_SCOPES,
+  ensureEventSubSubscriptions,
+  getEventSubStatus,
+  noteEventReceived,
+  verifyEventSubRequest
+} = require('./services/twitchEventSub');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,13 +49,16 @@ const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
 const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot'];
-const TWITCH_BROADCASTER_SCOPES = ['channel:bot'];
+const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const FALLBACK_ACCESS_TOKEN = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').replace(/^oauth:/i, '').trim();
 const channelName = (process.env.TWITCH_CHANNEL || '').toLowerCase().trim();
 const botUsername = (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim();
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, res, buf) => { req.rawBody = Buffer.from(buf); }
+}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 if (!QWERT_OAUTH_LINK_SECRET) {
@@ -64,6 +74,7 @@ let twitchClient = null;
 let recapManager = null;
 let twitchReconnectInProgress = false;
 let twitchConnectionGeneration = 0;
+const recentEventSubMessageIds = new Map();
 
 function shouldFallbackToIrc(err) {
   const message = String(err?.message || err || '');
@@ -466,6 +477,98 @@ async function reconnectTwitchClient(reason = 'manual reconnect') {
   }
 }
 
+
+function cleanupRecentEventSubIds() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [id, seenAt] of recentEventSubMessageIds.entries()) {
+    if (seenAt < cutoff) recentEventSubMessageIds.delete(id);
+  }
+}
+
+function formatEventSubForRecap(type, event) {
+  const name = event?.user_name || event?.user_login || 'A viewer';
+
+  switch (type) {
+    case 'channel.subscribe':
+      if (event?.is_gift) return null; // gift details arrive through channel.subscription.gift
+      return `${name} subscribed to Qwert at Tier ${String(event?.tier || '1000').replace('1000', '1').replace('2000', '2').replace('3000', '3')}.`;
+    case 'channel.subscription.message': {
+      const months = Number(event?.cumulative_months || 0);
+      const message = String(event?.message?.text || '').trim();
+      return `${name} resubscribed${months ? ` for ${months} cumulative month(s)` : ''}${message ? ` and wrote: ${message}` : ''}.`;
+    }
+    case 'channel.subscription.gift': {
+      const total = Number(event?.total || 0);
+      if (event?.is_anonymous) return `An anonymous viewer gifted ${total || 'multiple'} subscription(s) to Qwert's channel.`;
+      return `${name} gifted ${total || 'multiple'} subscription(s) to Qwert's channel.`;
+    }
+    case 'channel.cheer': {
+      const bits = Number(event?.bits || 0);
+      if (event?.is_anonymous) return `An anonymous viewer cheered ${bits} Bits.`;
+      return `${name} cheered ${bits} Bits.`;
+    }
+    case 'channel.follow':
+      return `${name} followed Qwert.`;
+    case 'channel.raid':
+      return `${event?.from_broadcaster_user_name || event?.from_broadcaster_user_login || 'A streamer'} raided Qwert with ${Number(event?.viewers || 0)} viewer(s).`;
+    case 'channel.hype_train.begin':
+      return `A Hype Train began at level ${event?.level ?? 1}.`;
+    case 'channel.hype_train.end':
+      return `The Hype Train ended at level ${event?.level ?? 'unknown'}.`;
+    case 'stream.online':
+      return 'Qwert went live.';
+    case 'stream.offline':
+      return 'Qwert went offline.';
+    default:
+      return null;
+  }
+}
+
+app.post('/eventsub/twitch', (req, res) => {
+  try {
+    if (!verifyEventSubRequest(req)) {
+      return res.status(403).send('Invalid EventSub signature.');
+    }
+
+    const messageType = req.get('Twitch-Eventsub-Message-Type') || '';
+    const messageId = req.get('Twitch-Eventsub-Message-Id') || '';
+
+    if (messageType === 'webhook_callback_verification') {
+      return res.status(200).type('text/plain').send(String(req.body?.challenge || ''));
+    }
+
+    if (messageType === 'revocation') {
+      console.warn('[EventSub] Subscription revoked:', req.body?.subscription?.type, req.body?.subscription?.status);
+      return res.sendStatus(204);
+    }
+
+    if (messageType !== 'notification') return res.sendStatus(204);
+
+    cleanupRecentEventSubIds();
+    if (messageId && recentEventSubMessageIds.has(messageId)) return res.sendStatus(204);
+    if (messageId) recentEventSubMessageIds.set(messageId, Date.now());
+
+    noteEventReceived();
+    const type = req.body?.subscription?.type || '';
+    const event = req.body?.event || {};
+    const text = formatEventSubForRecap(type, event);
+
+    if (text && recapManager) {
+      recapManager.recordTwitchEvent({
+        type,
+        text,
+        timestamp: Date.now()
+      });
+    }
+
+    console.log(`[EventSub] ${type}: ${text || 'event received'}`);
+    return res.sendStatus(204);
+  } catch (err) {
+    console.error('[EventSub] Webhook processing failed:', err.message || err);
+    return res.sendStatus(500);
+  }
+});
+
 app.get('/health', (req, res) => {
   res.status(200).send('OK');
 });
@@ -482,6 +585,7 @@ app.get('/status', async (req, res) => {
         loggingMessages: false,
         recapPaused: false,
         messagesInWindow: 0,
+        twitchEventsInWindow: 0,
         contextChangesInWindow: 0,
         recapInProgress: false,
         nextRecapAt: null,
@@ -510,6 +614,9 @@ app.get('/status', async (req, res) => {
     broadcasterMissingScopes: ['channel:bot']
   };
 
+  const eventSubStatus = getEventSubStatus();
+  let broadcasterMissingAllScopes = [...TWITCH_BROADCASTER_SCOPES];
+
   try {
     if (databaseConnected) {
       [authStatus, broadcasterAuthStatus, chatApiStatus] = await Promise.all([
@@ -517,6 +624,7 @@ app.get('/status', async (req, res) => {
         getBroadcasterAuthStatus(),
         getChatApiReadiness()
       ]);
+      broadcasterMissingAllScopes = TWITCH_BROADCASTER_SCOPES.filter((scope) => !(broadcasterAuthStatus.scopes || []).includes(scope));
     }
   } catch (err) {
     console.error('[OAuth] Could not load Twitch authorization status:', err.message || err);
@@ -537,6 +645,7 @@ app.get('/status', async (req, res) => {
       loggingMessages: recapStatus.loggingMessages,
       recapPaused: recapStatus.recapPaused,
       messagesInWindow: recapStatus.messagesInWindow,
+      twitchEventsInWindow: recapStatus.twitchEventsInWindow || 0,
       contextChangesInWindow: recapStatus.contextChangesInWindow,
       recapInProgress: recapStatus.recapInProgress,
       nextRecapAt: recapStatus.nextRecapAt,
@@ -558,9 +667,16 @@ app.get('/status', async (req, res) => {
         username: broadcasterAuthStatus.username,
         scopes: broadcasterAuthStatus.scopes,
         updatedAt: broadcasterAuthStatus.updatedAt,
-        missingScopes: chatApiStatus.broadcasterMissingScopes || []
+        missingScopes: broadcasterMissingAllScopes
       },
       chatApiReady: Boolean(chatApiStatus.ready)
+    },
+    eventsub: {
+      requiredScopes: REQUIRED_EVENTSUB_SCOPES,
+      lastEnsureAt: eventSubStatus.lastEnsureAt,
+      lastEnsureError: eventSubStatus.lastEnsureError,
+      subscriptions: eventSubStatus.lastEnsureResults,
+      lastEventAt: eventSubStatus.lastEventAt
     }
   });
 });
@@ -651,9 +767,20 @@ app.get('/auth/twitch/callback', async (req, res) => {
       }
 
       await storeBroadcasterAuthorizationCodeResult(tokenData);
-      console.log(`[OAuth] Broadcaster channel:bot authorization saved to MongoDB for ${authorizedLogin}.`);
+      console.log(`[OAuth] Broadcaster authorization saved to MongoDB for ${authorizedLogin}.`);
 
-      return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Broadcaster authorization successful</h2><p>Authorized broadcaster: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The <strong>channel:bot</strong> permission was stored securely in MongoDB.</p><p>Return to the dashboard. When the bot authorization is also updated, the dashboard will show <strong>BOT BADGE READY</strong>.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+      let eventSubNote = 'EventSub setup will be retried automatically if needed.';
+      try {
+        const eventSubResults = await ensureEventSubSubscriptions();
+        const failures = eventSubResults.filter((item) => item.status === 'error');
+        eventSubNote = failures.length
+          ? `Broadcaster OAuth succeeded. ${failures.length} EventSub subscription(s) need a retry; check Render logs.`
+          : `Broadcaster OAuth succeeded and ${eventSubResults.length} Twitch EventSub subscriptions were created or already existed.`;
+      } catch (eventSubErr) {
+        console.error('[EventSub] Setup after broadcaster OAuth failed:', eventSubErr.message || eventSubErr);
+      }
+
+      return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Broadcaster authorization successful</h2><p>Authorized broadcaster: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The bot-badge and EventSub permissions were stored securely in MongoDB.</p><p>${escapeHtmlServer(eventSubNote)}</p><p>Return to the dashboard. When the bot authorization is also updated, the dashboard will show <strong>BOT BADGE READY</strong>.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
     }
 
     const tokenData = await exchangeAuthorizationCode({
@@ -716,7 +843,7 @@ app.get('/authorize-qwert', async (req, res) => {
     const alreadyAuthorized = existing.stored && TWITCH_BROADCASTER_SCOPES.every((scope) => scopes.includes(scope));
 
     if (alreadyAuthorized) {
-      return res.status(410).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Authorization link already used</h2><p><strong>${escapeHtmlServer(existing.username || channelName || 'Qwert')}</strong> has already granted <strong>channel:bot</strong>.</p><p>This private authorization link is no longer needed.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+      return res.status(410).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Authorization link already used</h2><p><strong>${escapeHtmlServer(existing.username || channelName || 'Qwert')}</strong> has already granted all currently required broadcaster permissions.</p><p>This private authorization link is no longer needed.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
     }
   } catch (err) {
     console.error('[OAuth] Could not check existing broadcaster authorization:', err.message || err);
@@ -822,12 +949,14 @@ app.post('/test-summary', async (req, res) => {
   let source;
   let totalValidMessages;
   let streamContexts = [];
+  let twitchEvents = [];
 
   if (type === 'stored') {
     logs = recapManager.getCurrentWindowLogs();
     streamContexts = recapManager.getCurrentWindowContexts();
-    if (logs.length === 0) {
-      return res.status(400).json({ success: false, error: 'There are currently no messages in the active automatic recap window.' });
+    twitchEvents = recapManager.getCurrentWindowEvents();
+    if (logs.length === 0 && twitchEvents.length === 0) {
+      return res.status(400).json({ success: false, error: 'There are currently no messages or Twitch events in the active automatic recap window.' });
     }
     source = 'stored';
     totalValidMessages = logs.length;
@@ -851,7 +980,7 @@ app.post('/test-summary', async (req, res) => {
   }
 
   try {
-    const result = await generateRecap(logs, streamContexts);
+    const result = await generateRecap(logs, streamContexts, twitchEvents);
     const fullOutput = SUMMARY_PREFIX + result.summary;
 
     res.json({
@@ -860,6 +989,7 @@ app.post('/test-summary', async (req, res) => {
       messageCount: logs.length,
       totalValidMessages,
       streamContextCount: streamContexts.length,
+      twitchEventCount: twitchEvents.length,
       output: fullOutput,
       characterCount: fullOutput.length,
       sanitized: result.sanitization.sanitized,
@@ -904,7 +1034,7 @@ app.get('/', (req, res) => {
 
   <div class="section">
     <h3>Qwert Broadcaster Authorization</h3>
-    <div class="detail">Broadcaster authorization is protected by a private one-time link. The public dashboard cannot start Qwert's OAuth flow. Once <strong>${escapeHtmlServer(channelName || 'the broadcaster account')}</strong> successfully grants <strong>channel:bot</strong>, the private link stops working.</div>
+    <div class="detail">Broadcaster authorization is protected by a private one-time link. The public dashboard cannot start Qwert's OAuth flow. Once <strong>${escapeHtmlServer(channelName || 'the broadcaster account')}</strong> successfully grants the bot-badge + EventSub permissions, the private link stops working.</div>
   </div>
 
   <div id="login" class="section">
@@ -951,7 +1081,7 @@ let password='';let loggedIn=false;
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function countdown(ms){const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+'min '+(s%60)+'s'}
-async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" href="'+esc(d.qwert.twitchUrl)+'">Open Twitch</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>channel:bot granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
+async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" href="'+esc(d.qwert.twitchUrl)+'">Open Twitch</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) + '+(d.bot.twitchEventsInWindow||0)+' Twitch event(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>Bot badge + EventSub scopes granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
 $('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';status()};
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
@@ -996,6 +1126,14 @@ async function bootstrap() {
     }
   } else {
     console.warn('[Bot] No Twitch access token is available. Open the WebUI and authorize the bot.');
+  }
+
+  if (databaseConnected) {
+    try {
+      await ensureEventSubSubscriptions();
+    } catch (err) {
+      console.log('[EventSub] Startup setup pending:', err.message || err);
+    }
   }
 }
 
