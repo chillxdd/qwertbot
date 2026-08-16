@@ -22,6 +22,17 @@ const {
   validateAccessToken
 } = require('./services/twitchAuth');
 
+const {
+  exchangeBroadcasterAuthorizationCode,
+  getBroadcasterAuthStatus,
+  storeBroadcasterAuthorizationCodeResult,
+  validateBroadcasterAccessToken
+} = require('./services/twitchBroadcasterAuth');
+const {
+  getChatApiReadiness,
+  sendChatMessageViaApi
+} = require('./services/twitchChat');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -29,7 +40,8 @@ const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
-const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit'];
+const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot'];
+const TWITCH_BROADCASTER_SCOPES = ['channel:bot'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const FALLBACK_ACCESS_TOKEN = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').replace(/^oauth:/i, '').trim();
 const channelName = (process.env.TWITCH_CHANNEL || '').toLowerCase().trim();
@@ -39,6 +51,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 const oauthStates = new Map();
+const broadcasterOauthStates = new Map();
 let botConnected = false;
 let databaseConnected = false;
 let usingMongoOAuth = false;
@@ -49,10 +62,16 @@ let twitchConnectionGeneration = 0;
 
 const chatClientProxy = {
   async say(channel, message) {
-    if (!twitchClient || !botConnected) {
-      throw new Error('Twitch chat client is not connected.');
+    if (!databaseConnected) {
+      throw new Error('MongoDB is not connected, so Twitch Chat API authorization cannot be verified.');
     }
-    return twitchClient.say(channel, message);
+
+    const normalizedChannel = String(channel || '').replace(/^#/, '').toLowerCase();
+    if (normalizedChannel && normalizedChannel !== channelName) {
+      throw new Error(`SqwertArmyBot is configured to send only to #${channelName}.`);
+    }
+
+    return sendChatMessageViaApi(message);
   }
 };
 
@@ -116,6 +135,27 @@ function consumeOAuthState(state) {
   cleanupOAuthStates();
   if (!state || !oauthStates.has(state)) return false;
   oauthStates.delete(state);
+  return true;
+}
+
+function cleanupBroadcasterOAuthStates() {
+  const now = Date.now();
+  for (const [state, createdAt] of broadcasterOauthStates.entries()) {
+    if (now - createdAt > OAUTH_STATE_LIFETIME) broadcasterOauthStates.delete(state);
+  }
+}
+
+function createBroadcasterOAuthState() {
+  cleanupBroadcasterOAuthStates();
+  const state = crypto.randomBytes(32).toString('hex');
+  broadcasterOauthStates.set(state, Date.now());
+  return state;
+}
+
+function consumeBroadcasterOAuthState(state) {
+  cleanupBroadcasterOAuthStates();
+  if (!state || !broadcasterOauthStates.has(state)) return false;
+  broadcasterOauthStates.delete(state);
   return true;
 }
 
@@ -382,14 +422,35 @@ app.get('/status', async (req, res) => {
   let authStatus = {
     stored: false,
     username: null,
+    twitchUserId: null,
     scopes: [],
     updatedAt: null
   };
 
+  let broadcasterAuthStatus = {
+    stored: false,
+    username: null,
+    twitchUserId: null,
+    scopes: [],
+    updatedAt: null
+  };
+
+  let chatApiStatus = {
+    ready: false,
+    botMissingScopes: ['user:write:chat', 'user:bot'],
+    broadcasterMissingScopes: ['channel:bot']
+  };
+
   try {
-    if (databaseConnected) authStatus = await getAuthStatus();
+    if (databaseConnected) {
+      [authStatus, broadcasterAuthStatus, chatApiStatus] = await Promise.all([
+        getAuthStatus(),
+        getBroadcasterAuthStatus(),
+        getChatApiReadiness()
+      ]);
+    }
   } catch (err) {
-    console.error('[OAuth] Could not load auth status:', err.message || err);
+    console.error('[OAuth] Could not load Twitch authorization status:', err.message || err);
   }
 
   res.json({
@@ -421,7 +482,16 @@ app.get('/status', async (req, res) => {
       username: authStatus.username,
       scopes: authStatus.scopes,
       updatedAt: authStatus.updatedAt,
-      usingMongoOAuth
+      usingMongoOAuth,
+      botMissingScopes: chatApiStatus.botMissingScopes || [],
+      broadcaster: {
+        stored: broadcasterAuthStatus.stored,
+        username: broadcasterAuthStatus.username,
+        scopes: broadcasterAuthStatus.scopes,
+        updatedAt: broadcasterAuthStatus.updatedAt,
+        missingScopes: chatApiStatus.broadcasterMissingScopes || []
+      },
+      chatApiReady: Boolean(chatApiStatus.ready)
     }
   });
 });
@@ -470,17 +540,53 @@ app.post('/auth/twitch/start', (req, res) => {
 app.get('/auth/twitch/callback', async (req, res) => {
   const { code, state, error, error_description: errorDescription } = req.query;
 
-  if (error) {
-    return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Twitch authorization failed</h2><p>${escapeHtmlServer(errorDescription || error)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+  cleanupOAuthStates();
+  cleanupBroadcasterOAuthStates();
+
+  const isBotAuthorization = Boolean(state && oauthStates.has(state));
+  const isBroadcasterAuthorization = Boolean(state && broadcasterOauthStates.has(state));
+
+  if (!isBotAuthorization && !isBroadcasterAuthorization) {
+    return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>OAuth request expired</h2><p>Return to the dashboard and start authorization again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
   }
 
-  if (!consumeOAuthState(state)) {
-    return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>OAuth request expired</h2><p>Return to the dashboard and click Authorize Twitch Bot again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+  if (isBotAuthorization) consumeOAuthState(state);
+  if (isBroadcasterAuthorization) consumeBroadcasterOAuthState(state);
+
+  if (error) {
+    const who = isBroadcasterAuthorization ? 'Broadcaster' : 'Bot';
+    return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>${who} Twitch authorization failed</h2><p>${escapeHtmlServer(errorDescription || error)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
   }
 
   if (!code) return res.status(400).send('Missing Twitch authorization code.');
 
   try {
+    if (isBroadcasterAuthorization) {
+      const tokenData = await exchangeBroadcasterAuthorizationCode({
+        code,
+        redirectUri: TWITCH_REDIRECT_URI
+      });
+
+      const validation = await validateBroadcasterAccessToken(tokenData.access_token);
+      const authorizedLogin = (validation.login || '').toLowerCase().trim();
+
+      if (channelName && authorizedLogin !== channelName) {
+        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong broadcaster account</h2><p>You authorized <strong>${escapeHtmlServer(authorizedLogin || 'unknown')}</strong>, but TWITCH_CHANNEL is <strong>${escapeHtmlServer(channelName)}</strong>.</p><p>Log into Twitch as the broadcaster/channel owner and try again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+      }
+
+      const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
+      const missingScopes = TWITCH_BROADCASTER_SCOPES.filter((scope) => !scopes.includes(scope));
+
+      if (missingScopes.length > 0) {
+        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Missing broadcaster permission</h2><p>Missing: ${escapeHtmlServer(missingScopes.join(', '))}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+      }
+
+      await storeBroadcasterAuthorizationCodeResult(tokenData);
+      console.log(`[OAuth] Broadcaster channel:bot authorization saved to MongoDB for ${authorizedLogin}.`);
+
+      return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Broadcaster authorization successful</h2><p>Authorized broadcaster: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The <strong>channel:bot</strong> permission was stored securely in MongoDB.</p><p>Return to the dashboard. When the bot authorization is also updated, the dashboard will show <strong>BOT BADGE READY</strong>.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+    }
+
     const tokenData = await exchangeAuthorizationCode({
       code,
       redirectUri: TWITCH_REDIRECT_URI
@@ -502,20 +608,43 @@ app.get('/auth/twitch/callback', async (req, res) => {
 
     await storeAuthorizationCodeResult(tokenData);
     usingMongoOAuth = true;
-    console.log(`[OAuth] Twitch authorization saved to MongoDB for ${authorizedLogin}.`);
+    console.log(`[OAuth] Bot authorization saved to MongoDB for ${authorizedLogin}.`);
 
     setTimeout(() => {
-      reconnectTwitchClient('new MongoDB OAuth authorization').catch((err) => {
+      reconnectTwitchClient('updated MongoDB OAuth authorization').catch((err) => {
         console.error('[OAuth] Twitch reconnect after authorization failed:', err.message || err);
       });
     }, 500);
 
-    return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Twitch authorization successful</h2><p>Authorized account: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The access token and refresh token were stored directly in MongoDB. You do not need to copy them into Render.</p><p>SqwertArmyBot is reconnecting to Twitch using the new credentials.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+    return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API as well as the legacy IRC connection used to receive chat.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
   } catch (err) {
     console.error('[OAuth] Twitch callback failed:', err.message || err);
     return res.status(500).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Twitch OAuth error</h2><p>${escapeHtmlServer(err.message)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
   }
 });
+
+app.get('/auth/broadcaster/start' , (req, res) => {
+  if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
+    return res.status(500).send('TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET is not configured.');
+  }
+
+  if (!databaseConnected) {
+    return res.status(500).send('MongoDB is not connected.');
+  }
+
+  const state = createBroadcasterOAuthState();
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: TWITCH_CLIENT_ID,
+    redirect_uri: TWITCH_REDIRECT_URI,
+    scope: TWITCH_BROADCASTER_SCOPES.join(' '),
+    state,
+    force_verify: 'true'
+  });
+
+  res.redirect(`https://id.twitch.tv/oauth2/authorize?${params.toString()}`);
+});
+
 
 app.post('/recap-control', async (req, res) => {
   if (!isValidDashboardPassword(req.body.password)) {
@@ -668,7 +797,16 @@ app.get('/', (req, res) => {
     <div class="box"><div class="label">Qwert</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
     <div class="box"><div class="label">Bot</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
     <div class="box"><div class="label">MongoDB</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
-    <div class="box"><div class="label">Twitch OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div></div>
+    <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div></div>
+    <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div></div>
+    <div class="box"><div class="label">Twitch Chat API</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
+  </div>
+
+  <div class="section">
+    <h3>Qwert Broadcaster Authorization</h3>
+    <div class="detail">Qwert can use this without the MOD password. Twitch must be logged into <strong>${escapeHtmlServer(channelName || 'the broadcaster account')}</strong>. This grants only <strong>channel:bot</strong>, which lets SqwertArmyBot send through Twitch's official Chat API with the bot badge.</div>
+    <button id="broadcasterOauthBtn" class="secondary">Authorize Qwert for Bot Badge</button>
+    <div id="broadcasterOauthMsg" class="detail"></div>
   </div>
 
   <div id="login" class="section">
@@ -680,9 +818,9 @@ app.get('/', (req, res) => {
 
   <div id="protected">
     <div class="section">
-      <h3>Twitch OAuth</h3>
-      <div class="detail">Authorize the Twitch account named <strong>${escapeHtmlServer(botUsername || 'TWITCH_BOT_USERNAME')}</strong>. Tokens are saved directly to MongoDB.</div>
-      <button id="oauthBtn">Authorize Twitch Bot</button>
+      <h3>Bot OAuth</h3>
+      <div class="detail">Authorize the Twitch account named <strong>${escapeHtmlServer(botUsername || 'TWITCH_BOT_USERNAME')}</strong>. This update requests the modern bot scopes needed for the official Send Chat Message API while keeping the IRC scopes used to receive chat.</div>
+      <button id="oauthBtn">Reauthorize Twitch Bot for Chat API</button>
       <div id="oauthMsg" class="detail"></div>
     </div>
 
@@ -715,8 +853,9 @@ let password='';let loggedIn=false;
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function countdown(ms){const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+'min '+(s%60)+'s'}
-async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" href="'+esc(d.qwert.twitchUrl)+'">Open Twitch</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';$('oauthStatusBox').textContent=d.oauth.stored?'AUTHORIZED':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+'<br>'+(d.oauth.usingMongoOAuth?'Bot is using MongoDB OAuth':'Stored, but bot is still on fallback token'):'Click Authorize Twitch Bot after MOD login';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
+async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" href="'+esc(d.qwert.twitchUrl)+'">Open Twitch</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>channel:bot granted'):'Qwert must authorize channel:bot';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
 $('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';status()};
+$('broadcasterOauthBtn').onclick=()=>{location.href='/auth/broadcaster/start'};
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
