@@ -65,18 +65,72 @@ let recapManager = null;
 let twitchReconnectInProgress = false;
 let twitchConnectionGeneration = 0;
 
+function shouldFallbackToIrc(err) {
+  const message = String(err?.message || err || '');
+
+  if (message.includes('MongoDB is not connected')) return true;
+  if (message.includes('Twitch Chat API is not ready:')) return true;
+  if (message.includes('Could not create Twitch App Access Token. HTTP 5')) return true;
+  if (message.includes('Twitch Send Chat Message API failed with HTTP 401')) return true;
+  if (/Twitch Send Chat Message API failed with HTTP 5\d\d/.test(message)) return true;
+
+  // Node fetch/network failures are commonly surfaced as TypeError: fetch failed.
+  if (err instanceof TypeError && /fetch/i.test(message)) return true;
+
+  return false;
+}
+
+async function sendViaIrcFallback(channel, message, apiError) {
+  if (!twitchClient || !botConnected) {
+    throw apiError;
+  }
+
+  const normalizedChannel = String(channel || '').replace(/^#/, '').toLowerCase();
+  const targetChannel = normalizedChannel || channelName;
+
+  console.warn(
+    `[Chat] Chat API unavailable (${apiError?.message || apiError}). Falling back to IRC for this message.`
+  );
+
+  await twitchClient.say(targetChannel, message);
+
+  console.log('[Chat] Message sent through IRC fallback. Bot badge will not apply to this message.');
+
+  return {
+    method: 'irc_fallback',
+    fallback: true,
+    apiError: apiError?.message || String(apiError || '')
+  };
+}
+
 const chatClientProxy = {
   async say(channel, message) {
-    if (!databaseConnected) {
-      throw new Error('MongoDB is not connected, so Twitch Chat API authorization cannot be verified.');
-    }
-
     const normalizedChannel = String(channel || '').replace(/^#/, '').toLowerCase();
     if (normalizedChannel && normalizedChannel !== channelName) {
       throw new Error(`SqwertArmyBot is configured to send only to #${channelName}.`);
     }
 
-    return sendChatMessageViaApi(message);
+    try {
+      if (!databaseConnected) {
+        throw new Error('MongoDB is not connected, so Twitch Chat API authorization cannot be verified.');
+      }
+
+      const result = await sendChatMessageViaApi(message);
+
+      console.log('[Chat] Message sent through Twitch Chat API.');
+
+      return {
+        method: 'chat_api',
+        fallback: false,
+        result
+      };
+    } catch (err) {
+      if (!shouldFallbackToIrc(err)) {
+        throw err;
+      }
+
+      return sendViaIrcFallback(channel, message, err);
+    }
   }
 };
 
@@ -725,11 +779,16 @@ app.post('/send-chat', async (req, res) => {
   }
 
   try {
-    await chatClientProxy.say(channelName, message.trim());
-    res.json({ success: true });
+    const sendResult = await chatClientProxy.say(channelName, message.trim());
+
+    res.json({
+      success: true,
+      method: sendResult?.method || 'unknown',
+      fallback: Boolean(sendResult?.fallback)
+    });
   } catch (err) {
     console.error('Failed to send message:', err);
-    res.status(500).json({ success: false, error: 'Failed to send to Twitch.' });
+    res.status(500).json({ success: false, error: err.message || 'Failed to send to Twitch.' });
   }
 });
 
@@ -897,7 +956,7 @@ $('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
-$('sendBtn').onclick=async()=>{const message=$('chatMessage').value.trim();if(!message)return;const d=await (await fetch('/send-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,message})})).json();$('chatMsg').textContent=d.success?'Sent!':d.error;if(d.success)$('chatMessage').value=''};
+$('sendBtn').onclick=async()=>{const message=$('chatMessage').value.trim();if(!message)return;const d=await (await fetch('/send-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,message})})).json();if(d.success){$('chatMsg').textContent=d.fallback?'Sent via IRC fallback (no bot badge for this message).':'Sent via Twitch Chat API.';$('chatMessage').value=''}else{$('chatMsg').textContent=d.error||'Failed to send.'}};
 async function test(type){const body={password,type};if(type==='pasted')body.pastedChat=$('pasted').value;$('testResult').textContent='Generating...';const d=await (await fetch('/test-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();$('testResult').textContent=d.success?d.output+'\\n\\n'+d.characterCount+'/500 characters':(d.error?.message||d.error||'Error')}
 $('sampleBtn').onclick=()=>test('sample');$('storedBtn').onclick=()=>test('stored');$('pastedBtn').onclick=()=>test('pasted');
 status();setInterval(status,15000);
