@@ -1130,7 +1130,6 @@ app.get('/', (req, res) => {
 
     <div class="section">
       <h3>AI Recap Testing</h3>
-      <button id="sampleBtn" class="secondary">Test Sample Chat</button>
       <button id="storedBtn" class="secondary">Test Current Recap Window</button>
       <div id="testResult"></div>
     </div>
@@ -1165,7 +1164,7 @@ async function recapAction(action){const d=await (await fetch('/recap-control',{
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
 $('sendBtn').onclick=async()=>{const message=$('chatMessage').value.trim();if(!message)return;const d=await (await fetch('/send-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,message})})).json();if(d.success){$('chatMsg').textContent=d.fallback?'Sent via IRC fallback (no bot badge for this message).':'Sent via Twitch Chat API.';$('chatMessage').value=''}else{$('chatMsg').textContent=d.error||'Failed to send.'}};
 async function test(type){const body={password,type};$('testResult').textContent='Generating...';const d=await (await fetch('/test-summary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();$('testResult').textContent=d.success?d.output+'\\n\\n'+d.characterCount+'/500 characters':(d.error?.message||d.error||'Error')}
-$('sampleBtn').onclick=()=>test('sample');$('storedBtn').onclick=()=>test('stored');
+$('storedBtn').onclick=()=>test('stored');
 status();setInterval(status,15000);
 </script>
 </body>
