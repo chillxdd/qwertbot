@@ -203,6 +203,9 @@ REFERENT AND LABEL PRESERVATION:
 - Suggestions to add/remove/replace/rank Pokemon do NOT automatically mean gameplay team changes.
 - Do not infer the purpose of a collection, ranking, list, group, favorites selection, lineup, roster, party, or box.
 - Keep source terminology whenever possible. Broader-but-accurate wording is better than specific-but-inferred wording.
+- Directional or ordinal choices such as "left / middle / right", "first / second / third", colors, letters, or numbers do NOT by themselves prove that chat was navigating a menu, choosing an item, selecting a starter, picking a Pokeball, or performing any other gameplay/UI action.
+- If chat only debates options like "left, middle, or right," summarize that literally as chat debating or voting on left/middle/right unless the source itself identifies what those choices represent.
+- Never use stream title/category or outside game knowledge to name an ambiguous choice. For example, a Pokemon category does not let you infer that "left / middle / right" means starter Pokeballs.
 
 MESSAGE ORDER AND RECENCY:
 - Messages are ordered older to newer, but order is NOT a narrative timeline.
@@ -264,7 +267,8 @@ BEFORE WRITING, SILENTLY CHECK:
 3. Did I replace a source label with a more specific one?
 4. Did I use title/category as proof of an event?
 5. Did I turn a suggestion/question/joke into fact?
-6. Did I rely on stock wording like "banter" when a concrete description works?
+6. Did I infer what an ambiguous choice (left/middle/right, first/second/third, etc.) represented, or turn it into menu/navigation/gameplay action without explicit source support?
+7. Did I rely on stock wording like "banter" when a concrete description works?
 If yes, fix it.
 
 LENGTH AND COVERAGE:
@@ -302,6 +306,7 @@ RULES:
 - Do not import an event or detail from an earlier recap unless the current source chat or current verified events support it in this hour.
 - Add only noteworthy details directly supported by chat.
 - Preserve ambiguity and exact labels. "favorites" must not become "team" unless chat establishes team.
+- Directional/ordinal choices such as "left / middle / right" or "first / second / third" must remain literal unless source chat explicitly identifies what the choices are. Do not turn them into menu navigation, item selection, starter selection, Pokeballs, or another gameplay/UI action based on metadata or game knowledge.
 - Do not infer chronology from message order.
 - Do not imply causation from proximity/order. Avoid causal connectors such as prompting/leading to/causing/resulting in/sparking/triggering unless chat explicitly proves the relationship.
 - Do not turn questions, jokes, suggestions, guesses, or predictions into facts.
@@ -318,7 +323,7 @@ RULES:
 - Use 2-4 compact complete sentences. Never end with "...".
 - Do not start with "Hourly Recap:", "Chat Recap:", or "AI Summary:".
 
-Before outputting, silently verify every causal link and every specific noun/label against the source chat. If it was inferred, rewrite neutrally.
+Before outputting, silently verify every causal link, every specific noun/label, and every interpretation of an ambiguous choice against the source chat. If it was inferred, rewrite neutrally.
 
 Output ONLY the revised recap.`;
 }
