@@ -5,10 +5,8 @@ const crypto = require('crypto');
 const {
   createRecapManager,
   generateRecap,
-  parsePastedChat,
   SUMMARY_PREFIX,
-  TWITCH_MESSAGE_LIMIT,
-  MAX_PASTED_MESSAGES
+  TWITCH_MESSAGE_LIMIT
 } = require('./commands/recap');
 
 const { connectDatabase } = require('./services/database');
@@ -980,7 +978,7 @@ app.post('/send-chat', async (req, res) => {
 });
 
 app.post('/test-summary', async (req, res) => {
-  const { password, type, pastedChat } = req.body;
+  const { password } = req.body;
 
   if (!isValidDashboardPassword(password)) {
     return res.status(401).json({ success: false, error: 'Incorrect password!' });
@@ -990,66 +988,20 @@ app.post('/test-summary', async (req, res) => {
     return res.status(503).json({ success: false, error: 'Recap manager is not ready.' });
   }
 
-  const sampleChatLogs = [
-    'jebadiahchrist: when will you be continuing the Elden ring run?',
-    'motmo_: W dalthecow',
-    'dude_theguy: @Motmo_ LUL we have fun here',
-    'dalthecow: for gl',
-    'nightbot: W dalthecow',
-    'coosgoose: W dal',
-    'jebadiahchrist: holy shit you almost have 200 on twitch',
-    'dude_theguy: W dalthecow',
-    'perkinssx: W',
-    'heifer54321: WW',
-    'dumb_boyy: n opole?',
-    'coosgoose: @Motmo_ Hahaha he was a formidable foe, he put in more work than I to be sure'
-  ].filter((line) => !isIgnoredUsername(line.split(':')[0]));
-
-  let logs;
-  let source;
-  let totalValidMessages;
-  let streamContexts = [];
-  let twitchEvents = [];
+  const logs = recapManager.getCurrentWindowLogs();
+  const streamContexts = recapManager.getCurrentWindowContexts();
+  const twitchEvents = recapManager.getCurrentWindowEvents();
   let previousRecaps = [];
 
-  if (type === 'stored') {
-    logs = recapManager.getCurrentWindowLogs();
-    streamContexts = recapManager.getCurrentWindowContexts();
-    twitchEvents = recapManager.getCurrentWindowEvents();
-    try {
-      previousRecaps = await recapManager.getCurrentStreamRecapHistory(5);
-    } catch (historyErr) {
-      console.error('Could not load previous recap history for WebUI current-window test:', historyErr.message || historyErr);
-      previousRecaps = [];
-    }
-    if (logs.length === 0 && twitchEvents.length === 0) {
-      return res.status(400).json({ success: false, error: 'There are currently no messages or Twitch events in the active automatic recap window.' });
-    }
-    source = 'stored';
-    totalValidMessages = logs.length;
-  } else if (type === 'pasted') {
-    if (typeof pastedChat !== 'string' || !pastedChat.trim()) {
-      return res.status(400).json({ success: false, error: 'No pasted chat logs were provided.' });
-    }
+  try {
+    previousRecaps = await recapManager.getCurrentStreamRecapHistory(5);
+  } catch (historyErr) {
+    console.error('Could not load previous recap history for WebUI current-window test:', historyErr.message || historyErr);
+    previousRecaps = [];
+  }
 
-    const parsed = parsePastedChat(pastedChat, ['nightbot', 'streamelements']);
-    parsed.logs = parsed.logs.filter((line) => {
-      const match = line.match(/^([^:]+):\s*(.*)$/);
-      if (!match) return true;
-      return !isBotHourlyRecap(match[1], match[2]);
-    });
-    parsed.totalValidMessages = parsed.logs.length;
-    if (parsed.logs.length === 0) {
-      return res.status(400).json({ success: false, error: 'No recognizable Twitch chat messages were found.' });
-    }
-
-    logs = parsed.logs;
-    source = 'pasted';
-    totalValidMessages = parsed.totalValidMessages;
-  } else {
-    logs = sampleChatLogs;
-    source = 'sample';
-    totalValidMessages = logs.length;
+  if (logs.length === 0 && twitchEvents.length === 0) {
+    return res.status(400).json({ success: false, error: 'There are currently no messages or Twitch events in the active automatic recap window.' });
   }
 
   try {
@@ -1058,9 +1010,9 @@ app.post('/test-summary', async (req, res) => {
 
     res.json({
       success: true,
-      source,
+      source: 'stored',
       messageCount: logs.length,
-      totalValidMessages,
+      totalValidMessages: logs.length,
       streamContextCount: streamContexts.length,
       twitchEventCount: twitchEvents.length,
       previousRecapContextCount: previousRecaps.length,

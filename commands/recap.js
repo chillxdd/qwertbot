@@ -10,7 +10,6 @@ const RECAP_FAILURE_RETRY_DELAY = 5 * 60 * 1000;
 const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
-const MAX_PASTED_MESSAGES = 150;
 const RECAP_EXPANSION_THRESHOLD = 380;
 const RECAP_EXPANSION_MIN_MESSAGES = 20;
 const ACTIVE_CHAT_MESSAGE_THRESHOLD = 100;
@@ -538,60 +537,6 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   console.log(`[Gemini Final Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
 
   return { summary, sanitization };
-}
-
-function parsePastedChat(rawText, ignoredUsernames = []) {
-  if (typeof rawText !== 'string' || !rawText.trim()) {
-    return { logs: [], totalValidMessages: 0, truncated: false };
-  }
-
-  const ignored = ignoredUsernames.filter(Boolean).map((name) => name.toLowerCase().trim());
-  const lines = rawText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const parsedMessages = [];
-
-  for (const originalLine of lines) {
-    const line = originalLine.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').trim();
-    let username = '';
-    let message = '';
-    let match = line.match(/<([A-Za-z0-9_]{1,25})>\s*:?\s*(.+)$/);
-
-    if (match) {
-      username = match[1];
-      message = match[2];
-    }
-
-    if (!username) {
-      match = line.match(/^([A-Za-z0-9_]{1,25}):\s*(.+)$/);
-      if (match) {
-        username = match[1];
-        message = match[2];
-      }
-    }
-
-    if (!username) {
-      match = line.match(/\[[^\]]+\]\s+([A-Za-z0-9_]{1,25}):\s*(.+)$/);
-      if (match) {
-        username = match[1];
-        message = match[2];
-      }
-    }
-
-    if (!username || !message) continue;
-    if (ignored.includes(username.toLowerCase())) continue;
-
-    message = message.trim();
-    if (!message) continue;
-
-    parsedMessages.push(`${username}: ${message}`);
-  }
-
-  const totalValidMessages = parsedMessages.length;
-
-  return {
-    logs: parsedMessages.slice(-MAX_PASTED_MESSAGES),
-    totalValidMessages,
-    truncated: totalValidMessages > MAX_PASTED_MESSAGES
-  };
 }
 
 function formatCountdown(milliseconds) {
@@ -1212,9 +1157,7 @@ function createRecapManager({
 module.exports = {
   createRecapManager,
   generateRecap,
-  parsePastedChat,
   SUMMARY_PREFIX,
   TWITCH_MESSAGE_LIMIT,
-  SUMMARY_TEXT_LIMIT,
-  MAX_PASTED_MESSAGES
+  SUMMARY_TEXT_LIMIT
 };
