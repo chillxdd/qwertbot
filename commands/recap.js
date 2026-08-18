@@ -1,4 +1,5 @@
 const { getRecentStreamRecaps, saveStreamRecap, clearStreamRecapsByChannel } = require('../services/streamRecapHistory');
+const { getStreamLore } = require('../services/streamLore');
 
 const SUMMARY_PREFIX = 'Hourly Recap: ';
 const TWITCH_MESSAGE_LIMIT = 500;
@@ -15,6 +16,9 @@ const RECAP_EXPANSION_MIN_MESSAGES = 20;
 const ACTIVE_CHAT_MESSAGE_THRESHOLD = 100;
 const ACTIVE_CHAT_EXPANSION_THRESHOLD = 430;
 const ACTIVE_CHAT_TARGET_MIN = 440;
+const ACTIVE_CHAT_ACCEPTABLE_MIN = 420;
+const NORMAL_CHAT_ACCEPTABLE_MIN = 380;
+const MAX_EXPANSION_ATTEMPTS = 2;
 
 const sensitivePatterns = [
   /\bporn(?:ography)?\b/gi,
@@ -103,6 +107,17 @@ function formatTwitchEvents(twitchEvents = []) {
   return `VERIFIED TWITCH EVENTS DURING THIS RECAP WINDOW:\n${lines.join('\n')}\n\nTWITCH EVENT RULES:\n- These EventSub records are verified Twitch facts and may be stated as facts.\n- Chat is still the source for viewer reactions, jokes, interpretations, and surrounding discussion.\n- Do not invent a reaction to an event unless chat supports it.\n- Do not infer that an event caused a separate chat topic merely because they occurred near each other.\n- Group routine follows rather than listing every follower unless an individual follow became relevant in chat.\n- Subs, gift subs, cheers, raids, and Hype Trains may be named when useful and supported by these verified records.`;
 }
 
+
+function formatStreamLore(streamLore = '') {
+  const lore = String(streamLore || '').trim();
+
+  if (!lore) {
+    return `STREAM-SPECIFIC LORE:\nNo manually supplied stream-specific lore is currently saved.`;
+  }
+
+  return `STREAM-SPECIFIC LORE (MANUALLY SUPPLIED BY QWERT/MOD):\n${lore}\n\nSTREAM LORE RULES:\n- This lore is persistent context supplied by Qwert/mods to explain names, callbacks, recurring jokes, relationships between recurring bits, or other channel-specific references.\n- Use it only when it helps interpret CURRENT chat or VERIFIED TWITCH EVENTS.\n- Lore may explain what a current reference means, but it does NOT prove that a lore event happened again in the current recap window.\n- Do not present lore as a current-hour event unless current chat or verified Twitch events support that it happened now.\n- Do not force lore into the recap when current chat does not make it relevant.\n- If current source material conflicts with lore, trust the current source material.`;
+}
+
 function formatPreviousRecaps(previousRecaps = []) {
   if (!Array.isArray(previousRecaps) || previousRecaps.length === 0) {
     return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\nNo earlier hourly recaps are available for this stream.`;
@@ -157,11 +172,12 @@ async function sendGeminiPrompt(prompt) {
   return data;
 }
 
-function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = []) {
+function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '') {
   const chatContext = chatLogs.join('\n');
   const streamContext = formatStreamContext(streamContexts);
   const eventContext = formatTwitchEvents(twitchEvents);
   const previousRecapContext = formatPreviousRecaps(previousRecaps);
+  const streamLoreContext = formatStreamLore(streamLore);
 
   return `You are creating a factual, useful Twitch chat recap for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
 
@@ -175,10 +191,14 @@ ${eventContext}
 
 ${previousRecapContext}
 
+${streamLoreContext}
+
 SOURCE-OF-TRUTH RULE:
 The supplied chat messages are the source of truth for chat claims, reactions, jokes, viewer opinions, and discussion.
+Messages labeled [MODERATOR ANNOUNCEMENT ...] are official Twitch /announce messages sent by a moderator or broadcaster. Treat the announcement text as an intentional channel statement for this recap window, while still avoiding assumptions about events beyond what the announcement actually says.
 The VERIFIED TWITCH EVENTS section is also a source of truth for the Twitch events explicitly listed there.
 Previous hourly recaps are continuity context only and are NOT a source of truth for the current hour.
+Stream-specific lore is manually supplied interpretation context only and is NOT proof that an event happened in the current hour.
 Twitch title/category metadata is background context only and is never proof that an event happened.
 Accuracy is more important than sounding polished or narratively complete.
 
@@ -284,7 +304,7 @@ Recent Twitch chat:
 ${chatContext}`;
 }
 
-function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], targetMin = 400) {
+function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400) {
   return `You are revising an existing Twitch recap for Qwert so it uses more of the available space without inventing anything.
 
 ${formatStreamContext(streamContexts)}
@@ -293,6 +313,8 @@ ${formatTwitchEvents(twitchEvents)}
 
 ${formatPreviousRecaps(previousRecaps)}
 
+${formatStreamLore(streamLore)}
+
 CURRENT RECAP:
 ${currentSummary}
 
@@ -300,7 +322,8 @@ SOURCE CHAT:
 ${chatLogs.join('\n')}
 
 RULES:
-- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for CURRENT-HOUR specific events and claims. Stream metadata and previous hourly recaps are context only.
+- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for CURRENT-HOUR specific events and claims. Stream metadata, previous hourly recaps, and stream-specific lore are context only.
+- Stream-specific lore may clarify a current reference but must never be treated as proof that a lore event happened again in this recap window.
 - Keep accurate existing facts; correct unsupported implications.
 - Do not import an event or detail from an earlier recap unless the current source chat or current verified events support it in this hour.
 - Add only noteworthy details directly supported by chat.
@@ -317,6 +340,12 @@ RULES:
 - When enough distinct worthwhile material exists, target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters. Treat ${targetMin} as a serious target, not a suggestion.
 - Actively scan the source for notable topics, jokes, reactions, gameplay details, predictions, or recurring themes omitted from CURRENT RECAP and add the best supported ones.
 - Prefer adding another genuinely useful detail over merely rewording the same facts.
+- Every added detail must introduce a genuinely distinct topic, event, joke, reaction, conclusion, or fact that is not already represented in CURRENT RECAP.
+- Preserve [MODERATOR ANNOUNCEMENT ...] messages as clearly intentional moderator/broadcaster statements when relevant; do not downgrade them into anonymous chat or invent implications beyond their text.
+- Do not count narrower wording as a new detail. If CURRENT RECAP already mentions a broad idea such as "stats and game mechanics," do not later add "Pokemon stats" or "stat-boosting moves" unless the added wording contributes a clearly different supported event, conclusion, or reaction.
+- Avoid semantic duplication even when the wording is different. Do not mention the same subject twice merely to increase character count.
+- If several source messages belong to the same topic, summarize that topic once and use remaining space for a different noteworthy topic when one exists.
+- Before adding a candidate detail, silently ask: "Is this already covered by the current recap in broader or narrower words?" If yes, choose a different omitted detail instead.
 - Do not pad, repeat, or add mundane filler just to hit the target. Accuracy still wins if the source genuinely lacks enough worthwhile material.
 - NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
 - Use 2-4 compact complete sentences. Never end with "...".
@@ -327,12 +356,18 @@ Before outputting, silently verify every causal link, every specific noun/label,
 Output ONLY the revised recap.`;
 }
 
-async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = []) {
-  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps));
+async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '') {
+  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore));
 }
 
-async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], targetMin = 400 }) {
-  return sendGeminiPrompt(buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, targetMin));
+async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400, attempt = 1, acceptableMin = 380 }) {
+  let prompt = buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, targetMin);
+
+  if (attempt > 1) {
+    prompt += `\n\nSTRICT RETRY REQUIREMENT:\n- The previous expansion was still too short.\n- Produce ${targetMin}-${SUMMARY_TEXT_LIMIT} characters whenever the supplied source contains enough supported material.\n- Do not stop below ${acceptableMin} characters unless reaching ${acceptableMin} would require filler, repetition, or unsupported claims.\n- Scan the source again for a DIFFERENT noteworthy supported detail that was omitted.\n- Output only the revised recap.`;
+  }
+
+  return sendGeminiPrompt(prompt);
 }
 
 function extractGeminiText(data) {
@@ -447,7 +482,7 @@ function isGeminiInputBlocked(err) {
   );
 }
 
-async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = []) {
+async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '') {
   if ((!Array.isArray(chatLogs) || chatLogs.length === 0) && (!Array.isArray(twitchEvents) || twitchEvents.length === 0)) {
     throw new Error('No chat logs or verified Twitch events were provided to Gemini.');
   }
@@ -463,7 +498,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   let primaryData;
 
   try {
-    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps);
+    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore);
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error('Gemini blocked the chat input even after sensitive-term redaction.');
@@ -500,35 +535,67 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
 
   if (shouldExpand) {
     const activityLabel = activeChatWindow ? 'active chat window' : 'chat window';
-    console.log(`[Gemini] Recap is under ${expansionThreshold} chars with ${sourceMessageCount} source messages (${activityLabel}). Running expansion pass targeting ${expansionTargetMin}-${SUMMARY_TEXT_LIMIT} chars.`);
+    const acceptableMin = activeChatWindow
+      ? ACTIVE_CHAT_ACCEPTABLE_MIN
+      : NORMAL_CHAT_ACCEPTABLE_MIN;
 
-    try {
-      const expansionData = await expandRecapWithGemini({
-        currentSummary: summary,
-        chatLogs: sanitization.logs,
-        streamContexts,
-        twitchEvents,
-        previousRecaps,
-        targetMin: expansionTargetMin
-      });
+    console.log(`[Gemini] Recap is under ${expansionThreshold} chars with ${sourceMessageCount} source messages (${activityLabel}). Up to ${MAX_EXPANSION_ATTEMPTS} expansion attempts will target ${expansionTargetMin}-${SUMMARY_TEXT_LIMIT} chars; outputs under ${acceptableMin} chars are considered too short when supported material exists.`);
 
-      let expandedSummary = extractGeminiText(expansionData);
+    let longestSummary = summary;
 
-      if (expandedSummary) {
+    for (let attempt = 1; attempt <= MAX_EXPANSION_ATTEMPTS; attempt++) {
+      try {
+        const expansionData = await expandRecapWithGemini({
+          currentSummary: longestSummary,
+          chatLogs: sanitization.logs,
+          streamContexts,
+          twitchEvents,
+          previousRecaps,
+          streamLore,
+          targetMin: expansionTargetMin,
+          attempt,
+          acceptableMin
+        });
+
+        let expandedSummary = extractGeminiText(expansionData);
+
+        if (!expandedSummary) {
+          console.log(`[Gemini] Expansion attempt ${attempt} returned no readable recap.`);
+          continue;
+        }
+
         expandedSummary = normalizeRecap(expandedSummary);
-        console.log('[Gemini Expanded Recap]', expandedSummary);
-        console.log(`[Gemini Expanded Length] ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`);
+        console.log(`[Gemini Expanded Recap Attempt ${attempt}]`, expandedSummary);
+        console.log(`[Gemini Expanded Length Attempt ${attempt}] ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`);
 
-        if (expandedSummary.length > summary.length) {
-          summary = expandedSummary;
-          console.log('[Gemini] Expanded recap selected.');
+        if (expandedSummary.length > longestSummary.length) {
+          longestSummary = expandedSummary;
+          console.log(`[Gemini] Expansion attempt ${attempt} is the new longest valid recap.`);
         } else {
-          console.log('[Gemini] Expansion was not longer. Keeping primary recap.');
+          console.log(`[Gemini] Expansion attempt ${attempt} was not longer than the best recap so far.`);
+        }
+
+        if (longestSummary.length >= acceptableMin) {
+          console.log(`[Gemini] Recap reached the acceptable minimum of ${acceptableMin} chars; no further expansion retry is needed.`);
+          break;
+        }
+
+        if (attempt < MAX_EXPANSION_ATTEMPTS) {
+          console.log(`[Gemini] Best recap is still only ${longestSummary.length} chars. Retrying expansion with a stricter length instruction.`);
+        }
+      } catch (err) {
+        console.error(`[Gemini Expansion Error Attempt ${attempt}]`, err);
+        if (attempt < MAX_EXPANSION_ATTEMPTS) {
+          console.log('[Gemini] Retrying expansion after the failed attempt.');
         }
       }
-    } catch (err) {
-      console.error('[Gemini Expansion Error]', err);
-      console.log('[Gemini] Keeping primary recap because expansion failed.');
+    }
+
+    if (longestSummary.length > summary.length) {
+      summary = longestSummary;
+      console.log('[Gemini] Longest expanded recap selected.');
+    } else {
+      console.log('[Gemini] No expansion improved the primary recap. Keeping primary recap.');
     }
   }
 
@@ -911,6 +978,25 @@ function createRecapManager({
     });
   }
 
+  function recordModeratorAnnouncement({ displayName, rawMessage, color = '' }) {
+    if (!streamLive || recapPaused) return;
+    const text = String(rawMessage || '').trim();
+    if (!text) return;
+
+    const moderator = String(displayName || 'moderator').trim() || 'moderator';
+    const announcementColor = String(color || '').trim();
+    const colorLabel = announcementColor ? ` (${announcementColor})` : '';
+
+    messageSequence++;
+    recapMessages.push({
+      id: messageSequence,
+      timestamp: Date.now(),
+      text: `[MODERATOR ANNOUNCEMENT${colorLabel} by ${moderator}]: ${text}`
+    });
+
+    console.log(`[Recap] Moderator announcement recorded from ${moderator}: ${text}`);
+  }
+
   function discardMessageSnapshot(snapshotMaxId) {
     if (snapshotMaxId === null) return;
     recapMessages = recapMessages.filter((item) => item.id > snapshotMaxId);
@@ -955,6 +1041,7 @@ function createRecapManager({
       let twitchMessage;
       let recapSummaryBody;
       let previousRecaps = [];
+      let streamLore = '';
 
       if (currentStreamId) {
         try {
@@ -965,11 +1052,19 @@ function createRecapManager({
         }
       }
 
+      try {
+        const loreRecord = await getStreamLore(channelName);
+        streamLore = String(loreRecord?.text || '');
+        if (streamLore) console.log(`[Recap] Loaded ${streamLore.length} characters of stream-specific lore from MongoDB.`);
+      } catch (loreErr) {
+        console.error('[Recap] Could not load stream-specific lore. Continuing without it:', loreErr.message || loreErr);
+      }
+
       if (chatLogs.length === 0 && eventSnapshot.length === 0) {
         recapSummaryBody = 'Chat was quiet this hour—nothing notable to recap.';
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       } else {
-        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps);
+        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore);
         recapSummaryBody = result.summary;
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
@@ -1142,6 +1237,7 @@ function createRecapManager({
   return {
     start,
     recordChatMessage,
+    recordModeratorAnnouncement,
     recordTwitchEvent,
     handleRecapCommand,
     stopRecap,

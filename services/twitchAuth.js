@@ -3,6 +3,8 @@ const TwitchAuth = require('../models/TwitchAuth');
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 
+let refreshInFlight = null;
+
 function getClientId() {
   const value = (process.env.TWITCH_CLIENT_ID || '').trim();
   if (!value) throw new Error('TWITCH_CLIENT_ID environment variable is not set.');
@@ -126,61 +128,72 @@ async function syncStoredIdentity(auth, validation) {
 }
 
 async function refreshStoredToken() {
-  const auth = await getStoredAuth();
+  // Twitch may rotate refresh tokens. Keep refreshes single-flight so two callers
+  // cannot race and accidentally overwrite MongoDB with stale credentials.
+  if (refreshInFlight) return refreshInFlight;
 
-  if (!auth?.refreshToken) {
-    const error = new Error('No Twitch refresh token is stored in MongoDB. Re-authorize the bot from the WebUI.');
-    error.reauthorizationRequired = true;
-    throw error;
-  }
+  refreshInFlight = (async () => {
+    const auth = await getStoredAuth();
 
-  const body = new URLSearchParams({
-    client_id: getClientId(),
-    client_secret: getClientSecret(),
-    grant_type: 'refresh_token',
-    refresh_token: auth.refreshToken
-  });
+    if (!auth?.refreshToken) {
+      const error = new Error('No Twitch refresh token is stored in MongoDB. Re-authorize the bot from the WebUI.');
+      error.reauthorizationRequired = true;
+      throw error;
+    }
 
-  const response = await fetch(TWITCH_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: body.toString()
-  });
+    const body = new URLSearchParams({
+      client_id: getClientId(),
+      client_secret: getClientSecret(),
+      grant_type: 'refresh_token',
+      refresh_token: auth.refreshToken
+    });
 
-  let data = {};
+    const response = await fetch(TWITCH_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    });
+
+    let data = {};
+
+    try {
+      data = await response.json();
+    } catch (err) {
+      // Leave data empty and use the HTTP status below.
+    }
+
+    if (!response.ok || !data.access_token) {
+      const error = new Error(data?.message || `Twitch token refresh failed with HTTP ${response.status}.`);
+      error.status = response.status;
+      if (response.status === 400 || response.status === 401) {
+        error.reauthorizationRequired = true;
+      }
+      throw error;
+    }
+
+    const newRefreshToken = data.refresh_token || auth.refreshToken;
+    const validation = await validateAccessToken(data.access_token);
+
+    const saved = await saveAuth({
+      accessToken: data.access_token,
+      refreshToken: newRefreshToken,
+      expiresIn: data.expires_in,
+      scopes: validation.scopes || data.scope || auth.scopes || [],
+      twitchUserId: validation.user_id || auth.twitchUserId || '',
+      username: validation.login || auth.username || ''
+    });
+
+    console.log('[OAuth] Twitch access token refreshed and saved to MongoDB.');
+    return saved;
+  })();
 
   try {
-    data = await response.json();
-  } catch (err) {
-    // Leave data empty and use the HTTP status below.
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
   }
-
-  if (!response.ok || !data.access_token) {
-    const error = new Error(data?.message || `Twitch token refresh failed with HTTP ${response.status}.`);
-    error.status = response.status;
-    if (response.status === 400 || response.status === 401) {
-      error.reauthorizationRequired = true;
-    }
-    throw error;
-  }
-
-  const newRefreshToken = data.refresh_token || auth.refreshToken;
-
-  const validation = await validateAccessToken(data.access_token);
-
-  const saved = await saveAuth({
-    accessToken: data.access_token,
-    refreshToken: newRefreshToken,
-    expiresIn: data.expires_in,
-    scopes: validation.scopes || data.scope || auth.scopes || [],
-    twitchUserId: validation.user_id || auth.twitchUserId || '',
-    username: validation.login || auth.username || ''
-  });
-
-  console.log('[OAuth] Twitch access token refreshed and saved to MongoDB.');
-  return saved;
 }
 
 async function getAccessToken() {

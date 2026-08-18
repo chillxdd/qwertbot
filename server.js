@@ -10,6 +10,7 @@ const {
 } = require('./commands/recap');
 
 const { connectDatabase } = require('./services/database');
+const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('./services/streamLore');
 const {
   exchangeAuthorizationCode,
   getAccessToken,
@@ -24,6 +25,7 @@ const {
 const {
   exchangeBroadcasterAuthorizationCode,
   getBroadcasterAuthStatus,
+  getValidBroadcasterAccessToken,
   storeBroadcasterAuthorizationCodeResult,
   validateBroadcasterAccessToken
 } = require('./services/twitchBroadcasterAuth');
@@ -52,6 +54,7 @@ const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/call
 const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages'];
 const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
+const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
 const FALLBACK_ACCESS_TOKEN = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').replace(/^oauth:/i, '').trim();
 const channelName = (process.env.TWITCH_CHANNEL || '').toLowerCase().trim();
 const botUsername = (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim();
@@ -74,6 +77,9 @@ let usingMongoOAuth = false;
 let twitchClient = null;
 let recapManager = null;
 let twitchReconnectInProgress = false;
+let twitchAuthRecoveryInProgress = false;
+let twitchAuthRecoveryTimer = null;
+let oauthValidationTimer = null;
 let twitchConnectionGeneration = 0;
 const recentEventSubMessageIds = new Map();
 
@@ -365,6 +371,107 @@ async function validateAnyBotToken(token) {
   return validateAccessToken(token);
 }
 
+function isIrcAuthenticationFailure(reason) {
+  const text = String(reason || '').toLowerCase();
+  return text.includes('login authentication failed') || text.includes('improperly formatted auth');
+}
+
+function clearTwitchAuthRecoveryTimer() {
+  if (twitchAuthRecoveryTimer) {
+    clearTimeout(twitchAuthRecoveryTimer);
+    twitchAuthRecoveryTimer = null;
+  }
+}
+
+async function recoverTwitchIrcAuthentication(reason = 'IRC authentication failure') {
+  if (!usingMongoOAuth || twitchAuthRecoveryInProgress) return;
+
+  twitchAuthRecoveryInProgress = true;
+  clearTwitchAuthRecoveryTimer();
+
+  try {
+    console.warn(`[OAuth] ${reason}. Validating the stored bot token and refreshing it if needed.`);
+
+    // If MongoDB already contains a newer valid token, use it. Otherwise a 401
+    // from /validate automatically refreshes the token and saves the rotated
+    // access + refresh token pair before we reconnect tmi.js.
+    const accessToken = await getValidAccessToken({ allowRefresh: true });
+    if (!accessToken) throw new Error('No MongoDB Twitch bot authorization is available.');
+
+    usingMongoOAuth = true;
+    await reconnectTwitchClient(reason, { accessToken });
+    console.log('[OAuth] IRC authentication recovery completed successfully.');
+  } catch (err) {
+    console.error('[OAuth] IRC authentication recovery failed:', err.message || err);
+
+    // A revoked/invalid refresh token genuinely requires consent again. Do not
+    // hammer Twitch in that case. Transient network/5xx failures get one delayed
+    // retry path so the bot can heal without manual intervention.
+    if (!err?.reauthorizationRequired) {
+      twitchAuthRecoveryTimer = setTimeout(() => {
+        twitchAuthRecoveryTimer = null;
+        recoverTwitchIrcAuthentication('retry after IRC authentication failure').catch((retryErr) => {
+          console.error('[OAuth] Delayed IRC authentication recovery failed:', retryErr.message || retryErr);
+        });
+      }, 15000);
+      console.warn('[OAuth] IRC authentication recovery will retry in 15 seconds.');
+    } else {
+      console.error('[OAuth] Twitch reports that the bot authorization itself is no longer refreshable. Manual bot reauthorization is required.');
+    }
+  } finally {
+    twitchAuthRecoveryInProgress = false;
+  }
+}
+
+async function validateStoredOAuthSessions() {
+  if (!databaseConnected) return;
+
+  try {
+    const before = await getStoredAuth();
+    const validBotToken = await getValidAccessToken({ allowRefresh: true });
+    const after = await getStoredAuth();
+
+    if (validBotToken) {
+      usingMongoOAuth = true;
+      console.log('[OAuth] Hourly bot token validation succeeded.');
+
+      // If validation had to refresh the token, rebuild the IRC client with the
+      // newly stored token now instead of waiting for Twitch to force a RECONNECT.
+      if (before?.accessToken && after?.accessToken && before.accessToken !== after.accessToken) {
+        await reconnectTwitchClient('hourly OAuth refresh', { accessToken: after.accessToken });
+      }
+    }
+  } catch (err) {
+    if (err?.reauthorizationRequired) {
+      console.error('[OAuth] Bot authorization can no longer be refreshed. Manual bot reauthorization is required.');
+    } else {
+      console.warn('[OAuth] Hourly bot token validation failed:', err.message || err);
+    }
+  }
+
+  try {
+    const broadcasterToken = await getValidBroadcasterAccessToken({ allowRefresh: true });
+    if (broadcasterToken) {
+      console.log('[OAuth] Hourly broadcaster token validation succeeded.');
+    }
+  } catch (err) {
+    if (err?.reauthorizationRequired) {
+      console.error('[OAuth] Broadcaster authorization can no longer be refreshed. Qwert must authorize again.');
+    } else {
+      console.warn('[OAuth] Hourly broadcaster token validation failed:', err.message || err);
+    }
+  }
+}
+
+function startOAuthValidationLoop() {
+  if (oauthValidationTimer) clearInterval(oauthValidationTimer);
+  oauthValidationTimer = setInterval(() => {
+    validateStoredOAuthSessions().catch((err) => {
+      console.warn('[OAuth] Scheduled OAuth validation error:', err.message || err);
+    });
+  }, OAUTH_VALIDATION_INTERVAL);
+}
+
 async function resolveStartupToken() {
   try {
     const stored = await getValidAccessToken({ allowRefresh: true });
@@ -397,24 +504,40 @@ function attachTwitchHandlers(client, generation) {
     if (generation !== twitchConnectionGeneration) return;
     botConnected = false;
     console.log('[Bot] Twitch chat disconnected:', reason);
+
+    // tmi.js does not always surface Twitch's login failure through the notice
+    // handler before the socket closes. The disconnect reason does contain it,
+    // so recover here as well. This is the path that handles a Twitch RECONNECT
+    // arriving after the IRC access token has expired.
+    if (usingMongoOAuth && isIrcAuthenticationFailure(reason)) {
+      recoverTwitchIrcAuthentication('IRC disconnect reported an authentication failure').catch((err) => {
+        console.error('[OAuth] IRC disconnect recovery error:', err.message || err);
+      });
+    }
   });
 
-  client.on('notice', async (channel, msgid, message) => {
+  client.on('notice', (channel, msgid, message) => {
     if (generation !== twitchConnectionGeneration) return;
 
-    const text = String(message || '').toLowerCase();
-    if (
-      usingMongoOAuth &&
-      (text.includes('login authentication failed') || text.includes('improperly formatted auth'))
-    ) {
-      console.warn('[OAuth] IRC authentication failed. Trying a token refresh and reconnect.');
-      try {
-        await refreshBotAccessToken();
-        await reconnectTwitchClient('IRC authentication failure');
-      } catch (err) {
-        console.error('[OAuth] IRC token refresh/reconnect failed:', err.message || err);
-      }
+    if (usingMongoOAuth && isIrcAuthenticationFailure(message)) {
+      recoverTwitchIrcAuthentication('IRC NOTICE reported an authentication failure').catch((err) => {
+        console.error('[OAuth] IRC notice recovery error:', err.message || err);
+      });
     }
+  });
+
+  client.on('announcement', (channel, tags, message, self, color) => {
+    if (generation !== twitchConnectionGeneration || !recapManager) return;
+
+    const rawMessage = String(message || '').trim();
+    if (!rawMessage) return;
+
+    const displayName = tags?.['display-name'] || tags?.login || tags?.username || 'moderator';
+    recapManager.recordModeratorAnnouncement({
+      displayName,
+      rawMessage,
+      color: String(color || tags?.['msg-param-color'] || '').trim()
+    });
   });
 
   client.on('message', async (channel, tags, message, self) => {
@@ -499,7 +622,7 @@ async function createAndConnectTwitchClient(accessToken) {
   return client;
 }
 
-async function reconnectTwitchClient(reason = 'manual reconnect') {
+async function reconnectTwitchClient(reason = 'manual reconnect', { accessToken = null } = {}) {
   if (twitchReconnectInProgress) return;
   twitchReconnectInProgress = true;
 
@@ -516,8 +639,8 @@ async function reconnectTwitchClient(reason = 'manual reconnect') {
       }
     }
 
-    const accessToken = await getBotAccessToken();
-    await createAndConnectTwitchClient(accessToken);
+    const tokenToUse = accessToken || await getBotAccessToken();
+    await createAndConnectTwitchClient(tokenToUse);
     console.log('[Bot] Twitch client reconnected successfully.');
   } finally {
     twitchReconnectInProgress = false;
@@ -738,6 +861,59 @@ app.post('/mod-login', (req, res) => {
   }
 
   res.json({ success: true });
+});
+
+app.post('/stream-lore/get', async (req, res) => {
+  if (!isValidDashboardPassword(req.body.password)) {
+    return res.status(401).json({ success: false, error: 'Incorrect password!' });
+  }
+
+  if (!databaseConnected) {
+    return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+  }
+
+  try {
+    const lore = await getStreamLore(channelName);
+    return res.json({
+      success: true,
+      text: lore.text,
+      updatedAt: lore.updatedAt,
+      maxLength: MAX_STREAM_LORE_LENGTH
+    });
+  } catch (err) {
+    console.error('[Lore] Could not load stream-specific lore:', err.message || err);
+    return res.status(500).json({ success: false, error: 'Could not load stream-specific lore.' });
+  }
+});
+
+app.post('/stream-lore/save', async (req, res) => {
+  if (!isValidDashboardPassword(req.body.password)) {
+    return res.status(401).json({ success: false, error: 'Incorrect password!' });
+  }
+
+  if (!databaseConnected) {
+    return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+  }
+
+  const text = typeof req.body.text === 'string' ? req.body.text : '';
+
+  if (text.length > MAX_STREAM_LORE_LENGTH) {
+    return res.status(400).json({ success: false, error: `Lore is too long. Maximum is ${MAX_STREAM_LORE_LENGTH} characters.` });
+  }
+
+  try {
+    const lore = await saveStreamLore(channelName, text);
+    console.log(`[Lore] Stream-specific lore saved to MongoDB (${lore.text.length} characters).`);
+    return res.json({
+      success: true,
+      text: lore.text,
+      updatedAt: lore.updatedAt,
+      maxLength: MAX_STREAM_LORE_LENGTH
+    });
+  } catch (err) {
+    console.error('[Lore] Could not save stream-specific lore:', err.message || err);
+    return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
+  }
 });
 
 app.post('/auth/twitch/start', (req, res) => {
@@ -992,6 +1168,7 @@ app.post('/test-summary', async (req, res) => {
   const streamContexts = recapManager.getCurrentWindowContexts();
   const twitchEvents = recapManager.getCurrentWindowEvents();
   let previousRecaps = [];
+  let streamLore = '';
 
   try {
     previousRecaps = await recapManager.getCurrentStreamRecapHistory(5);
@@ -1000,12 +1177,22 @@ app.post('/test-summary', async (req, res) => {
     previousRecaps = [];
   }
 
+  try {
+    if (databaseConnected) {
+      const loreRecord = await getStreamLore(channelName);
+      streamLore = String(loreRecord?.text || '');
+    }
+  } catch (loreErr) {
+    console.error('Could not load stream-specific lore for WebUI current-window test:', loreErr.message || loreErr);
+    streamLore = '';
+  }
+
   if (logs.length === 0 && twitchEvents.length === 0) {
     return res.status(400).json({ success: false, error: 'There are currently no messages or Twitch events in the active automatic recap window.' });
   }
 
   try {
-    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps);
+    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps, streamLore);
     const fullOutput = SUMMARY_PREFIX + result.summary;
 
     res.json({
@@ -1016,6 +1203,7 @@ app.post('/test-summary', async (req, res) => {
       streamContextCount: streamContexts.length,
       twitchEventCount: twitchEvents.length,
       previousRecapContextCount: previousRecaps.length,
+      streamLoreCharacterCount: streamLore.length,
       output: fullOutput,
       characterCount: fullOutput.length,
       sanitized: result.sanitization.sanitized,
@@ -1081,6 +1269,16 @@ app.get('/', (req, res) => {
     </div>
 
     <div class="section">
+      <h3>Stream Specific Lore</h3>
+      <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the AI interpret current chat. Saved lore stays in MongoDB until you edit or clear it.</div>
+      <textarea id="streamLore" maxlength="${MAX_STREAM_LORE_LENGTH}" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
+      <button id="saveLoreBtn">Save Lore</button>
+      <button id="clearLoreBtn" class="secondary">Clear Lore</button>
+      <div id="loreCount" class="detail">0/${MAX_STREAM_LORE_LENGTH} characters</div>
+      <div id="loreMsg" class="detail"></div>
+    </div>
+
+    <div class="section">
       <h3>AI Recap Testing</h3>
       <button id="storedBtn" class="secondary">Test Current Recap Window</button>
       <div id="testResult"></div>
@@ -1110,8 +1308,15 @@ $('twitchChatFrame').src='https://www.twitch.tv/embed/${escapeHtmlServer(channel
 $('chatToggle').onclick=()=>setChatOpen(!$('chatSidebar').classList.contains('open'));
 setChatOpen(true);
 async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" rel="noopener noreferrer" href="'+esc(d.qwert.twitchUrl)+'">Watch on Twitch</a><br><a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/@generalqwert/streams">Watch on YouTube</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) + '+(d.bot.twitchEventsInWindow||0)+' Twitch event(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>Bot badge + EventSub scopes granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
-$('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';status()};
+$('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';await loadLore();status()};
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
+
+function updateLoreCount(){const text=$('streamLore').value;$('loreCount').textContent=text.length+'/${MAX_STREAM_LORE_LENGTH} characters'}
+async function loadLore(){try{$('loreMsg').textContent='Loading...';const d=await (await fetch('/stream-lore/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('loreMsg').textContent=d.error||'Could not load lore.';return}$('streamLore').value=d.text||'';updateLoreCount();$('loreMsg').textContent=d.updatedAt?'Saved lore loaded.':'No lore saved yet.'}catch(e){$('loreMsg').textContent='Could not load lore.'}}
+async function saveLore(){try{$('saveLoreBtn').disabled=true;$('loreMsg').textContent='Saving...';const d=await (await fetch('/stream-lore/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,text:$('streamLore').value})})).json();if(!d.success){$('loreMsg').textContent=d.error||'Could not save lore.';return}$('streamLore').value=d.text||'';updateLoreCount();$('loreMsg').textContent=d.text?'Saved to MongoDB.':'Lore cleared from MongoDB.'}catch(e){$('loreMsg').textContent='Could not save lore.'}finally{$('saveLoreBtn').disabled=false}}
+$('streamLore').oninput=updateLoreCount;
+$('saveLoreBtn').onclick=saveLore;
+$('clearLoreBtn').onclick=()=>{$('streamLore').value='';updateLoreCount();saveLore()};
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
 $('sendBtn').onclick=async()=>{const message=$('chatMessage').value.trim();if(!message)return;const d=await (await fetch('/send-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,message})})).json();if(d.success){$('chatMsg').textContent=d.fallback?'Sent via IRC fallback (no bot badge for this message).':'Sent via Twitch Chat API.';$('chatMessage').value=''}else{$('chatMsg').textContent=d.error||'Failed to send.'}};
@@ -1157,11 +1362,30 @@ async function bootstrap() {
   }
 
   if (databaseConnected) {
+    // Twitch requires third-party OAuth sessions to be validated at startup and
+    // at least hourly. Bot startup validation happens in resolveStartupToken();
+    // validate/refresh the broadcaster grant here too.
+    try {
+      const broadcasterToken = await getValidBroadcasterAccessToken({ allowRefresh: true });
+      if (broadcasterToken) {
+        console.log('[OAuth] Broadcaster token validated at startup.');
+      }
+    } catch (err) {
+      if (err?.reauthorizationRequired) {
+        console.error('[OAuth] Broadcaster authorization cannot be refreshed. Qwert must authorize again.');
+      } else {
+        console.log('[OAuth] Broadcaster startup validation pending:', err.message || err);
+      }
+    }
+
     try {
       await ensureEventSubSubscriptions();
     } catch (err) {
       console.log('[EventSub] Startup setup pending:', err.message || err);
     }
+
+    startOAuthValidationLoop();
+    console.log('[OAuth] Automatic bot + broadcaster token validation scheduled every 50 minutes.');
   }
 }
 
@@ -1183,6 +1407,7 @@ app.listen(PORT, () => {
   console.log('Stream title/category check: every 30 seconds.');
   console.log(`Twitch OAuth callback: ${TWITCH_REDIRECT_URI}`);
   console.log('Twitch OAuth tokens are stored in MongoDB and are never logged.');
+  console.log('OAuth health: bot and broadcaster sessions validate automatically every 50 minutes and refresh on 401.');
 });
 
 bootstrap().catch((err) => {
