@@ -43,6 +43,7 @@ export function initLoreSection({ $, postJson, getPassword, maxLoreLength }) {
 
   $('streamLore').oninput = updateCount;
   $('saveLoreBtn').onclick = saveLore;
+  $('undoLoreBtn').onclick = loadLore;
   updateCount();
   return { loadLore };
 }
