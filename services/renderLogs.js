@@ -94,6 +94,13 @@ async function resolveRenderContext() {
   return cachedContext;
 }
 
+function stripAnsiAndControlCodes(value) {
+  return String(value || '')
+    .replace(/\u001B\[[0-?]*[ -\/]*[@-~]/g, '')
+    .replace(/\u009B[0-?]*[ -\/]*[@-~]/g, '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+}
+
 function normalizeLogEntry(entry) {
   const labels = Array.isArray(entry?.labels) ? entry.labels : [];
   const labelMap = {};
@@ -104,7 +111,7 @@ function normalizeLogEntry(entry) {
   return {
     id: String(entry?.id || ''),
     timestamp: entry?.timestamp || null,
-    message: String(entry?.message || ''),
+    message: stripAnsiAndControlCodes(entry?.message || ''),
     level: labelMap.level || null,
     type: labelMap.type || null,
     instance: labelMap.instance || null
@@ -124,7 +131,12 @@ async function getRecentRenderLogs({ limit = 100 } = {}) {
   const result = await renderApiFetch(`${RENDER_API_BASE}/logs?${params.toString()}`);
   const logs = (Array.isArray(result?.logs) ? result.logs : [])
     .map(normalizeLogEntry)
-    .reverse();
+    .sort((a, b) => {
+      const at = a.timestamp ? Date.parse(a.timestamp) : 0;
+      const bt = b.timestamp ? Date.parse(b.timestamp) : 0;
+      if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
 
   return {
     serviceName: context.serviceName,
