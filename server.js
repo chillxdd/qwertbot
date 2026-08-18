@@ -808,7 +808,9 @@ app.get('/status', async (req, res) => {
       twitchUrl: `https://www.twitch.tv/${channelName}`,
       title: recapStatus.currentStreamTitle,
       category: recapStatus.currentStreamCategory,
-      gameId: recapStatus.currentStreamGameId
+      gameId: recapStatus.currentStreamGameId,
+      startedAt: recapStatus.twitchStreamStartedAt,
+      uptimeMs: recapStatus.streamUptimeMs
     },
     bot: {
       online: botConnected,
@@ -1192,7 +1194,14 @@ app.post('/test-summary', async (req, res) => {
   }
 
   try {
-    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps, streamLore);
+    const recapStatus = recapManager.getStatus();
+    const generatedAtMs = Date.now();
+    const streamTiming = {
+      startedAtMs: recapStatus.twitchStreamStartedAt || 0,
+      generatedAtMs,
+      uptimeMs: recapStatus.twitchStreamStartedAt ? Math.max(0, generatedAtMs - recapStatus.twitchStreamStartedAt) : null
+    };
+    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming);
     const fullOutput = SUMMARY_PREFIX + result.summary;
 
     res.json({
@@ -1231,36 +1240,28 @@ app.get('/', (req, res) => {
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>GeneralQwert's Twitch Bot</title>
   <style>
-    body{font-family:Arial,sans-serif;background:#0f0f12;color:#fff;margin:0;padding:20px;transition:padding-right .2s ease}body.chat-open{padding-right:390px}.card{max-width:760px;margin:30px auto;background:#18181b;border:1px solid #26262c;border-radius:8px;padding:24px}h2{color:#9146ff;margin-top:0}h3{font-size:13px;color:#adadb8;text-transform:uppercase;margin-top:24px}input,textarea{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px solid #3a3a44;border-radius:4px;padding:11px;margin:6px 0 10px}textarea{min-height:220px}button{background:#9146ff;color:#fff;border:0;border-radius:4px;padding:11px 14px;font-weight:bold;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#33333d}button.danger{background:#a52f36}button:disabled{opacity:.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{background:#0e0e10;border:1px solid #26262c;border-radius:6px;padding:14px}.label{font-size:11px;color:#777783;text-transform:uppercase}.value{font-size:16px;font-weight:bold;margin:5px 0}.detail{font-size:12px;color:#adadb8;line-height:1.5}.good{color:#00f59b}.bad{color:#ff4f4f}.warn{color:#f5c542}.section{border-top:1px solid #2a2a30;margin-top:20px;padding-top:18px}#protected{display:none}#testResult{white-space:pre-wrap;background:#0e0e10;padding:12px;border-radius:4px;margin-top:10px}a{color:#bf94ff}.chat-sidebar{position:fixed;top:0;right:0;width:360px;height:100vh;background:#0e0e10;border-left:1px solid #2a2a30;z-index:20;transform:translateX(100%);transition:transform .2s ease;display:flex;flex-direction:column}.chat-sidebar.open{transform:translateX(0)}.chat-sidebar iframe{display:block;border:0;width:360px;min-width:360px;height:100vh;background:#0e0e10}.chat-toggle{position:fixed;right:12px;top:14px;z-index:10;box-shadow:0 2px 12px rgba(0,0,0,.35)}body.chat-open .chat-toggle{right:380px}@media(max-width:1100px){body.chat-open{padding-right:20px}.chat-sidebar{width:min(360px,calc(100vw - 54px))}.chat-sidebar iframe{width:100%;min-width:0}body.chat-open .chat-toggle{right:calc(min(360px,calc(100vw - 54px)) + 20px)}}@media(max-width:600px){.grid{grid-template-columns:1fr}.card{margin-top:52px;padding:18px}}
+    body{font-family:Arial,sans-serif;background:#0f0f12;color:#fff;margin:0;padding:20px;transition:padding-right .2s ease}.mod-login{position:fixed;top:14px;left:14px;width:210px;background:#18181b;border:1px solid #33333d;border-radius:8px;padding:12px;z-index:30;box-shadow:0 2px 12px rgba(0,0,0,.35)}.mod-login h3{margin:0 0 6px}.mod-login input{margin:4px 0 6px;padding:9px}.mod-login button{padding:9px 12px}.recap-controls{display:none;margin-top:10px;padding-top:9px;border-top:1px solid #26262c}body.chat-open{padding-right:390px}.card{max-width:760px;margin:30px auto;background:#18181b;border:1px solid #26262c;border-radius:8px;padding:24px}h2{color:#9146ff;margin-top:0}h3{font-size:13px;color:#adadb8;text-transform:uppercase;margin-top:24px}input,textarea{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px solid #3a3a44;border-radius:4px;padding:11px;margin:6px 0 10px}textarea{min-height:220px}button{background:#9146ff;color:#fff;border:0;border-radius:4px;padding:11px 14px;font-weight:bold;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#33333d}button.danger{background:#a52f36}button:disabled{opacity:.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{background:#0e0e10;border:1px solid #26262c;border-radius:6px;padding:14px}.label{font-size:11px;color:#777783;text-transform:uppercase}.value{font-size:16px;font-weight:bold;margin:5px 0}.detail{font-size:12px;color:#adadb8;line-height:1.5}.good{color:#00f59b}.bad{color:#ff4f4f}.warn{color:#f5c542}.section{border-top:1px solid #2a2a30;margin-top:20px;padding-top:18px}#protected{display:none}#testResult{white-space:pre-wrap;background:#0e0e10;padding:12px;border-radius:4px;margin-top:10px}a{color:#bf94ff}.chat-sidebar{position:fixed;top:0;right:0;width:360px;height:100vh;background:#0e0e10;border-left:1px solid #2a2a30;z-index:20;transform:translateX(100%);transition:transform .2s ease;display:flex;flex-direction:column}.chat-sidebar.open{transform:translateX(0)}.chat-sidebar iframe{display:block;border:0;width:360px;min-width:360px;height:100vh;background:#0e0e10}.chat-toggle{position:fixed;right:12px;top:14px;z-index:10;box-shadow:0 2px 12px rgba(0,0,0,.35)}body.chat-open .chat-toggle{right:380px}@media(max-width:1100px){body.chat-open{padding-right:20px}.chat-sidebar{width:min(360px,calc(100vw - 54px))}.chat-sidebar iframe{width:100%;min-width:0}body.chat-open .chat-toggle{right:calc(min(360px,calc(100vw - 54px)) + 20px)}}@media(max-width:600px){.grid{grid-template-columns:1fr}.card{margin-top:150px;padding:18px}.mod-login{position:absolute;right:70px;width:auto}}
   </style>
 </head>
 <body>
+<div id="login" class="mod-login">
+  <h3>MOD Login</h3>
+  <input id="password" type="password" placeholder="MOD password" autocomplete="current-password">
+  <button id="loginBtn" type="button">Login</button>
+  <div id="loginMsg" class="detail"></div>
+</div>
 <div class="card">
   <h2>GeneralQwert's Twitch Bot</h2>
   <div class="grid">
     <div class="box"><div class="label">Qwert</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
-    <div class="box"><div class="label">Bot</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
+    <div class="box"><div class="label">Bot</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div><div id="recapControls" class="recap-controls"><button id="pauseBtn" class="danger">Pause Recaps</button><button id="resumeBtn">Resume Recaps</button><div id="recapMsg" class="detail"></div></div></div>
     <div class="box"><div class="label">MongoDB</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
     <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div></div>
     <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div></div>
     <div class="box"><div class="label">Twitch Chat API</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
   </div>
 
-  <div id="login" class="section">
-    <h3>MOD Login</h3>
-    <input id="password" type="password" placeholder="MOD password">
-    <button id="loginBtn">Login</button>
-    <div id="loginMsg" class="detail"></div>
-  </div>
-
   <div id="protected">
-    <div class="section">
-      <h3>Automatic Recaps</h3>
-      <button id="pauseBtn" class="danger">Pause Recaps</button>
-      <button id="resumeBtn">Resume Recaps</button>
-      <div id="recapMsg" class="detail"></div>
-    </div>
-
     <div class="section">
       <h3>Send Message to Twitch</h3>
       <input id="chatMessage" placeholder="Message">
@@ -1270,10 +1271,9 @@ app.get('/', (req, res) => {
 
     <div class="section">
       <h3>Stream Specific Lore</h3>
-      <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the AI interpret current chat. Saved lore stays in MongoDB until you edit or clear it.</div>
+      <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the AI interpret current chat. Saved lore stays in MongoDB until you edit it.</div>
       <textarea id="streamLore" maxlength="${MAX_STREAM_LORE_LENGTH}" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
       <button id="saveLoreBtn">Save Lore</button>
-      <button id="clearLoreBtn" class="secondary">Clear Lore</button>
       <div id="loreCount" class="detail">0/${MAX_STREAM_LORE_LENGTH} characters</div>
       <div id="loreMsg" class="detail"></div>
     </div>
@@ -1302,13 +1302,16 @@ let password='';let loggedIn=false;
 const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;')}
 function countdown(ms){const s=Math.max(0,Math.ceil(ms/1000));return Math.floor(s/60)+'min '+(s%60)+'s'}
+function uptime(ms){const s=Math.max(0,Math.floor((Number(ms)||0)/1000));const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);const sec=s%60;return h+'h '+m+'m '+sec+'s'}
 function setChatOpen(open){$('chatSidebar').classList.toggle('open',open);document.body.classList.toggle('chat-open',open);$('chatToggle').textContent=open?'Hide Chat':'Show Chat';$('chatToggle').setAttribute('aria-expanded',open?'true':'false')}
 const chatParent=location.hostname;
 $('twitchChatFrame').src='https://www.twitch.tv/embed/${escapeHtmlServer(channelName || 'generalqwert')}/chat?darkpopout=1&parent='+encodeURIComponent(chatParent);
 $('chatToggle').onclick=()=>setChatOpen(!$('chatSidebar').classList.contains('open'));
 setChatOpen(true);
-async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" rel="noopener noreferrer" href="'+esc(d.qwert.twitchUrl)+'">Watch on Twitch</a><br><a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/@generalqwert/streams">Watch on YouTube</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown'):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) + '+(d.bot.twitchEventsInWindow||0)+' Twitch event(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>Bot badge + EventSub scopes granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
-$('loginBtn').onclick=async()=>{const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';await loadLore();status()};
+async function status(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();$('qStatus').textContent=d.qwert.statusKnown?(d.qwert.live?'LIVE':'OFFLINE'):'CHECKING';$('qStatus').className='value '+(d.qwert.live?'good':d.qwert.statusKnown?'bad':'warn');$('qDetail').innerHTML='<a target="_blank" rel="noopener noreferrer" href="'+esc(d.qwert.twitchUrl)+'">Watch on Twitch</a><br><a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/@generalqwert/streams">Watch on YouTube</a>';$('streamMeta').innerHTML=d.qwert.live?'<br><b>Title:</b> '+esc(d.qwert.title||'Unknown')+'<br><b>Category:</b> '+esc(d.qwert.category||'Unknown')+'<br><b>Uptime:</b> '+esc(uptime(d.qwert.uptimeMs)):'';$('bStatus').textContent=d.bot.online?'ONLINE':'OFFLINE';$('bStatus').className='value '+(d.bot.online?'good':'bad');let bd=d.bot.loggingMessages?'Logging '+d.bot.messagesInWindow+' message(s) + '+(d.bot.twitchEventsInWindow||0)+' Twitch event(s) for hourly recap':'Not logging recap messages';if(d.bot.recapPaused)bd='Recaps PAUSED - '+d.bot.messagesInWindow+' message(s) preserved';if(d.bot.recapInProgress)bd+='<br>Recap generation in progress';else if(d.bot.nextRecapAt)bd+='<br>Next recap in '+countdown(d.bot.nextRecapAt-Date.now());$('bDetail').innerHTML=bd;$('dbStatus').textContent=d.database.connected?'CONNECTED':'OFFLINE';$('dbStatus').className='value '+(d.database.connected?'good':'bad');$('dbDetail').textContent=d.database.connected?'Persistent storage ready':'Check MONGODB_URI / Atlas network access';const bm=d.oauth.botMissingScopes||[];$('oauthStatusBox').textContent=d.oauth.stored&&bm.length===0?'READY':d.oauth.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('oauthStatusBox').className='value '+(d.oauth.stored&&bm.length===0?'good':'warn');$('oauthDetail').innerHTML=d.oauth.stored?'Account: '+esc(d.oauth.username||'unknown')+(bm.length?'<br>Missing: '+esc(bm.join(', ')):'<br>Modern bot grant ready'):'MOD login required to authorize bot';const bo=d.oauth.broadcaster||{};const bmiss=bo.missingScopes||[];$('broadcasterStatusBox').textContent=bo.stored&&bmiss.length===0?'READY':bo.stored?'REAUTHORIZE':'NOT AUTHORIZED';$('broadcasterStatusBox').className='value '+(bo.stored&&bmiss.length===0?'good':'warn');$('broadcasterDetail').innerHTML=bo.stored?'Account: '+esc(bo.username||'unknown')+(bmiss.length?'<br>Missing: '+esc(bmiss.join(', ')):'<br>Bot badge + EventSub scopes granted'):'Private Qwert authorization link required';$('chatApiStatusBox').textContent=d.oauth.chatApiReady?'BOT BADGE READY':'NOT READY';$('chatApiStatusBox').className='value '+(d.oauth.chatApiReady?'good':'warn');$('chatApiDetail').textContent=d.oauth.chatApiReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':'Complete both OAuth grants above.';if(loggedIn){$('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;$('resumeBtn').disabled=!d.qwert.live||!d.bot.recapPaused;$('oauthBtn').disabled=!d.oauth.configured||!d.database.connected}}catch(e){$('bDetail').textContent='Status request failed'}}
+async function doLogin(){const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';$('recapControls').style.display='block';await loadLore();status()}
+$('loginBtn').onclick=doLogin;
+$('password').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();doLogin()}});
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
 
 function updateLoreCount(){const text=$('streamLore').value;$('loreCount').textContent=text.length+'/${MAX_STREAM_LORE_LENGTH} characters'}
@@ -1316,7 +1319,6 @@ async function loadLore(){try{$('loreMsg').textContent='Loading...';const d=awai
 async function saveLore(){try{$('saveLoreBtn').disabled=true;$('loreMsg').textContent='Saving...';const d=await (await fetch('/stream-lore/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,text:$('streamLore').value})})).json();if(!d.success){$('loreMsg').textContent=d.error||'Could not save lore.';return}$('streamLore').value=d.text||'';updateLoreCount();$('loreMsg').textContent=d.text?'Saved to MongoDB.':'Lore cleared from MongoDB.'}catch(e){$('loreMsg').textContent='Could not save lore.'}finally{$('saveLoreBtn').disabled=false}}
 $('streamLore').oninput=updateLoreCount;
 $('saveLoreBtn').onclick=saveLore;
-$('clearLoreBtn').onclick=()=>{$('streamLore').value='';updateLoreCount();saveLore()};
 async function recapAction(action){const d=await (await fetch('/recap-control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,action})})).json();$('recapMsg').textContent=d.message||d.error;status()}
 $('pauseBtn').onclick=()=>recapAction('stop');$('resumeBtn').onclick=()=>recapAction('start');
 $('sendBtn').onclick=async()=>{const message=$('chatMessage').value.trim();if(!message)return;const d=await (await fetch('/send-chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,message})})).json();if(d.success){$('chatMsg').textContent=d.fallback?'Sent via IRC fallback (no bot badge for this message).':'Sent via Twitch Chat API.';$('chatMessage').value=''}else{$('chatMsg').textContent=d.error||'Failed to send.'}};

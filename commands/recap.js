@@ -118,6 +118,29 @@ function formatStreamLore(streamLore = '') {
   return `STREAM-SPECIFIC LORE (MANUALLY SUPPLIED BY QWERT/MOD):\n${lore}\n\nSTREAM LORE RULES:\n- This lore is persistent context supplied by Qwert/mods to explain names, callbacks, recurring jokes, relationships between recurring bits, or other channel-specific references.\n- Use it only when it helps interpret CURRENT chat or VERIFIED TWITCH EVENTS.\n- Lore may explain what a current reference means, but it does NOT prove that a lore event happened again in the current recap window.\n- Do not present lore as a current-hour event unless current chat or verified Twitch events support that it happened now.\n- Do not force lore into the recap when current chat does not make it relevant.\n- If current source material conflicts with lore, trust the current source material.`;
 }
 
+function formatStreamTiming(streamTiming = {}) {
+  const startedAtMs = Number(streamTiming?.startedAtMs || 0);
+  const generatedAtMs = Number(streamTiming?.generatedAtMs || Date.now());
+  const suppliedUptimeMs = Number(streamTiming?.uptimeMs);
+  const uptimeMs = Number.isFinite(suppliedUptimeMs) && suppliedUptimeMs >= 0
+    ? suppliedUptimeMs
+    : (startedAtMs > 0 ? Math.max(0, generatedAtMs - startedAtMs) : null);
+
+  if (!startedAtMs || uptimeMs === null) {
+    return `STREAM UPTIME:\nExact Twitch stream-start timing was not available for this recap. Do not guess how long the stream has been live.`;
+  }
+
+  const totalSeconds = Math.max(0, Math.floor(uptimeMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const duration = `${hours}h ${minutes}m ${seconds}s`;
+  const startedAtIso = new Date(startedAtMs).toISOString();
+  const generatedAtIso = new Date(generatedAtMs).toISOString();
+
+  return `STREAM UPTIME (TRUSTED TWITCH TIMING):\n- Twitch stream started at: ${startedAtIso}\n- Recap generation time: ${generatedAtIso}\n- Exact elapsed live time at generation: ${duration}\n\nSTREAM UPTIME RULES:\n- Treat this timing as authoritative for how long the CURRENT Twitch stream has been live. Do not estimate stream duration from chat.\n- You may use the exact elapsed time to interpret chat jokes, questions, requests, bets, or complaints about stream length.\n- If chat asks for \"another X hours\", \"more hours\", \"keep going\", or similar, you may understand that as a request/joke about extending the current stream from this known uptime baseline.\n- A viewer request or joke about additional hours is NOT proof Qwert agreed to stream longer. Preserve it as a request/joke unless the current source explicitly establishes a commitment.\n- Do not infer unrelated events from uptime alone.`;
+}
+
 function formatPreviousRecaps(previousRecaps = []) {
   if (!Array.isArray(previousRecaps) || previousRecaps.length === 0) {
     return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\nNo earlier hourly recaps are available for this stream.`;
@@ -172,12 +195,13 @@ async function sendGeminiPrompt(prompt) {
   return data;
 }
 
-function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '') {
+function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}) {
   const chatContext = chatLogs.join('\n');
   const streamContext = formatStreamContext(streamContexts);
   const eventContext = formatTwitchEvents(twitchEvents);
   const previousRecapContext = formatPreviousRecaps(previousRecaps);
   const streamLoreContext = formatStreamLore(streamLore);
+  const streamTimingContext = formatStreamTiming(streamTiming);
 
   return `You are creating a factual, useful Twitch chat recap for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
 
@@ -193,6 +217,8 @@ ${previousRecapContext}
 
 ${streamLoreContext}
 
+${streamTimingContext}
+
 SOURCE-OF-TRUTH RULE:
 The supplied chat messages are the source of truth for chat claims, reactions, jokes, viewer opinions, and discussion.
 Messages labeled [MODERATOR ANNOUNCEMENT ...] are official Twitch /announce messages sent by a moderator or broadcaster. Treat the announcement text as an intentional channel statement for this recap window, while still avoiding assumptions about events beyond what the announcement actually says.
@@ -200,6 +226,7 @@ The VERIFIED TWITCH EVENTS section is also a source of truth for the Twitch even
 Previous hourly recaps are continuity context only and are NOT a source of truth for the current hour.
 Stream-specific lore is manually supplied interpretation context only and is NOT proof that an event happened in the current hour.
 Twitch title/category metadata is background context only and is never proof that an event happened.
+The STREAM UPTIME section is authoritative only for the current stream's elapsed live time and may be used to interpret duration-related chat without guessing.
 Accuracy is more important than sounding polished or narratively complete.
 
 STRICT FACTUAL ACCURACY:
@@ -304,7 +331,7 @@ Recent Twitch chat:
 ${chatContext}`;
 }
 
-function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400) {
+function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400, streamTiming = {}) {
   return `You are revising an existing Twitch recap for Qwert so it uses more of the available space without inventing anything.
 
 ${formatStreamContext(streamContexts)}
@@ -315,6 +342,8 @@ ${formatPreviousRecaps(previousRecaps)}
 
 ${formatStreamLore(streamLore)}
 
+${formatStreamTiming(streamTiming)}
+
 CURRENT RECAP:
 ${currentSummary}
 
@@ -322,7 +351,8 @@ SOURCE CHAT:
 ${chatLogs.join('\n')}
 
 RULES:
-- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for CURRENT-HOUR specific events and claims. Stream metadata, previous hourly recaps, and stream-specific lore are context only.
+- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for CURRENT-HOUR specific events and claims. Stream metadata, previous hourly recaps, and stream-specific lore are context only. STREAM UPTIME is authoritative only for exact current-stream elapsed time.
+- Use exact uptime to interpret duration-related jokes/requests without estimating. Requests for additional stream hours are still requests/jokes unless current sources establish that Qwert agreed.
 - Stream-specific lore may clarify a current reference but must never be treated as proof that a lore event happened again in this recap window.
 - Keep accurate existing facts; correct unsupported implications.
 - Do not import an event or detail from an earlier recap unless the current source chat or current verified events support it in this hour.
@@ -356,12 +386,12 @@ Before outputting, silently verify every causal link, every specific noun/label,
 Output ONLY the revised recap.`;
 }
 
-async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '') {
-  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore));
+async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}) {
+  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming));
 }
 
-async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400, attempt = 1, acceptableMin = 380 }) {
-  let prompt = buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, targetMin);
+async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, targetMin = 400, attempt = 1, acceptableMin = 380 }) {
+  let prompt = buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, targetMin, streamTiming);
 
   if (attempt > 1) {
     prompt += `\n\nSTRICT RETRY REQUIREMENT:\n- The previous expansion was still too short.\n- Produce ${targetMin}-${SUMMARY_TEXT_LIMIT} characters whenever the supplied source contains enough supported material.\n- Do not stop below ${acceptableMin} characters unless reaching ${acceptableMin} would require filler, repetition, or unsupported claims.\n- Scan the source again for a DIFFERENT noteworthy supported detail that was omitted.\n- Output only the revised recap.`;
@@ -482,7 +512,7 @@ function isGeminiInputBlocked(err) {
   );
 }
 
-async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '') {
+async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}) {
   if ((!Array.isArray(chatLogs) || chatLogs.length === 0) && (!Array.isArray(twitchEvents) || twitchEvents.length === 0)) {
     throw new Error('No chat logs or verified Twitch events were provided to Gemini.');
   }
@@ -498,7 +528,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   let primaryData;
 
   try {
-    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore);
+    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming);
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error('Gemini blocked the chat input even after sensitive-term redaction.');
@@ -552,6 +582,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
           twitchEvents,
           previousRecaps,
           streamLore,
+          streamTiming,
           targetMin: expansionTargetMin,
           attempt,
           acceptableMin
@@ -636,6 +667,7 @@ function createRecapManager({
   let firstRecapSent = false;
   let recapInProgress = false;
   let streamSessionStartedAt = 0;
+  let twitchStreamStartedAt = 0;
   let nextRecapAt = 0;
   let recapPaused = false;
   let pausedRemainingMs = 0;
@@ -670,6 +702,11 @@ function createRecapManager({
   }
 
   function updateCurrentStreamContext(status) {
+    if (status?.startedAt) {
+      const parsedStart = Date.parse(status.startedAt);
+      if (!Number.isNaN(parsedStart)) twitchStreamStartedAt = parsedStart;
+    }
+
     const newTitle = String(status?.title || '').trim();
     const newCategory = String(status?.category || '').trim();
     const newGameId = String(status?.gameId || '').trim();
@@ -804,6 +841,16 @@ function createRecapManager({
     currentStreamCategory = String(status?.category || '').trim();
     currentStreamGameId = String(status?.gameId || '').trim();
 
+    if (status?.startedAt) {
+      const parsed = Date.parse(status.startedAt);
+      twitchStreamStartedAt = Number.isNaN(parsed) ? Date.now() : parsed;
+    } else {
+      twitchStreamStartedAt = Date.now();
+    }
+
+    // Preserve existing recap cadence behavior: if the bot starts/restarts while
+    // Qwert is already live, begin a fresh 60-minute recap window from bot startup.
+    // twitchStreamStartedAt above remains the authoritative Twitch uptime source.
     if (status?.startedAt && !alreadyLiveAtStartup) {
       const parsed = Date.parse(status.startedAt);
       streamSessionStartedAt = Number.isNaN(parsed) ? Date.now() : parsed;
@@ -844,6 +891,7 @@ function createRecapManager({
     recapPaused = false;
     pausedRemainingMs = 0;
     streamSessionStartedAt = 0;
+    twitchStreamStartedAt = 0;
     nextRecapAt = 0;
     clearStreamRecapsByChannel(channelName)
       .then((result) => console.log(`[Recap] Cleared ${result?.deletedCount || 0} stored stream recap session(s) from MongoDB.`))
@@ -1064,7 +1112,13 @@ function createRecapManager({
         recapSummaryBody = 'Chat was quiet this hour—nothing notable to recap.';
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       } else {
-        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore);
+        const generatedAtMs = Date.now();
+        const streamTiming = {
+          startedAtMs: twitchStreamStartedAt || 0,
+          generatedAtMs,
+          uptimeMs: twitchStreamStartedAt ? Math.max(0, generatedAtMs - twitchStreamStartedAt) : null
+        };
+        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming);
         recapSummaryBody = result.summary;
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
@@ -1182,7 +1236,9 @@ function createRecapManager({
       contextChangesInWindow: streamContexts.length,
       nextRecapAt: recapPaused ? null : nextRecapAt || null,
       pausedRemainingMs: recapPaused ? pausedRemainingMs : null,
-      streamSessionStartedAt: streamSessionStartedAt || null
+      streamSessionStartedAt: streamSessionStartedAt || null,
+      twitchStreamStartedAt: twitchStreamStartedAt || null,
+      streamUptimeMs: streamLive && twitchStreamStartedAt ? Math.max(0, Date.now() - twitchStreamStartedAt) : null
     };
   }
 
