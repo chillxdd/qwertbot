@@ -25,6 +25,7 @@
   <div id="protected">
     <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
       <button id="messagingTab" class="secondary" type="button">Messaging + AI Recap</button>
+      <button id="customCommandsTab" class="secondary" type="button">Custom Commands</button>
       <button id="loreTab" class="secondary" type="button">Lore Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
       <button id="renderLogsTab" class="secondary" type="button">Render Logs</button>
@@ -38,6 +39,11 @@
       <h3>AI Recap Testing</h3>
       <button id="storedBtn" class="secondary">Test Current Recap Window</button>
       <div id="testResult"></div>
+    </div>
+
+    <div id="customCommandsPanel" class="section-panel">
+      <h3>Custom Commands</h3>
+      <div class="coming-soon">Coming Soon</div>
     </div>
 
     <div id="lorePanel" class="section-panel">
@@ -80,7 +86,7 @@
   </div>
 </div>
 
-<button id="chatToggle" class="chat-toggle secondary" type="button">Hide Chat</button>
+<button id="chatToggle" class="chat-toggle" type="button" aria-label="Hide Chat" title="Hide Chat"><span id="chatToggleIcon" aria-hidden="true">›</span></button>
 <aside id="chatSidebar" class="chat-sidebar open" aria-label="Twitch chat sidebar">
   <iframe id="twitchChatFrame" title="Qwert Twitch chat" allowfullscreen></iframe>
 </aside>

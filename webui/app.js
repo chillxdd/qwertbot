@@ -1,6 +1,7 @@
 import { $, esc, postJson } from './shared.js';
 import { initMessagingSection } from './sections/messaging.js';
 import { initLoreSection } from './sections/lore.js';
+import { initCustomCommandsSection } from './sections/customCommands.js';
 import { initOauthSection } from './sections/oauth.js';
 import { initRenderLogsSection } from './sections/renderLogs.js';
 
@@ -14,7 +15,9 @@ const uptime = (ms) => { const s=Math.max(0,Math.floor((Number(ms)||0)/1000)); c
 function setChatOpen(open) {
   $('chatSidebar').classList.toggle('open', open);
   document.body.classList.toggle('chat-open', open);
-  $('chatToggle').textContent = open ? 'Hide Chat' : 'Show Chat';
+  $('chatToggleIcon').textContent = open ? '›' : '‹';
+  $('chatToggle').setAttribute('aria-label', open ? 'Hide Chat' : 'Show Chat');
+  $('chatToggle').setAttribute('title', open ? 'Hide Chat' : 'Show Chat');
   $('chatToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
@@ -33,6 +36,7 @@ async function loadConfig() {
 await loadConfig();
 const messaging = initMessagingSection({ $, postJson, getPassword });
 const lore = initLoreSection({ $, postJson, getPassword, maxLoreLength: config.maxStreamLoreLength });
+initCustomCommandsSection({ $ });
 const oauth = initOauthSection({ $, postJson, getPassword });
 const renderLogs = initRenderLogsSection({ $, postJson, getPassword });
 void messaging;
@@ -111,6 +115,7 @@ $('resumeBtn').onclick = () => recapAction('start');
 
 const sectionMap = {
   messagingTab: 'messagingPanel',
+  customCommandsTab: 'customCommandsPanel',
   loreTab: 'lorePanel',
   oauthTab: 'oauthPanel',
   renderLogsTab: 'renderLogsPanel'
