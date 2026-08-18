@@ -24,7 +24,7 @@
 
   <div id="protected">
     <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
-      <button id="messagingTab" class="secondary" type="button">Messaging + AI Recap</button>
+      <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="customCommandsTab" class="secondary" type="button">Custom Commands</button>
       <button id="loreTab" class="secondary" type="button">Lore Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
@@ -32,13 +32,13 @@
     </div>
 
     <div id="messagingPanel" class="section-panel">
+      <h3>AI Recap Testing</h3>
+      <button id="storedBtn" class="secondary">Test Current Recap Window</button>
+      <div id="testResult"></div>
       <h3>Send Message to Twitch</h3>
       <input id="chatMessage" placeholder="Message">
       <button id="sendBtn">Send to Chat</button>
       <div id="chatMsg" class="detail"></div>
-      <h3>AI Recap Testing</h3>
-      <button id="storedBtn" class="secondary">Test Current Recap Window</button>
-      <div id="testResult"></div>
     </div>
 
     <div id="customCommandsPanel" class="section-panel">

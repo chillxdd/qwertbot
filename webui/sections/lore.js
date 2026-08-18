@@ -1,4 +1,4 @@
-export function initLoreSection({ $, postJson, getPassword, maxLoreLength }) {
+export function initLoreSection({ $, postJson, maxLoreLength }) {
   const maxLength = Number(maxLoreLength) || 12000;
   $('streamLore').maxLength = maxLength;
 
@@ -9,7 +9,7 @@ export function initLoreSection({ $, postJson, getPassword, maxLoreLength }) {
   async function loadLore() {
     try {
       $('loreMsg').textContent = 'Loading...';
-      const d = await postJson('/stream-lore/get', { password: getPassword() });
+      const d = await postJson('/stream-lore/get', {});
       if (!d.success) {
         $('loreMsg').textContent = d.error || 'Could not load lore.';
         return;
@@ -26,7 +26,7 @@ export function initLoreSection({ $, postJson, getPassword, maxLoreLength }) {
     try {
       $('saveLoreBtn').disabled = true;
       $('loreMsg').textContent = 'Saving...';
-      const d = await postJson('/stream-lore/save', { password: getPassword(), text: $('streamLore').value });
+      const d = await postJson('/stream-lore/save', { text: $('streamLore').value });
       if (!d.success) {
         $('loreMsg').textContent = d.error || 'Could not save lore.';
         return;

@@ -57,6 +57,9 @@ const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:w
 const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
+const MOD_SESSION_COOKIE = 'sqwert_mod_session';
+const MOD_SESSION_LIFETIME = 12 * 60 * 60 * 1000;
+const MOD_SESSION_COOKIE_SECURE = Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER || process.env.NODE_ENV === 'production');
 const FALLBACK_ACCESS_TOKEN = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').replace(/^oauth:/i, '').trim();
 const channelName = (process.env.TWITCH_CHANNEL || '').toLowerCase().trim();
 const botUsername = (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim();
@@ -85,6 +88,7 @@ let twitchAuthRecoveryTimer = null;
 let oauthValidationTimer = null;
 let twitchConnectionGeneration = 0;
 const recentEventSubMessageIds = new Map();
+const modSessions = new Map();
 
 function shouldFallbackToIrc(err) {
   const message = String(err?.message || err || '');
@@ -220,7 +224,65 @@ function isModOrBroadcaster(tags) {
 }
 
 function isValidDashboardPassword(password) {
-  return Boolean(DASHBOARD_PASSWORD && password === DASHBOARD_PASSWORD);
+  if (!DASHBOARD_PASSWORD || typeof password !== 'string') return false;
+  const provided = Buffer.from(password);
+  const expected = Buffer.from(DASHBOARD_PASSWORD);
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
+}
+
+function parseCookies(req) {
+  const header = String(req.headers.cookie || '');
+  const cookies = {};
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index <= 0) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) continue;
+    try { cookies[key] = decodeURIComponent(value); } catch (_) { cookies[key] = value; }
+  }
+  return cookies;
+}
+
+function cleanupModSessions() {
+  const now = Date.now();
+  for (const [token, session] of modSessions.entries()) {
+    if (!session || session.expiresAt <= now) modSessions.delete(token);
+  }
+}
+
+function createModSession(res) {
+  cleanupModSessions();
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + MOD_SESSION_LIFETIME;
+  modSessions.set(token, { expiresAt });
+
+  const cookieParts = [
+    `${MOD_SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/',
+    `Max-Age=${Math.floor(MOD_SESSION_LIFETIME / 1000)}`
+  ];
+  if (MOD_SESSION_COOKIE_SECURE) cookieParts.push('Secure');
+  res.setHeader('Set-Cookie', cookieParts.join('; '));
+  return token;
+}
+
+function hasValidModSession(req) {
+  cleanupModSessions();
+  const token = parseCookies(req)[MOD_SESSION_COOKIE];
+  if (!token) return false;
+  const session = modSessions.get(token);
+  return Boolean(session && session.expiresAt > Date.now());
+}
+
+function requireModSession(req, res, next) {
+  if (!hasValidModSession(req)) {
+    return res.status(401).json({ success: false, error: 'MOD session expired. Please log in again.' });
+  }
+  return next();
 }
 
 function isValidQwertOAuthSecret(value) {
@@ -873,13 +935,15 @@ app.post('/mod-login', (req, res) => {
     return res.status(401).json({ success: false, error: 'Incorrect password!' });
   }
 
-  res.json({ success: true });
+  createModSession(res);
+  return res.json({ success: true, expiresInMs: MOD_SESSION_LIFETIME });
 });
 
-app.post('/stream-lore/get', async (req, res) => {
-  if (!isValidDashboardPassword(req.body.password)) {
-    return res.status(401).json({ success: false, error: 'Incorrect password!' });
-  }
+app.get('/mod-session', (req, res) => {
+  return res.json({ success: true, authenticated: hasValidModSession(req) });
+});
+
+app.post('/stream-lore/get', requireModSession, async (req, res) => {
 
   if (!databaseConnected) {
     return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
@@ -899,10 +963,7 @@ app.post('/stream-lore/get', async (req, res) => {
   }
 });
 
-app.post('/stream-lore/save', async (req, res) => {
-  if (!isValidDashboardPassword(req.body.password)) {
-    return res.status(401).json({ success: false, error: 'Incorrect password!' });
-  }
+app.post('/stream-lore/save', requireModSession, async (req, res) => {
 
   if (!databaseConnected) {
     return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
@@ -929,10 +990,7 @@ app.post('/stream-lore/save', async (req, res) => {
   }
 });
 
-app.post('/auth/twitch/start', (req, res) => {
-  if (!isValidDashboardPassword(req.body.password)) {
-    return res.status(401).json({ success: false, error: 'Incorrect password!' });
-  }
+app.post('/auth/twitch/start', requireModSession, (req, res) => {
 
   if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
     return res.status(500).json({ success: false, error: 'TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET is not configured.' });
@@ -1115,10 +1173,7 @@ app.get('/auth/broadcaster/start', (req, res) => {
 });
 
 
-app.post('/render-logs', async (req, res) => {
-  if (!isValidDashboardPassword(req.body?.password)) {
-    return res.status(401).json({ success: false, error: 'Invalid MOD password.' });
-  }
+app.post('/render-logs', requireModSession, async (req, res) => {
 
   try {
     const config = getRenderLogsConfigStatus();
@@ -1148,10 +1203,7 @@ app.post('/render-logs', async (req, res) => {
   }
 });
 
-app.post('/recap-control', async (req, res) => {
-  if (!isValidDashboardPassword(req.body.password)) {
-    return res.status(401).json({ success: false, error: 'Incorrect password!' });
-  }
+app.post('/recap-control', requireModSession, async (req, res) => {
 
   if (!recapManager) {
     return res.status(503).json({ success: false, error: 'Recap manager is not ready.' });
@@ -1174,12 +1226,8 @@ app.post('/recap-control', async (req, res) => {
   }
 });
 
-app.post('/send-chat', async (req, res) => {
-  const { password, message } = req.body;
-
-  if (!isValidDashboardPassword(password)) {
-    return res.status(401).json({ success: false, error: 'Incorrect password!' });
-  }
+app.post('/send-chat', requireModSession, async (req, res) => {
+  const { message } = req.body;
 
   if (typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ success: false, error: 'Message cannot be empty.' });
@@ -1199,12 +1247,7 @@ app.post('/send-chat', async (req, res) => {
   }
 });
 
-app.post('/test-summary', async (req, res) => {
-  const { password } = req.body;
-
-  if (!isValidDashboardPassword(password)) {
-    return res.status(401).json({ success: false, error: 'Incorrect password!' });
-  }
+app.post('/test-summary', requireModSession, async (req, res) => {
 
   if (!recapManager) {
     return res.status(503).json({ success: false, error: 'Recap manager is not ready.' });

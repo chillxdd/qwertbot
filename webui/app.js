@@ -5,10 +5,8 @@ import { initCustomCommandsSection } from './sections/customCommands.js';
 import { initOauthSection } from './sections/oauth.js';
 import { initRenderLogsSection } from './sections/renderLogs.js';
 
-let password = '';
 let loggedIn = false;
 let config = { channelName: 'generalqwert', maxStreamLoreLength: 12000 };
-const getPassword = () => password;
 const countdown = (ms) => { const s=Math.max(0,Math.ceil(ms/1000)); return `${Math.floor(s/60)}min ${s%60}s`; };
 const uptime = (ms) => { const s=Math.max(0,Math.floor((Number(ms)||0)/1000)); const h=Math.floor(s/3600); const m=Math.floor((s%3600)/60); const sec=s%60; return `${h}h ${m}m ${sec}s`; };
 
@@ -34,11 +32,11 @@ async function loadConfig() {
 }
 
 await loadConfig();
-const messaging = initMessagingSection({ $, postJson, getPassword });
-const lore = initLoreSection({ $, postJson, getPassword, maxLoreLength: config.maxStreamLoreLength });
+const messaging = initMessagingSection({ $, postJson });
+const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength });
 initCustomCommandsSection({ $ });
-const oauth = initOauthSection({ $, postJson, getPassword });
-const renderLogs = initRenderLogsSection({ $, postJson, getPassword });
+const oauth = initOauthSection({ $, postJson });
+const renderLogs = initRenderLogsSection({ $, postJson });
 void messaging;
 
 async function status() {
@@ -83,30 +81,59 @@ async function status() {
   }
 }
 
-async function doLogin() {
-  const p = $('password').value;
-  if (!p) return;
-  const d = await postJson('/mod-login', { password: p });
-  if (!d.success) {
-    $('loginMsg').textContent = d.error;
-    return;
-  }
-  password = p;
+async function showAuthenticatedUi({ loadLore = true } = {}) {
   loggedIn = true;
   $('login').style.display = 'none';
   $('protected').style.display = 'block';
   $('recapControls').style.display = 'block';
-  await lore.loadLore();
-  status();
+  $('password').value = '';
+  $('loginMsg').textContent = '';
+  if (loadLore) await lore.loadLore();
+  await status();
+}
+
+function showLogin(message = '') {
+  loggedIn = false;
+  renderLogs.onVisibilityChange(false);
+  $('protected').style.display = 'none';
+  $('recapControls').style.display = 'none';
+  $('login').style.display = 'block';
+  $('loginMsg').textContent = message;
+  setTimeout(() => $('password').focus(), 0);
+}
+
+async function doLogin() {
+  const p = $('password').value;
+  if (!p) return;
+  const d = await postJson('/mod-login', { password: p });
+  $('password').value = '';
+  if (!d.success) {
+    $('loginMsg').textContent = d.error;
+    return;
+  }
+  await showAuthenticatedUi();
+}
+
+async function restoreSession() {
+  try {
+    const response = await fetch('/mod-session', { cache: 'no-store', credentials: 'same-origin' });
+    const d = await response.json();
+    if (d.authenticated) {
+      await showAuthenticatedUi();
+      return;
+    }
+  } catch (_) {}
+  showLogin();
 }
 
 $('loginBtn').onclick = doLogin;
 $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
+window.addEventListener('dashboard-auth-expired', () => showLogin('MOD session expired. Please log in again.'));
 $('chatToggle').onclick = () => setChatOpen(!$('chatSidebar').classList.contains('open'));
 setChatOpen(true);
 
 async function recapAction(action) {
-  const d = await postJson('/recap-control', { password, action });
+  const d = await postJson('/recap-control', { action });
   $('recapMsg').textContent = d.message || d.error;
   status();
 }
@@ -142,5 +169,5 @@ Object.keys(sectionMap).forEach((tabId) => {
   $(tabId).onclick = () => toggleSection(tabId);
 });
 
-status();
+await restoreSession();
 setInterval(status, 15000);

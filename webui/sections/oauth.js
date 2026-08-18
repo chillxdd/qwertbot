@@ -1,6 +1,6 @@
-export function initOauthSection({ $, postJson, getPassword }) {
+export function initOauthSection({ $, postJson }) {
   $('oauthBtn').onclick = async () => {
-    const d = await postJson('/auth/twitch/start', { password: getPassword() });
+    const d = await postJson('/auth/twitch/start', {});
     if (!d.success) {
       $('oauthMsg').textContent = d.error;
       return;

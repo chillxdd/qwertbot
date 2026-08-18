@@ -1,4 +1,4 @@
-export function initRenderLogsSection({ $, postJson, getPassword }) {
+export function initRenderLogsSection({ $, postJson }) {
   let logs = [];
   let timer = null;
   let sectionOpen = false;
@@ -28,7 +28,7 @@ export function initRenderLogsSection({ $, postJson, getPassword }) {
     $('refreshLogsBtn').disabled = true;
     $('renderLogsMsg').textContent = 'Loading recent Render logs...';
     try {
-      const d = await postJson('/render-logs', { password: getPassword() });
+      const d = await postJson('/render-logs', {});
       if (!d.success) {
         $('renderLogsMsg').textContent = d.error || 'Could not load Render logs.';
         return;
