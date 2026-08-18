@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GeneralQwert's Twitch Bot</title>
+  <link rel="stylesheet" href="/webui/styles.css">
+</head>
+<body>
+<div id="login" class="mod-login">
+  <h3>MOD Login</h3>
+  <input id="password" type="password" placeholder="MOD password" autocomplete="current-password">
+  <button id="loginBtn" type="button">Login</button>
+  <div id="loginMsg" class="detail"></div>
+</div>
+
+<div class="card">
+  <h2>GeneralQwert's Twitch Bot</h2>
+  <div class="grid">
+    <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
+    <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div><div id="recapControls" class="recap-controls"><button id="pauseBtn" class="danger">Pause Recaps</button><button id="resumeBtn">Resume Recaps</button><div id="recapMsg" class="detail"></div></div></div>
+    <div class="box"><div class="label">MongoDB Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
+    <div class="box"><div class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
+  </div>
+
+  <div id="protected">
+    <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
+      <button id="messagingTab" class="secondary" type="button">Messaging + AI Recap</button>
+      <button id="loreTab" class="secondary" type="button">Lore Management</button>
+      <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
+      <button id="renderLogsTab" class="secondary" type="button">Render Logs</button>
+    </div>
+
+    <div id="messagingPanel" class="section-panel">
+      <h3>Send Message to Twitch</h3>
+      <input id="chatMessage" placeholder="Message">
+      <button id="sendBtn">Send to Chat</button>
+      <div id="chatMsg" class="detail"></div>
+      <h3>AI Recap Testing</h3>
+      <button id="storedBtn" class="secondary">Test Current Recap Window</button>
+      <div id="testResult"></div>
+    </div>
+
+    <div id="lorePanel" class="section-panel">
+      <h3>Stream Specific Lore</h3>
+      <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the AI interpret current chat. Saved lore stays in MongoDB until you edit it.</div>
+      <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
+      <button id="saveLoreBtn">Save Lore</button>
+      <div id="loreCount" class="detail">0/12000 characters</div>
+      <div id="loreMsg" class="detail"></div>
+    </div>
+
+    <div id="oauthPanel" class="section-panel">
+      <h3>OAuth Management</h3>
+      <div class="oauth-grid">
+        <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div><div class="oauth-action"><button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button><div id="oauthMsg" class="detail"></div></div></div>
+        <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div><div class="oauth-action"><button id="broadcasterOauthBtn">Authorize / Reauthorize Broadcaster</button><div id="broadcasterOauthMsg" class="detail"></div></div></div>
+        <div class="box wide"><div class="label">Twitch Chat API</div><div id="oauthChatApiStatusBox" class="value warn">Checking...</div><div id="oauthChatApiDetail" class="detail"></div></div>
+      </div>
+    </div>
+
+    <div id="renderLogsPanel" class="section-panel">
+      <h3>Render Logs</h3>
+      <div class="render-log-toolbar">
+        <button id="refreshLogsBtn" type="button">Refresh Logs</button>
+        <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh every 10s</label>
+        <input id="logFilter" class="log-filter" placeholder="Filter loaded logs...">
+      </div>
+      <div id="renderLogsMsg" class="detail">Open this section to load recent service logs.</div>
+      <div id="renderLogConsole" class="render-log-console" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+
+<div id="qwertSecretModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="qwertSecretTitle">
+  <div class="modal-card">
+    <h3 id="qwertSecretTitle">Broadcaster OAuth</h3>
+    <label for="qwertSecretInput" class="detail">Enter Secret Key for Qwert:</label>
+    <input id="qwertSecretInput" type="password" autocomplete="off" placeholder="Secret key">
+    <div class="modal-actions"><button id="qwertSecretCancel" class="secondary" type="button">Cancel</button><button id="qwertSecretOk" type="button">OK</button></div>
+  </div>
+</div>
+
+<button id="chatToggle" class="chat-toggle secondary" type="button">Hide Chat</button>
+<aside id="chatSidebar" class="chat-sidebar open" aria-label="Twitch chat sidebar">
+  <iframe id="twitchChatFrame" title="Qwert Twitch chat" allowfullscreen></iframe>
+</aside>
+<script type="module" src="/webui/app.js"></script>
+</body>
+</html>
