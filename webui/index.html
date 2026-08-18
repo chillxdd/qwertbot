@@ -39,6 +39,23 @@
       <input id="chatMessage" placeholder="Message">
       <button id="sendBtn">Send to Chat</button>
       <div id="chatMsg" class="detail"></div>
+
+      <div class="prompt-settings">
+        <button id="promptSettingsToggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="promptSettingsBody">Show Advanced Prompt Settings</button>
+        <div id="promptSettingsBody" class="advanced-settings-body">
+          <h3>AI Recap Prompt Settings</h3>
+          <div class="advanced-warning"><strong>Advanced:</strong> Changes here affect the next automatic recap and Test Current Recap Window immediately. Poor prompt edits can reduce recap quality. Core factual-accuracy, source-of-truth, ambiguity, causality, censoring, and Twitch length safeguards remain enforced in code.</div>
+          <label class="prompt-label" for="primaryRecapInstructions">Main Recap Instructions</label>
+          <textarea id="primaryRecapInstructions" class="prompt-editor" maxlength="20000" placeholder="Loading recap instructions..."></textarea>
+          <div id="primaryPromptCount" class="detail">0/20000 characters</div>
+          <label class="prompt-label" for="expansionRecapInstructions">Expansion / Retry Instructions</label>
+          <textarea id="expansionRecapInstructions" class="prompt-editor prompt-editor-small" maxlength="12000" placeholder="Loading expansion instructions..."></textarea>
+          <div id="expansionPromptCount" class="detail">0/12000 characters</div>
+          <button id="savePromptBtn" type="button">Save Prompt Settings</button>
+          <button id="undoPromptBtn" class="secondary" type="button">Undo Changes</button>
+          <div id="promptMsg" class="detail"></div>
+        </div>
+      </div>
     </div>
 
     <div id="customCommandsPanel" class="section-panel">

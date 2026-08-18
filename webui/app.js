@@ -89,6 +89,7 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   $('password').value = '';
   $('loginMsg').textContent = '';
   if (loadLore) await lore.loadLore();
+  await messaging.loadPrompt();
   await status();
 }
 

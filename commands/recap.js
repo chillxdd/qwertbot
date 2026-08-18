@@ -1,5 +1,6 @@
 const { getRecentStreamRecaps, saveStreamRecap, clearStreamRecapsByChannel } = require('../services/streamRecapHistory');
 const { getStreamLore } = require('../services/streamLore');
+const { getRecapPromptConfig, getDefaultRecapPromptConfig } = require('../services/recapPromptConfig');
 
 const SUMMARY_PREFIX = 'Hourly Recap: ';
 const TWITCH_MESSAGE_LIMIT = 500;
@@ -195,19 +196,19 @@ async function sendGeminiPrompt(prompt) {
   return data;
 }
 
-function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}) {
+function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, primaryInstructions = '') {
   const chatContext = chatLogs.join('\n');
   const streamContext = formatStreamContext(streamContexts);
   const eventContext = formatTwitchEvents(twitchEvents);
   const previousRecapContext = formatPreviousRecaps(previousRecaps);
   const streamLoreContext = formatStreamLore(streamLore);
   const streamTimingContext = formatStreamTiming(streamTiming);
+  const editableInstructions = String(primaryInstructions || '').trim();
 
-  return `You are creating a factual, useful Twitch chat recap for Qwert or a viewer who was lurking, stepped away, or could not keep up with chat.
+  return `You are generating an hourly Twitch recap for Qwert.
 
-Always refer to the streamer/broadcaster as Qwert.
-
-Your job is to tell them what was actually worth knowing from recent chat.
+EDITABLE RECAP INSTRUCTIONS (saved in MongoDB):
+${editableInstructions}
 
 ${streamContext}
 
@@ -219,120 +220,61 @@ ${streamLoreContext}
 
 ${streamTimingContext}
 
-SOURCE-OF-TRUTH RULE:
-The supplied chat messages are the source of truth for chat claims, reactions, jokes, viewer opinions, and discussion.
-Messages labeled [MODERATOR ANNOUNCEMENT ...] are official Twitch /announce messages sent by a moderator or broadcaster. Treat the announcement text as an intentional channel statement for this recap window, while still avoiding assumptions about events beyond what the announcement actually says.
-The VERIFIED TWITCH EVENTS section is also a source of truth for the Twitch events explicitly listed there.
-Previous hourly recaps are continuity context only and are NOT a source of truth for the current hour.
-Stream-specific lore is manually supplied interpretation context only and is NOT proof that an event happened in the current hour.
-Twitch title/category metadata is background context only and is never proof that an event happened.
-The STREAM UPTIME section is authoritative only for the current stream's elapsed live time and may be used to interpret duration-related chat without guessing.
-Accuracy is more important than sounding polished or narratively complete.
-
-STRICT FACTUAL ACCURACY:
-- Every factual detail about what happened must be directly supported by supplied chat OR the verified Twitch EventSub records.
+NON-NEGOTIABLE SOURCE-OF-TRUTH AND ACCURACY RULES:
+- The supplied chat messages are the source of truth for chat claims, reactions, jokes, viewer opinions, and discussion.
+- Messages labeled [MODERATOR ANNOUNCEMENT ...] are official Twitch /announce messages sent by a moderator or broadcaster. Treat the announcement text as an intentional channel statement for this recap window, while avoiding assumptions beyond what the announcement actually says.
+- VERIFIED TWITCH EVENTS are a source of truth only for the Twitch events explicitly listed there.
+- Previous hourly recaps are continuity context only and are NOT evidence that anything happened again in the current hour.
+- Stream-specific lore is interpretation/background context only and is NOT proof that an event happened in the current hour.
+- Twitch title/category metadata is background context only and is never proof that an event happened.
+- STREAM UPTIME is authoritative only for the current stream's elapsed live time and may be used to interpret duration-related chat without guessing.
+- Every factual detail about what happened must be directly supported by supplied current chat or verified Twitch EventSub records.
 - Never fill missing context with assumptions, outside knowledge, common game knowledge, or what seems likely.
-- Never invent stream/game events, milestones, raids, follows, subscriptions, cheers, counts, announcements, or outcomes beyond what chat or verified Twitch events support.
 - Never turn speculation, jokes, guesses, predictions, questions, or suggestions into established facts.
 - Do not combine unrelated messages in a way that creates a new implied fact.
 - When uncertain, omit the detail or preserve the ambiguity.
 
-PRESERVE AMBIGUITY:
-- If a number, name, pronoun, event, milestone, or reference is unclear, keep it unclear or omit it.
-- Example: "almost have 200 on Twitch" may become "almost at 200 on Twitch" but NEVER "200 followers/viewers/subscribers" unless chat says which.
-
-REFERENT AND LABEL PRESERVATION:
-- Preserve the exact type of thing chat is discussing.
-- If chat says "favorites," summarize it as favorites. Do NOT silently change it to "team," "roster," "party," "lineup," or "build."
-- If chat says "list," do not decide what kind of list it is unless chat establishes that.
+NON-NEGOTIABLE AMBIGUITY / LABEL RULES:
+- Preserve the exact type of thing chat is discussing. If chat says "favorites," do not silently change it to "team," "roster," "party," "lineup," or "build."
 - Pokemon names appearing together do NOT prove they are Qwert's active team.
 - Suggestions to add/remove/replace/rank Pokemon do NOT automatically mean gameplay team changes.
-- Do not infer the purpose of a collection, ranking, list, group, favorites selection, lineup, roster, party, or box.
-- Keep source terminology whenever possible. Broader-but-accurate wording is better than specific-but-inferred wording.
-- Directional or ordinal choices such as "left / middle / right", "first / second / third", colors, letters, or numbers do NOT by themselves prove that chat was navigating a menu, choosing an item, selecting a starter, picking a Pokeball, or performing any other gameplay/UI action.
-- If chat only debates options like "left, middle, or right," summarize that literally as chat debating or voting on left/middle/right unless the source itself identifies what those choices represent.
-- Never use stream title/category or outside game knowledge to name an ambiguous choice. For example, a Pokemon category does not let you infer that "left / middle / right" means starter Pokeballs.
+- Directional or ordinal choices such as "left / middle / right", "first / second / third", colors, letters, or numbers do NOT by themselves prove menu navigation, item selection, starter selection, Pokeball selection, or any other gameplay/UI action.
+- Stream-specific lore may clarify what a CURRENT reference means when the current source invokes that lore, but lore alone cannot prove the current event occurred.
+- Never use stream title/category or outside game knowledge to fill an ambiguous referent.
 
-MESSAGE ORDER AND RECENCY:
+NON-NEGOTIABLE CHRONOLOGY / CAUSALITY RULES:
 - Messages are ordered older to newer, but order is NOT a narrative timeline.
-- Do NOT use "later," "earlier," "afterward," "then," "eventually," or similar chronology merely because one message appears after another.
-- Do not imply distinct chronological phases unless chat explicitly establishes them.
-- Use neutral connectors for independent topics.
+- Do not infer distinct chronological phases unless current chat explicitly establishes them.
+- Do not imply that one topic/event caused another merely because messages were nearby or ordered that way.
+- Avoid causal wording such as prompting, leading to, causing, resulting in, sparking, triggering, in response to, or because of this unless the source explicitly supports the relationship.
 
-CAUSALITY RULE:
-- Do NOT imply that one topic, event, joke, loss, win, comment, question, or reaction caused another unless chat explicitly establishes that relationship.
-- Message proximity and order are NOT evidence of causation.
-- Never use "prompting," "which prompted," "leading to," "which led to," "causing," "resulting in," "sparking," "triggering," "in response to," "because of this," or similar causal wording unless clearly supported.
-- If you cannot prove A caused B, describe A and B independently.
-
-IMPORTANCE FILTER:
-Prioritize:
-- Funny, surprising, memorable, or strongly reacted-to moments.
-- Clearly important stream/gameplay details supported by chat.
-- Repeated topics, ongoing jokes, fake commands, debates, predictions, arguments, or suggestions.
-- Notable questions directed at Qwert.
-- Clear wins, losses, mistakes, discoveries, or reactions when chat actually supports them.
-- Useful context about what chat was broadly focused on.
-- Sexual jokes, innuendo, suggestive fake commands, or mildly NSFW humor when genuinely noteworthy.
-
-Deprioritize:
-- Routine greetings/farewells.
-- Someone leaving for work, a meeting, food, sleep, lurking, or returning.
-- Mundane one-off personal updates.
-- Weak isolated comments or generic filler.
-
-OVERALL PICTURE:
-- Summarize broad repeated topics once instead of listing every message.
-- Mention usernames only when genuinely notable or useful.
-- Balance concrete highlights with the overall picture.
-- Do not force unrelated topics into one story.
-
-SEXUAL / SUGGESTIVE CHAT:
-- Sexual jokes, innuendo, suggestive humor, horny jokes, or mildly NSFW fake commands may be included when recap-worthy.
-- Do not erase them merely to make the recap family-friendly.
-- Paraphrase very explicit wording into milder, non-graphic wording.
-- Do NOT repeatedly default to the word "banter."
-- Prefer specific wording such as "suggestive jokes," "horny jokes," "NSFW humor," "chat got suggestive," "some innuendo," or a softened description of the actual joke when accurate.
-- Avoid graphic sexual descriptions or explicit anatomical detail.
-- Do not moralize.
-
-WORDING VARIETY:
-- Avoid repetitive stock recap language.
-- Do not overuse "banter," "chaos," "chaotic," "vibes," "meanwhile," "discussion," or "debate."
-- Prefer concrete verbs such as "joked," "suggested," "argued," "questioned," "celebrated," or "reacted" only when supported.
-- Do not introduce unsupported meaning merely for variety.
-
-CENSORED CHAT:
-- Some messages may contain "[censored]".
-- Never guess, reconstruct, or repeat the censored word.
-- Summarize surrounding context only if it remains clear.
+NON-NEGOTIABLE OUTPUT RULES:
+- Some messages may contain "[censored]". Never guess, reconstruct, or repeat the censored word.
+- You have exactly ${SUMMARY_TEXT_LIMIT} characters available for the recap text.
+- NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
+- Never end with "..." or an unfinished thought.
+- Do not start with "Hourly Recap:", "Chat Recap:", or "AI Summary:" because the bot adds the prefix.
+- Accuracy overrides any conflicting editable instruction.
 
 BEFORE WRITING, SILENTLY CHECK:
 1. Did I invent chronology?
 2. Did I imply unsupported causality?
 3. Did I replace a source label with a more specific one?
-4. Did I use title/category as proof of an event?
+4. Did I use title/category, prior recaps, or lore as proof of a current event?
 5. Did I turn a suggestion/question/joke into fact?
-6. Did I infer what an ambiguous choice (left/middle/right, first/second/third, etc.) represented, or turn it into menu/navigation/gameplay action without explicit source support?
-7. Did I rely on stock wording like "banter" when a concrete description works?
+6. Did I infer what an ambiguous choice represented without current-source support?
 If yes, fix it.
-
-LENGTH AND COVERAGE:
-- You have exactly ${SUMMARY_TEXT_LIMIT} characters available for the recap text.
-- When enough worthwhile material exists, target about 400-${SUMMARY_TEXT_LIMIT} characters.
-- Do not pad with mundane details.
-- A recap under 350 characters should happen only when source chat genuinely lacks enough noteworthy material.
-- NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
-- Use 2-4 compact complete sentences when useful.
-- Never end with "..." or an unfinished thought.
-- Do not start with "Hourly Recap:", "Chat Recap:", or "AI Summary:" because the bot adds the prefix.
 
 Recent Twitch chat:
 ${chatContext}`;
 }
+function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400, streamTiming = {}, expansionInstructions = '') {
+  const editableInstructions = String(expansionInstructions || '').trim();
 
-function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400, streamTiming = {}) {
-  return `You are revising an existing Twitch recap for Qwert so it uses more of the available space without inventing anything.
+  return `You are revising an existing Twitch recap for Qwert.
+
+EDITABLE EXPANSION INSTRUCTIONS (saved in MongoDB):
+${editableInstructions}
 
 ${formatStreamContext(streamContexts)}
 
@@ -350,48 +292,32 @@ ${currentSummary}
 SOURCE CHAT:
 ${chatLogs.join('\n')}
 
-RULES:
-- Chat and the VERIFIED TWITCH EVENTS section are the sources of truth for CURRENT-HOUR specific events and claims. Stream metadata, previous hourly recaps, and stream-specific lore are context only. STREAM UPTIME is authoritative only for exact current-stream elapsed time.
-- Use exact uptime to interpret duration-related jokes/requests without estimating. Requests for additional stream hours are still requests/jokes unless current sources establish that Qwert agreed.
-- Stream-specific lore may clarify a current reference but must never be treated as proof that a lore event happened again in this recap window.
-- Keep accurate existing facts; correct unsupported implications.
-- Do not import an event or detail from an earlier recap unless the current source chat or current verified events support it in this hour.
-- Add only noteworthy details directly supported by chat.
-- Preserve ambiguity and exact labels. "favorites" must not become "team" unless chat establishes team.
-- Directional/ordinal choices such as "left / middle / right" or "first / second / third" must remain literal unless source chat explicitly identifies what the choices are. Do not turn them into menu navigation, item selection, starter selection, Pokeballs, or another gameplay/UI action based on metadata or game knowledge.
-- Do not infer chronology from message order.
-- Do not imply causation from proximity/order. Avoid causal connectors such as prompting/leading to/causing/resulting in/sparking/triggering unless chat explicitly proves the relationship.
+NON-NEGOTIABLE EXPANSION RULES:
+- Chat and VERIFIED TWITCH EVENTS are the only sources of truth for current-hour events and claims. Stream metadata, previous recaps, and lore are context only. STREAM UPTIME is authoritative only for exact elapsed stream time.
+- Lore may clarify a current reference but cannot prove that a lore event happened again now.
+- Preserve ambiguity and exact labels. Do not infer what left/middle/right, first/second/third, colors, numbers, or other vague choices represent unless the current source says so.
+- Do not infer chronology from message order or causation from proximity/order.
 - Do not turn questions, jokes, suggestions, guesses, or predictions into facts.
-- Sexual/suggestive humor may be retained in softened non-graphic wording when noteworthy. Do not repeatedly default to "banter."
-- Avoid repetitive stock words such as banter, chaos, vibes, meanwhile, discussion, and debate.
 - Do not restore [censored] text.
-- Omit greetings, farewells, mundane personal updates, and weak filler.
 - This recap window contains ${chatLogs.length} source chat messages.
-- When enough distinct worthwhile material exists, target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters. Treat ${targetMin} as a serious target, not a suggestion.
-- Actively scan the source for notable topics, jokes, reactions, gameplay details, predictions, or recurring themes omitted from CURRENT RECAP and add the best supported ones.
-- Prefer adding another genuinely useful detail over merely rewording the same facts.
-- Every added detail must introduce a genuinely distinct topic, event, joke, reaction, conclusion, or fact that is not already represented in CURRENT RECAP.
-- Preserve [MODERATOR ANNOUNCEMENT ...] messages as clearly intentional moderator/broadcaster statements when relevant; do not downgrade them into anonymous chat or invent implications beyond their text.
-- Do not count narrower wording as a new detail. If CURRENT RECAP already mentions a broad idea such as "stats and game mechanics," do not later add "Pokemon stats" or "stat-boosting moves" unless the added wording contributes a clearly different supported event, conclusion, or reaction.
-- Avoid semantic duplication even when the wording is different. Do not mention the same subject twice merely to increase character count.
-- If several source messages belong to the same topic, summarize that topic once and use remaining space for a different noteworthy topic when one exists.
-- Before adding a candidate detail, silently ask: "Is this already covered by the current recap in broader or narrower words?" If yes, choose a different omitted detail instead.
-- Do not pad, repeat, or add mundane filler just to hit the target. Accuracy still wins if the source genuinely lacks enough worthwhile material.
+- When enough distinct worthwhile material exists, target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters. Treat ${targetMin} as a serious target, but never use filler, repetition, or unsupported claims to reach it.
+- Avoid semantic duplication even when wording differs. Prefer a different supported topic over a narrower restatement of one already covered.
+- Preserve [MODERATOR ANNOUNCEMENT ...] messages as intentional moderator/broadcaster statements when relevant without inventing implications beyond their text.
 - NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
-- Use 2-4 compact complete sentences. Never end with "...".
+- Use complete sentences. Never end with "...".
 - Do not start with "Hourly Recap:", "Chat Recap:", or "AI Summary:".
+- Accuracy overrides any conflicting editable instruction.
 
-Before outputting, silently verify every causal link, every specific noun/label, and every interpretation of an ambiguous choice against the source chat. If it was inferred, rewrite neutrally.
+Before outputting, silently verify every causal link, specific noun/label, and interpretation of an ambiguous reference against the current source.
 
 Output ONLY the revised recap.`;
 }
-
-async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}) {
-  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming));
+async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, primaryInstructions = '') {
+  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, primaryInstructions));
 }
 
-async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, targetMin = 400, attempt = 1, acceptableMin = 380 }) {
-  let prompt = buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, targetMin, streamTiming);
+async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, targetMin = 400, attempt = 1, acceptableMin = 380, expansionInstructions = '' }) {
+  let prompt = buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, targetMin, streamTiming, expansionInstructions);
 
   if (attempt > 1) {
     prompt += `\n\nSTRICT RETRY REQUIREMENT:\n- The previous expansion was still too short.\n- Produce ${targetMin}-${SUMMARY_TEXT_LIMIT} characters whenever the supplied source contains enough supported material.\n- Do not stop below ${acceptableMin} characters unless reaching ${acceptableMin} would require filler, repetition, or unsupported claims.\n- Scan the source again for a DIFFERENT noteworthy supported detail that was omitted.\n- Output only the revised recap.`;
@@ -512,12 +438,23 @@ function isGeminiInputBlocked(err) {
   );
 }
 
-async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}) {
+async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, recapChannelName = '') {
   if ((!Array.isArray(chatLogs) || chatLogs.length === 0) && (!Array.isArray(twitchEvents) || twitchEvents.length === 0)) {
     throw new Error('No chat logs or verified Twitch events were provided to Gemini.');
   }
 
   chatLogs = Array.isArray(chatLogs) ? chatLogs : [];
+
+  let promptConfig = getDefaultRecapPromptConfig();
+  if (recapChannelName) {
+    try {
+      promptConfig = await getRecapPromptConfig(recapChannelName);
+      console.log(`[Gemini] Loaded recap prompt instructions from ${promptConfig.source === 'mongodb' ? 'MongoDB' : 'code defaults'}.`);
+    } catch (promptErr) {
+      console.error('[Gemini] Could not load recap prompt config from MongoDB. Using code defaults:', promptErr.message || promptErr);
+      promptConfig = getDefaultRecapPromptConfig();
+    }
+  }
 
   const sanitization = sanitizeChatForGemini(chatLogs);
 
@@ -528,7 +465,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   let primaryData;
 
   try {
-    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming);
+    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, promptConfig.primaryInstructions);
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error('Gemini blocked the chat input even after sensitive-term redaction.');
@@ -585,7 +522,8 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
           streamTiming,
           targetMin: expansionTargetMin,
           attempt,
-          acceptableMin
+          acceptableMin,
+          expansionInstructions: promptConfig.expansionInstructions
         });
 
         let expandedSummary = extractGeminiText(expansionData);
@@ -1118,7 +1056,7 @@ function createRecapManager({
           generatedAtMs,
           uptimeMs: twitchStreamStartedAt ? Math.max(0, generatedAtMs - twitchStreamStartedAt) : null
         };
-        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming);
+        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName);
         recapSummaryBody = result.summary;
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }

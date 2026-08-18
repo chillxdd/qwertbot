@@ -12,6 +12,12 @@ const {
 
 const { connectDatabase } = require('./services/database');
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('./services/streamLore');
+const {
+  MAX_PRIMARY_INSTRUCTIONS_LENGTH,
+  MAX_EXPANSION_INSTRUCTIONS_LENGTH,
+  getRecapPromptConfig,
+  saveRecapPromptConfig
+} = require('./services/recapPromptConfig');
 const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('./services/renderLogs');
 const {
   exchangeAuthorizationCode,
@@ -990,6 +996,58 @@ app.post('/stream-lore/save', requireModSession, async (req, res) => {
   }
 });
 
+app.post('/recap-prompt/get', requireModSession, async (req, res) => {
+  if (!databaseConnected) {
+    return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+  }
+
+  try {
+    const promptConfig = await getRecapPromptConfig(channelName);
+    return res.json({
+      success: true,
+      primaryInstructions: promptConfig.primaryInstructions,
+      expansionInstructions: promptConfig.expansionInstructions,
+      source: promptConfig.source,
+      updatedAt: promptConfig.updatedAt,
+      maxPrimaryLength: MAX_PRIMARY_INSTRUCTIONS_LENGTH,
+      maxExpansionLength: MAX_EXPANSION_INSTRUCTIONS_LENGTH
+    });
+  } catch (err) {
+    console.error('[Recap Prompt] Could not load prompt settings:', err.message || err);
+    return res.status(500).json({ success: false, error: 'Could not load recap prompt settings.' });
+  }
+});
+
+app.post('/recap-prompt/save', requireModSession, async (req, res) => {
+  if (!databaseConnected) {
+    return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+  }
+
+  const primaryInstructions = typeof req.body.primaryInstructions === 'string' ? req.body.primaryInstructions : '';
+  const expansionInstructions = typeof req.body.expansionInstructions === 'string' ? req.body.expansionInstructions : '';
+
+  try {
+    const promptConfig = await saveRecapPromptConfig({
+      channelName,
+      primaryInstructions,
+      expansionInstructions
+    });
+    console.log(`[Recap Prompt] Saved editable recap instructions to MongoDB (${promptConfig.primaryInstructions.length} primary chars, ${promptConfig.expansionInstructions.length} expansion chars).`);
+    return res.json({
+      success: true,
+      primaryInstructions: promptConfig.primaryInstructions,
+      expansionInstructions: promptConfig.expansionInstructions,
+      source: promptConfig.source,
+      updatedAt: promptConfig.updatedAt,
+      maxPrimaryLength: MAX_PRIMARY_INSTRUCTIONS_LENGTH,
+      maxExpansionLength: MAX_EXPANSION_INSTRUCTIONS_LENGTH
+    });
+  } catch (err) {
+    console.error('[Recap Prompt] Could not save prompt settings:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not save recap prompt settings.' });
+  }
+});
+
 app.post('/auth/twitch/start', requireModSession, (req, res) => {
 
   if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
@@ -1288,7 +1346,7 @@ app.post('/test-summary', requireModSession, async (req, res) => {
       generatedAtMs,
       uptimeMs: recapStatus.twitchStreamStartedAt ? Math.max(0, generatedAtMs - recapStatus.twitchStreamStartedAt) : null
     };
-    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming);
+    const result = await generateRecap(logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, channelName);
     const fullOutput = SUMMARY_PREFIX + result.summary;
 
     res.json({
