@@ -1240,10 +1240,10 @@ app.get('/', (req, res) => {
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>GeneralQwert's Twitch Bot</title>
   <style>
-    body{font-family:Arial,sans-serif;background:#0f0f12;color:#fff;margin:0;padding:20px;transition:padding-right .2s ease}.mod-login{position:fixed;top:14px;left:14px;width:210px;background:#18181b;border:1px solid #33333d;border-radius:8px;padding:12px;z-index:30;box-shadow:0 2px 12px rgba(0,0,0,.35)}.mod-login h3{margin:0 0 6px}.mod-login input{margin:4px 0 6px;padding:9px}.mod-login button{padding:9px 12px}.recap-controls{display:none;margin-top:10px;padding-top:9px;border-top:1px solid #26262c}body.chat-open{padding-right:390px}.card{max-width:760px;margin:30px auto;background:#18181b;border:1px solid #26262c;border-radius:8px;padding:24px}h2{color:#9146ff;margin-top:0}h3{font-size:13px;color:#adadb8;text-transform:uppercase;margin-top:24px}input,textarea{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px solid #3a3a44;border-radius:4px;padding:11px;margin:6px 0 10px}textarea{min-height:220px}button{background:#9146ff;color:#fff;border:0;border-radius:4px;padding:11px 14px;font-weight:bold;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#33333d}button.danger{background:#a52f36}button:disabled{opacity:.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{background:#0e0e10;border:1px solid #26262c;border-radius:6px;padding:14px}.label{font-size:11px;color:#777783;text-transform:uppercase}.value{font-size:16px;font-weight:bold;margin:5px 0}.detail{font-size:12px;color:#adadb8;line-height:1.5}.good{color:#00f59b}.bad{color:#ff4f4f}.warn{color:#f5c542}.section-nav{display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid #2a2a30;margin-top:22px;padding-top:18px}.section-nav button{flex:1 1 190px;margin:0}.section-nav button.active{outline:2px solid #bf94ff;background:#772ce8}.section-panel{display:none;border-top:1px solid #2a2a30;margin-top:18px;padding-top:2px}.section-panel.open{display:block}.oauth-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.oauth-grid .wide{grid-column:1/-1}#protected{display:none}#testResult{white-space:pre-wrap;background:#0e0e10;padding:12px;border-radius:4px;margin-top:10px}a{color:#bf94ff}.chat-sidebar{position:fixed;top:0;right:0;width:360px;height:100vh;background:#0e0e10;border-left:1px solid #2a2a30;z-index:20;transform:translateX(100%);transition:transform .2s ease;display:flex;flex-direction:column}.chat-sidebar.open{transform:translateX(0)}.chat-sidebar iframe{display:block;border:0;width:360px;min-width:360px;height:100vh;background:#0e0e10}.chat-toggle{position:fixed;right:12px;top:14px;z-index:10;box-shadow:0 2px 12px rgba(0,0,0,.35)}body.chat-open .chat-toggle{right:380px}@media(max-width:1100px){body.chat-open{padding-right:20px}.chat-sidebar{width:min(360px,calc(100vw - 54px))}.chat-sidebar iframe{width:100%;min-width:0}body.chat-open .chat-toggle{right:calc(min(360px,calc(100vw - 54px)) + 20px)}}@media(max-width:600px){.grid,.oauth-grid{grid-template-columns:1fr}.oauth-grid .wide{grid-column:auto}.card{margin-top:150px;padding:18px}.mod-login{position:absolute;right:70px;width:auto}}
+    body{font-family:Arial,sans-serif;background:#0f0f12;color:#fff;margin:0;padding:20px;transition:padding-right .2s ease}.mod-login{position:fixed;top:14px;left:50%;transform:translateX(-50%);width:250px;background:#18181b;border:1px solid #33333d;border-radius:8px;padding:12px;z-index:30;box-shadow:0 2px 12px rgba(0,0,0,.35)}.mod-login h3{margin:0 0 6px}.mod-login input{margin:4px 0 6px;padding:9px}.mod-login button{padding:9px 12px}body.login-active .card{margin-top:125px}.recap-controls{display:none;margin-top:10px;padding-top:9px;border-top:1px solid #26262c}body.chat-open{padding-right:390px}.card{max-width:760px;margin:30px auto;background:#18181b;border:1px solid #26262c;border-radius:8px;padding:24px}h2{color:#9146ff;margin-top:0}h3{font-size:13px;color:#adadb8;text-transform:uppercase;margin-top:24px}input,textarea{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px solid #3a3a44;border-radius:4px;padding:11px;margin:6px 0 10px}textarea{min-height:220px}button{background:#9146ff;color:#fff;border:0;border-radius:4px;padding:11px 14px;font-weight:bold;cursor:pointer;margin:4px 4px 4px 0}button.secondary{background:#33333d}button.danger{background:#a52f36}button:disabled{opacity:.5}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.box{background:#0e0e10;border:1px solid #26262c;border-radius:6px;padding:14px}.label{font-size:11px;color:#777783;text-transform:uppercase}.value{font-size:16px;font-weight:bold;margin:5px 0}.detail{font-size:12px;color:#adadb8;line-height:1.5}.good{color:#00f59b}.bad{color:#ff4f4f}.warn{color:#f5c542}.section-nav{display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid #2a2a30;margin-top:22px;padding-top:18px}.section-nav button{flex:1 1 190px;margin:0}.section-nav button.active{outline:2px solid #bf94ff;background:#772ce8}.section-panel{display:none;border-top:1px solid #2a2a30;margin-top:18px;padding-top:2px}.section-panel.open{display:block}.oauth-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.oauth-grid .wide{grid-column:1/-1}.oauth-action{margin-top:10px}.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100;align-items:center;justify-content:center;padding:20px}.modal-backdrop.open{display:flex}.modal-card{width:min(420px,100%);background:#18181b;border:1px solid #3a3a44;border-radius:8px;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.5)}.modal-card h3{margin-top:0}.modal-actions{display:flex;justify-content:flex-end;gap:8px}.modal-actions button{margin:0}#protected{display:none}#testResult{white-space:pre-wrap;background:#0e0e10;padding:12px;border-radius:4px;margin-top:10px}a{color:#bf94ff}.chat-sidebar{position:fixed;top:0;right:0;width:360px;height:100vh;background:#0e0e10;border-left:1px solid #2a2a30;z-index:20;transform:translateX(100%);transition:transform .2s ease;display:flex;flex-direction:column}.chat-sidebar.open{transform:translateX(0)}.chat-sidebar iframe{display:block;border:0;width:360px;min-width:360px;height:100vh;background:#0e0e10}.chat-toggle{position:fixed;right:12px;top:14px;z-index:10;box-shadow:0 2px 12px rgba(0,0,0,.35)}body.chat-open .chat-toggle{right:380px}@media(max-width:1100px){body.chat-open{padding-right:20px}.chat-sidebar{width:min(360px,calc(100vw - 54px))}.chat-sidebar iframe{width:100%;min-width:0}body.chat-open .chat-toggle{right:calc(min(360px,calc(100vw - 54px)) + 20px)}}@media(max-width:600px){.grid,.oauth-grid{grid-template-columns:1fr}.oauth-grid .wide{grid-column:auto}.card{padding:18px}body.login-active .card{margin-top:135px}.mod-login{width:min(250px,calc(100vw - 110px))}}
   </style>
 </head>
-<body>
+<body class="login-active">
 <div id="login" class="mod-login">
   <h3>MOD Login</h3>
   <input id="password" type="password" placeholder="MOD password" autocomplete="current-password">
@@ -1289,15 +1289,19 @@ app.get('/', (req, res) => {
     <div id="oauthPanel" class="section-panel">
       <h3>OAuth Management</h3>
       <div class="oauth-grid">
-        <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div><div class="oauth-action"><button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button><div id="oauthMsg" class="detail"></div></div></div>
+        <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div><div class="oauth-action"><button id="broadcasterOauthBtn">Authorize / Reauthorize Broadcaster</button><div id="broadcasterOauthMsg" class="detail"></div></div></div>
         <div class="box wide"><div class="label">Twitch Chat API</div><div id="oauthChatApiStatusBox" class="value warn">Checking...</div><div id="oauthChatApiDetail" class="detail"></div></div>
       </div>
-      <h3>Bot Authorization</h3>
-      <div class="detail">Authorize the Twitch account named <strong>${escapeHtmlServer(botUsername || 'TWITCH_BOT_USERNAME')}</strong>. This requests the modern bot scopes needed for the official Send Chat Message API while keeping the IRC scopes used to receive chat.</div>
-      <button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button>
-      <div id="oauthMsg" class="detail"></div>
     </div>
+  </div>
+</div>
+<div id="qwertSecretModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="qwertSecretTitle">
+  <div class="modal-card">
+    <h3 id="qwertSecretTitle">Broadcaster OAuth</h3>
+    <label for="qwertSecretInput" class="detail">Enter Secret Key for Qwert:</label>
+    <input id="qwertSecretInput" type="password" autocomplete="off" placeholder="Secret key">
+    <div class="modal-actions"><button id="qwertSecretCancel" class="secondary" type="button">Cancel</button><button id="qwertSecretOk" type="button">OK</button></div>
   </div>
 </div>
 <button id="chatToggle" class="chat-toggle secondary" type="button">Hide Chat</button>
@@ -1351,13 +1355,14 @@ async function status(){
 
     const chatReady=!!d.oauth.chatApiReady;
     const chatStatus=chatReady?'BOT BADGE READY':'NOT READY';
-    const chatDetail=chatReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':(!botGrantReady||!broadcasterGrantReady?'Complete both OAuth grants in OAuth Management':'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.');
+    const mainChatDetail=chatReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':(!botGrantReady||!broadcasterGrantReady?'Complete both OAuth grants in OAuth Management':'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.');
+    const oauthChatDetail=chatReady?'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.':(!botGrantReady||!broadcasterGrantReady?'Complete both OAuth grants above.':'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.');
     $('chatApiStatusBox').textContent=chatStatus;
     $('chatApiStatusBox').className='value '+(chatReady?'good':'warn');
-    $('chatApiDetail').textContent=chatDetail;
+    $('chatApiDetail').textContent=mainChatDetail;
     $('oauthChatApiStatusBox').textContent=chatStatus;
     $('oauthChatApiStatusBox').className='value '+(chatReady?'good':'warn');
-    $('oauthChatApiDetail').textContent=chatDetail;
+    $('oauthChatApiDetail').textContent=oauthChatDetail;
 
     if(loggedIn){
       $('pauseBtn').disabled=!d.qwert.live||d.bot.recapPaused||d.bot.recapInProgress;
@@ -1368,7 +1373,7 @@ async function status(){
     $('bDetail').textContent='Status request failed';
   }
 }
-async function doLogin(){const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';$('protected').style.display='block';$('recapControls').style.display='block';await loadLore();status()}
+async function doLogin(){const p=$('password').value;if(!p)return;const d=await (await fetch('/mod-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})})).json();if(!d.success){$('loginMsg').textContent=d.error;return}password=p;loggedIn=true;$('login').style.display='none';document.body.classList.remove('login-active');$('protected').style.display='block';$('recapControls').style.display='block';await loadLore();status()}
 $('loginBtn').onclick=doLogin;
 $('password').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();doLogin()}});
 
@@ -1393,6 +1398,14 @@ Object.keys(sectionMap).forEach(tabId=>{
   $(tabId).onclick=()=>toggleSection(tabId);
 });
 $('oauthBtn').onclick=async()=>{const d=await (await fetch('/auth/twitch/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('oauthMsg').textContent=d.error;return}location.href=d.authorizationUrl};
+function openQwertSecretModal(){$('qwertSecretInput').value='';$('qwertSecretModal').classList.add('open');setTimeout(()=>$('qwertSecretInput').focus(),0)}
+function closeQwertSecretModal(){$('qwertSecretModal').classList.remove('open');$('qwertSecretInput').value=''}
+async function copyQwertOauthUrl(){const secret=$('qwertSecretInput').value.trim();if(!secret)return;const url=location.origin+'/authorize-qwert?key='+encodeURIComponent(secret);try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(url)}else{const ta=document.createElement('textarea');ta.value=url;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.focus();ta.select();document.execCommand('copy');ta.remove()}closeQwertSecretModal();$('broadcasterOauthMsg').textContent='Broadcaster OAuth URL copied to clipboard.'}catch(e){$('broadcasterOauthMsg').textContent='Could not copy the OAuth URL. Check browser clipboard permissions.'}}
+$('broadcasterOauthBtn').onclick=openQwertSecretModal;
+$('qwertSecretCancel').onclick=closeQwertSecretModal;
+$('qwertSecretOk').onclick=copyQwertOauthUrl;
+$('qwertSecretInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();copyQwertOauthUrl()}else if(e.key==='Escape'){closeQwertSecretModal()}});
+$('qwertSecretModal').addEventListener('click',e=>{if(e.target===$('qwertSecretModal'))closeQwertSecretModal()});
 
 function updateLoreCount(){const text=$('streamLore').value;$('loreCount').textContent=text.length+'/${MAX_STREAM_LORE_LENGTH} characters'}
 async function loadLore(){try{$('loreMsg').textContent='Loading...';const d=await (await fetch('/stream-lore/get',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})})).json();if(!d.success){$('loreMsg').textContent=d.error||'Could not load lore.';return}$('streamLore').value=d.text||'';updateLoreCount();$('loreMsg').textContent=d.updatedAt?'Saved lore loaded.':'No lore saved yet.'}catch(e){$('loreMsg').textContent='Could not load lore.'}}
