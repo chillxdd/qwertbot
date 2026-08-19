@@ -11,6 +11,8 @@ const {
 } = require('./commands/recap');
 
 const { connectDatabase } = require('./services/database');
+const { createModSessionManager, timingSafeStringEqual } = require('./middleware/modSession');
+const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('./services/streamLore');
 const {
   MAX_PRIMARY_INSTRUCTIONS_LENGTH,
@@ -94,7 +96,6 @@ let twitchAuthRecoveryTimer = null;
 let oauthValidationTimer = null;
 let twitchConnectionGeneration = 0;
 const recentEventSubMessageIds = new Map();
-const modSessions = new Map();
 
 function shouldFallbackToIrc(err) {
   const message = String(err?.message || err || '');
@@ -190,127 +191,17 @@ const chatClientProxy = {
   }
 };
 
-const KNOWN_BOT_COMMANDS = new Set([
-  '!recap',
-  '!stoprecap',
-  '!startrecap'
-]);
+const modSessionManager = createModSessionManager({
+  password: DASHBOARD_PASSWORD,
+  cookieName: MOD_SESSION_COOKIE,
+  lifetimeMs: MOD_SESSION_LIFETIME,
+  secureCookie: MOD_SESSION_COOKIE_SECURE
+});
 
-const NIGHTBOT_RESPONSE_WINDOW = 5000;
-let pendingBangMessageId = 0;
-const pendingBangMessages = [];
-
-function getCommandName(message) {
-  return (message || '').trim().split(/\s+/)[0].toLowerCase();
-}
-
-function isKnownBotCommand(message) {
-  return KNOWN_BOT_COMMANDS.has(getCommandName(message));
-}
-
-const POKEMON_COMMUNITY_GAME_USERNAMES = new Set([
-  'pokemoncommunitygame'
-]);
-
-function isPokemonCommunityGameCommand(message) {
-  const command = getCommandName(message);
-  // Pokemon Community Game chat commands use the !poke... namespace
-  // (for example !pokecatch, !pokestart, !pokecheck, and !pokeupdate).
-  // Filter them before they enter the recap/Nightbot fake-command pipeline.
-  return command.startsWith('!poke');
-}
-
-function isIgnoredUsername(username) {
-  return ['nightbot', 'streamelements', ...POKEMON_COMMUNITY_GAME_USERNAMES]
-    .filter(Boolean)
-    .includes((username || '').toLowerCase().trim());
-}
-
-function isBotHourlyRecap(username, message) {
-  const normalizedUsername = (username || '').toLowerCase().trim();
-  const normalizedMessage = (message || '').trim().toLowerCase();
-  return Boolean(
-    botUsername &&
-    normalizedUsername === botUsername &&
-    normalizedMessage.startsWith(SUMMARY_PREFIX.toLowerCase())
-  );
-}
-
-function isModOrBroadcaster(tags) {
-  const badges = tags.badges || {};
-  return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
-}
-
-function isValidDashboardPassword(password) {
-  if (!DASHBOARD_PASSWORD || typeof password !== 'string') return false;
-  const provided = Buffer.from(password);
-  const expected = Buffer.from(DASHBOARD_PASSWORD);
-  if (provided.length !== expected.length) return false;
-  return crypto.timingSafeEqual(provided, expected);
-}
-
-function parseCookies(req) {
-  const header = String(req.headers.cookie || '');
-  const cookies = {};
-  for (const part of header.split(';')) {
-    const index = part.indexOf('=');
-    if (index <= 0) continue;
-    const key = part.slice(0, index).trim();
-    const value = part.slice(index + 1).trim();
-    if (!key) continue;
-    try { cookies[key] = decodeURIComponent(value); } catch (_) { cookies[key] = value; }
-  }
-  return cookies;
-}
-
-function cleanupModSessions() {
-  const now = Date.now();
-  for (const [token, session] of modSessions.entries()) {
-    if (!session || session.expiresAt <= now) modSessions.delete(token);
-  }
-}
-
-function createModSession(res) {
-  cleanupModSessions();
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = Date.now() + MOD_SESSION_LIFETIME;
-  modSessions.set(token, { expiresAt });
-
-  const cookieParts = [
-    `${MOD_SESSION_COOKIE}=${encodeURIComponent(token)}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/',
-    `Max-Age=${Math.floor(MOD_SESSION_LIFETIME / 1000)}`
-  ];
-  if (MOD_SESSION_COOKIE_SECURE) cookieParts.push('Secure');
-  res.setHeader('Set-Cookie', cookieParts.join('; '));
-  return token;
-}
-
-function hasValidModSession(req) {
-  cleanupModSessions();
-  const token = parseCookies(req)[MOD_SESSION_COOKIE];
-  if (!token) return false;
-  const session = modSessions.get(token);
-  return Boolean(session && session.expiresAt > Date.now());
-}
-
-function requireModSession(req, res, next) {
-  if (!hasValidModSession(req)) {
-    return res.status(401).json({ success: false, error: 'MOD session expired. Please log in again.' });
-  }
-  return next();
-}
+const requireModSession = modSessionManager.requireSession;
 
 function isValidQwertOAuthSecret(value) {
-  if (!QWERT_OAUTH_LINK_SECRET || typeof value !== 'string') return false;
-
-  const provided = Buffer.from(value);
-  const expected = Buffer.from(QWERT_OAUTH_LINK_SECRET);
-
-  if (provided.length !== expected.length) return false;
-  return crypto.timingSafeEqual(provided, expected);
+  return timingSafeStringEqual(value, QWERT_OAUTH_LINK_SECRET);
 }
 
 function escapeHtmlServer(value) {
@@ -364,70 +255,11 @@ function consumeBroadcasterOAuthState(state) {
   return true;
 }
 
-function removePendingBangMessage(id) {
-  const index = pendingBangMessages.findIndex((item) => item.id === id);
-  if (index !== -1) pendingBangMessages.splice(index, 1);
-}
-
-function queuePotentialFakeCommand({ username, displayName, rawMessage }) {
-  pendingBangMessageId++;
-
-  const pending = {
-    id: pendingBangMessageId,
-    username: (username || '').toLowerCase().trim(),
-    displayName,
-    rawMessage,
-    createdAt: Date.now(),
-    timer: null
-  };
-
-  pending.timer = setTimeout(() => {
-    removePendingBangMessage(pending.id);
-    if (recapManager) {
-      recapManager.recordChatMessage({ displayName, rawMessage });
-    }
-  }, NIGHTBOT_RESPONSE_WINDOW);
-
-  pendingBangMessages.push(pending);
-}
-
-function handleNightbotResponse(nightbotMessage) {
-  const now = Date.now();
-
-  for (let i = pendingBangMessages.length - 1; i >= 0; i--) {
-    const candidate = pendingBangMessages[i];
-    if (now - candidate.createdAt > NIGHTBOT_RESPONSE_WINDOW) {
-      clearTimeout(candidate.timer);
-      pendingBangMessages.splice(i, 1);
-      if (recapManager) {
-        recapManager.recordChatMessage({
-          displayName: candidate.displayName,
-          rawMessage: candidate.rawMessage
-        });
-      }
-    }
-  }
-
-  if (pendingBangMessages.length === 0) return;
-
-  const lowerNightbotMessage = (nightbotMessage || '').toLowerCase();
-  let candidateIndex = -1;
-
-  for (let i = pendingBangMessages.length - 1; i >= 0; i--) {
-    const candidate = pendingBangMessages[i];
-    if (candidate.username && lowerNightbotMessage.includes(`@${candidate.username}`)) {
-      candidateIndex = i;
-      break;
-    }
-  }
-
-  if (candidateIndex === -1) candidateIndex = pendingBangMessages.length - 1;
-
-  const candidate = pendingBangMessages[candidateIndex];
-  clearTimeout(candidate.timer);
-  pendingBangMessages.splice(candidateIndex, 1);
-  console.log(`[Recap] Nightbot responded to ${candidate.rawMessage}; command excluded from recap logs.`);
-}
+const twitchMessageHandler = createTwitchMessageHandler({
+  getRecapManager: () => recapManager,
+  botUsername,
+  summaryPrefix: SUMMARY_PREFIX
+});
 
 async function getBotAccessToken() {
   try {
@@ -623,69 +455,12 @@ function attachTwitchHandlers(client, generation) {
     });
   });
 
-  client.on('message', async (channel, tags, message, self) => {
+  client.on('message', async (channel, tags, message) => {
     if (generation !== twitchConnectionGeneration || !recapManager) return;
-
-    const rawMessage = (message || '').trim();
-    const lowerMsg = rawMessage.toLowerCase();
-    const username = (tags.username || '').toLowerCase().trim();
-    const displayName = tags['display-name'] || tags.username || 'viewer';
-
-    if (username === 'nightbot') {
-      handleNightbotResponse(rawMessage);
-      return;
-    }
-
-    if (username === 'streamelements') return;
-
-    if (POKEMON_COMMUNITY_GAME_USERNAMES.has(username)) {
-      return;
-    }
-
-    if (isPokemonCommunityGameCommand(rawMessage)) {
-      return;
-    }
-
-    // The bot account may also be used manually in Twitch chat. Keep those messages
-    // as normal recap context, but never feed a previously-sent hourly recap back
-    // into the next recap window. This works whether tmi.js marks the message as
-    // self=true or it arrived from another Twitch session using the same account.
-    if (isBotHourlyRecap(username, rawMessage)) return;
-
-    if (username === botUsername) {
-      recapManager.recordChatMessage({ displayName, rawMessage });
-      return;
-    }
-
-    if (isKnownBotCommand(rawMessage)) {
-      if (lowerMsg === '!stoprecap') {
-        if (!isModOrBroadcaster(tags)) return;
-        await recapManager.stopRecap({ channel, displayName });
-        return;
-      }
-
-      if (lowerMsg === '!startrecap') {
-        if (!isModOrBroadcaster(tags)) return;
-        await recapManager.startRecap({ channel, displayName });
-        return;
-      }
-
-      if (lowerMsg === '!recap' || lowerMsg.startsWith('!recap ')) {
-        await recapManager.handleRecapCommand({ channel, displayName });
-        return;
-      }
-
-      return;
-    }
-
-    if (rawMessage.startsWith('!')) {
-      queuePotentialFakeCommand({ username, displayName, rawMessage });
-      return;
-    }
-
-    recapManager.recordChatMessage({ displayName, rawMessage });
+    await twitchMessageHandler.handleMessage(channel, tags, message);
   });
 }
+
 
 async function createAndConnectTwitchClient(accessToken) {
   if (!accessToken) throw new Error('No Twitch access token is available.');
@@ -957,16 +732,16 @@ app.post('/mod-login', (req, res) => {
     return res.status(500).json({ success: false, error: 'DASHBOARD_PASSWORD is not configured on the server.' });
   }
 
-  if (!isValidDashboardPassword(req.body.password)) {
+  if (!modSessionManager.isValidPassword(req.body.password)) {
     return res.status(401).json({ success: false, error: 'Incorrect password!' });
   }
 
-  createModSession(res);
+  modSessionManager.createSession(res);
   return res.json({ success: true, expiresInMs: MOD_SESSION_LIFETIME });
 });
 
 app.get('/mod-session', (req, res) => {
-  return res.json({ success: true, authenticated: hasValidModSession(req) });
+  return res.json({ success: true, authenticated: modSessionManager.hasValidSession(req) });
 });
 
 app.post('/stream-lore/get', requireModSession, async (req, res) => {
