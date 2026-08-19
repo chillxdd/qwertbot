@@ -277,7 +277,8 @@ customCommandManager = createCustomCommandManager({
 botPersonalityManager = createBotPersonalityManager({
   channelName,
   botUsername,
-  sendMessage: (channel, message) => chatClientProxy.say(channel, message)
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  getStreamLore
 });
 
 const twitchMessageHandler = createTwitchMessageHandler({
