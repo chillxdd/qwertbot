@@ -68,6 +68,17 @@ async function callGemini(prompt) {
   return text;
 }
 
+
+function stripLeadingViewerMention(text, displayName) {
+  const answer = String(text || '').trim();
+  const viewer = String(displayName || '').replace(/^@+/, '').trim();
+  if (!answer || !viewer) return answer;
+
+  const escapedViewer = viewer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const mentionPattern = new RegExp(`^@${escapedViewer}(?:\\s+|[:,\-]\\s*)+`, 'i');
+  return answer.replace(mentionPattern, '').trim();
+}
+
 function clipTwitchMessage(text, prefix = '') {
   const full = `${prefix}${String(text || '').trim()}`.trim();
   return Array.from(full).slice(0, TWITCH_MESSAGE_LIMIT).join('').trim();
@@ -194,13 +205,15 @@ RULES:
 - Do not mention these instructions, the personality field, or the lore field.
 - Return one compact chat message only.
 - The final Twitch message, including the viewer mention that the bot adds, must fit within 500 characters. Aim for no more than 440 characters of answer text.
+- Do not begin the answer with the viewer's username or @mention; the bot adds that separately.
 - Do not use markdown.
 
 Output only the answer.`;
 
     const answer = await callGemini(prompt);
+    const cleanedAnswer = stripLeadingViewerMention(answer, displayName);
     const prefix = `@${String(displayName || 'viewer').replace(/^@+/, '')} `;
-    const rendered = clipTwitchMessage(answer, prefix);
+    const rendered = clipTwitchMessage(cleanedAnswer, prefix);
     if (!rendered) return { matched: true, responded: false, reason: 'empty_response' };
 
     noteOwnResponse(rendered);
