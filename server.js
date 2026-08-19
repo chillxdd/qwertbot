@@ -208,8 +208,20 @@ function isKnownBotCommand(message) {
   return KNOWN_BOT_COMMANDS.has(getCommandName(message));
 }
 
+const POKEMON_COMMUNITY_GAME_USERNAMES = new Set([
+  'pokemoncommunitygame'
+]);
+
+function isPokemonCommunityGameCommand(message) {
+  const command = getCommandName(message);
+  // Pokemon Community Game chat commands use the !poke... namespace
+  // (for example !pokecatch, !pokestart, !pokecheck, and !pokeupdate).
+  // Filter them before they enter the recap/Nightbot fake-command pipeline.
+  return command.startsWith('!poke');
+}
+
 function isIgnoredUsername(username) {
-  return ['nightbot', 'streamelements']
+  return ['nightbot', 'streamelements', ...POKEMON_COMMUNITY_GAME_USERNAMES]
     .filter(Boolean)
     .includes((username || '').toLowerCase().trim());
 }
@@ -625,6 +637,14 @@ function attachTwitchHandlers(client, generation) {
     }
 
     if (username === 'streamelements') return;
+
+    if (POKEMON_COMMUNITY_GAME_USERNAMES.has(username)) {
+      return;
+    }
+
+    if (isPokemonCommunityGameCommand(rawMessage)) {
+      return;
+    }
 
     // The bot account may also be used manually in Twitch chat. Keep those messages
     // as normal recap context, but never feed a previously-sent hourly recap back
