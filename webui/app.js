@@ -14,6 +14,7 @@ function setChatOpen(open) {
   $('chatSidebar').classList.toggle('open', open);
   document.body.classList.toggle('chat-open', open);
   $('chatToggleIcon').textContent = open ? '›' : '‹';
+  $('chatToggleText').textContent = open ? 'Hide Chat' : 'Show Chat';
   $('chatToggle').setAttribute('aria-label', open ? 'Hide Chat' : 'Show Chat');
   $('chatToggle').setAttribute('title', open ? 'Hide Chat' : 'Show Chat');
   $('chatToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -26,9 +27,15 @@ async function loadConfig() {
     if (d.success) config = { ...config, ...d };
   } catch (_) {}
 
+}
+
+let twitchChatLoaded = false;
+function ensureTwitchChatLoaded() {
+  if (twitchChatLoaded) return;
   const channel = String(config.channelName || 'generalqwert').replace(/[^a-zA-Z0-9_]/g, '') || 'generalqwert';
   $('twitchChatFrame').title = `${channel} Twitch chat`;
   $('twitchChatFrame').src = `https://www.twitch.tv/embed/${channel}/chat?darkpopout=1&parent=${encodeURIComponent(location.hostname)}`;
+  twitchChatLoaded = true;
 }
 
 await loadConfig();
@@ -91,6 +98,8 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   if (loadLore) await lore.loadLore();
   await messaging.loadPrompt();
   await status();
+  // Load the Twitch embed only after the login overlay is gone and the dashboard layout is stable.
+  requestAnimationFrame(() => requestAnimationFrame(ensureTwitchChatLoaded));
 }
 
 function showLogin(message = '') {
