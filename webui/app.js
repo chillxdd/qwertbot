@@ -14,7 +14,6 @@ function setChatOpen(open) {
   $('chatSidebar').classList.toggle('open', open);
   document.body.classList.toggle('chat-open', open);
   $('chatToggleIcon').textContent = open ? '›' : '‹';
-  $('chatToggleText').textContent = open ? 'Hide Chat' : 'Show Chat';
   $('chatToggle').setAttribute('aria-label', open ? 'Hide Chat' : 'Show Chat');
   $('chatToggle').setAttribute('title', open ? 'Hide Chat' : 'Show Chat');
   $('chatToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
