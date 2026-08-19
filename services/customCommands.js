@@ -1,11 +1,14 @@
 const CustomCommand = require('../models/CustomCommand');
 
+const MAX_COMMAND_NAME_LENGTH = 80;
 const MAX_TRIGGER_LENGTH = 120;
+const MAX_TRIGGERS = 25;
 const MAX_RESPONSES = 25;
 const MAX_RESPONSE_LENGTH = 500;
 const MAX_COOLDOWN_SECONDS = 86400;
 const RESERVED_COMMANDS = new Set(['!recap', '!startrecap', '!stoprecap']);
 const OWN_RESPONSE_TTL_MS = 15000;
+const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
 
 function normalizeTrigger(triggerType, value) {
   let trigger = String(value || '').trim().replace(/\s+/g, ' ');
@@ -16,13 +19,13 @@ function normalizeTrigger(triggerType, value) {
   return trigger.toLowerCase();
 }
 
-function validateAndNormalizeInput(input = {}) {
+function normalizeTriggerEntry(input = {}) {
   const triggerType = input.triggerType === 'inline' ? 'inline' : 'command';
   const rawTrigger = String(input.trigger || '').trim().replace(/\s+/g, ' ');
   const normalizedTrigger = normalizeTrigger(triggerType, rawTrigger);
 
-  if (!normalizedTrigger) throw new Error('Command / trigger cannot be empty.');
-  if (normalizedTrigger.length > MAX_TRIGGER_LENGTH) throw new Error(`Command / trigger cannot exceed ${MAX_TRIGGER_LENGTH} characters.`);
+  if (!normalizedTrigger) throw new Error('Trigger cannot be empty.');
+  if (normalizedTrigger.length > MAX_TRIGGER_LENGTH) throw new Error(`Trigger cannot exceed ${MAX_TRIGGER_LENGTH} characters.`);
 
   if (triggerType === 'command') {
     if (!/^![a-z0-9_][a-z0-9_-]*$/i.test(normalizedTrigger)) {
@@ -34,6 +37,52 @@ function validateAndNormalizeInput(input = {}) {
     if (normalizedTrigger.startsWith('!poke')) {
       throw new Error('Commands beginning with !poke are reserved for the Pokemon Community Game filter.');
     }
+  }
+
+  return {
+    triggerType,
+    trigger: triggerType === 'command' ? normalizedTrigger : rawTrigger,
+    normalizedTrigger
+  };
+}
+
+function getTriggers(command = {}) {
+  if (Array.isArray(command.triggers) && command.triggers.length) {
+    return command.triggers.map((entry) => ({
+      triggerType: entry.triggerType === 'inline' ? 'inline' : 'command',
+      trigger: String(entry.trigger || ''),
+      normalizedTrigger: String(entry.normalizedTrigger || normalizeTrigger(entry.triggerType, entry.trigger))
+    })).filter((entry) => entry.normalizedTrigger);
+  }
+
+  if (command.trigger || command.normalizedTrigger) {
+    const triggerType = command.triggerType === 'inline' ? 'inline' : 'command';
+    const trigger = String(command.trigger || command.normalizedTrigger || '');
+    const normalizedTrigger = String(command.normalizedTrigger || normalizeTrigger(triggerType, trigger));
+    if (normalizedTrigger) return [{ triggerType, trigger, normalizedTrigger }];
+  }
+
+  return [];
+}
+
+function validateAndNormalizeInput(input = {}) {
+  const name = String(input.name || '').trim().replace(/\s+/g, ' ');
+  if (!name) throw new Error('Command name cannot be empty.');
+  if (name.length > MAX_COMMAND_NAME_LENGTH) throw new Error(`Command name cannot exceed ${MAX_COMMAND_NAME_LENGTH} characters.`);
+
+  const rawTriggers = Array.isArray(input.triggers) && input.triggers.length
+    ? input.triggers
+    : [{ triggerType: input.triggerType, trigger: input.trigger }];
+
+  if (rawTriggers.length > MAX_TRIGGERS) throw new Error(`A custom command can have at most ${MAX_TRIGGERS} triggers.`);
+  const triggers = rawTriggers.map(normalizeTriggerEntry);
+  if (!triggers.length) throw new Error('Add at least one trigger.');
+
+  const seen = new Set();
+  for (const trigger of triggers) {
+    const key = `${trigger.triggerType}:${trigger.normalizedTrigger}`;
+    if (seen.has(key)) throw new Error(`Duplicate trigger: ${trigger.trigger}.`);
+    seen.add(key);
   }
 
   const responses = (Array.isArray(input.responses) ? input.responses : [])
@@ -48,6 +97,10 @@ function validateAndNormalizeInput(input = {}) {
     }
   }
 
+  const userLevel = USER_LEVELS.includes(String(input.userLevel || '').toLowerCase())
+    ? String(input.userLevel).toLowerCase()
+    : 'everyone';
+
   const probability = Number(input.probability);
   if (!Number.isFinite(probability) || probability < 0 || probability > 100) {
     throw new Error('Probability must be between 0 and 100. Decimals are allowed.');
@@ -58,11 +111,16 @@ function validateAndNormalizeInput(input = {}) {
     throw new Error(`Cooldown must be between 0 and ${MAX_COOLDOWN_SECONDS} seconds.`);
   }
 
+  const primary = triggers[0];
   return {
-    triggerType,
-    trigger: triggerType === 'command' ? normalizedTrigger : rawTrigger,
-    normalizedTrigger,
+    name,
+    triggers,
+    // Mirror the first trigger into the legacy fields for backwards compatibility.
+    triggerType: primary.triggerType,
+    trigger: primary.trigger,
+    normalizedTrigger: primary.normalizedTrigger,
     responses,
+    userLevel,
     probability,
     cooldownSeconds: Math.round(cooldownSeconds * 1000) / 1000,
     enabled: input.enabled !== false
@@ -70,11 +128,18 @@ function validateAndNormalizeInput(input = {}) {
 }
 
 function commandToClient(command) {
+  const triggers = getTriggers(command);
+  const primary = triggers[0] || { triggerType: 'command', trigger: '', normalizedTrigger: '' };
+  const fallbackName = String(command.name || primary.trigger || 'Custom Command').trim();
   return {
     id: String(command._id),
-    triggerType: command.triggerType,
-    trigger: command.trigger,
+    name: fallbackName,
+    triggers: triggers.map(({ triggerType, trigger }) => ({ triggerType, trigger })),
+    // Keep these fields in the response for older UI/client compatibility.
+    triggerType: primary.triggerType,
+    trigger: primary.trigger,
     responses: Array.isArray(command.responses) ? command.responses : [],
+    userLevel: USER_LEVELS.includes(command.userLevel) ? command.userLevel : 'everyone',
     probability: Number(command.probability ?? 100),
     cooldownSeconds: Number(command.cooldownSeconds ?? 0),
     enabled: command.enabled !== false,
@@ -111,6 +176,15 @@ function replaceAllToken(text, token, value) {
   return text.split(token).join(String(value ?? ''));
 }
 
+function randomIntegerInclusive(min, max) {
+  const low = Math.ceil(Number(min));
+  const high = Math.floor(Number(max));
+  if (!Number.isSafeInteger(low) || !Number.isSafeInteger(high) || low > high) return null;
+  const span = high - low + 1;
+  if (!Number.isSafeInteger(span) || span <= 0) return null;
+  return Math.floor(Math.random() * span) + low;
+}
+
 function renderResponse(template, context) {
   const user = String(context.user || 'viewer');
   const query = String(context.query || '');
@@ -118,6 +192,11 @@ function renderResponse(template, context) {
   const count = String(context.count ?? 0);
 
   let output = String(template || '');
+  output = output.replace(/\$\(random\s+(-?\d+)\s+(-?\d+)\)/gi, (match, min, max) => {
+    const value = randomIntegerInclusive(min, max);
+    return value === null ? match : String(value);
+  });
+
   const pairs = [
     ['$(user)', user], ['$user', user],
     ['$(touser)', toUser], ['$touser', toUser],
@@ -127,10 +206,23 @@ function renderResponse(template, context) {
 
   for (const [token, value] of pairs) output = replaceAllToken(output, token, value);
 
-  // Twitch's chat message hard limit is 500 characters. Each stored response is
-  // independently allowed up to 500; variable expansion can make it longer, so
-  // clamp only the final rendered message rather than reducing response storage.
   return Array.from(output).slice(0, MAX_RESPONSE_LENGTH).join('').trim();
+}
+
+function getViewerUserLevel(tags = {}) {
+  const badges = tags.badges || {};
+  if (badges.broadcaster === '1') return 'owner';
+  if (tags.mod === true || tags.mod === '1' || badges.moderator === '1') return 'moderator';
+  if (badges.vip === '1') return 'twitch_vip';
+  if (tags.subscriber === true || tags.subscriber === '1' || badges.subscriber || badges.founder) return 'subscriber';
+  return 'everyone';
+}
+
+function meetsUserLevel(tags = {}, required = 'everyone') {
+  const hierarchy = { everyone: 0, subscriber: 1, twitch_vip: 2, moderator: 3, owner: 4 };
+  const actual = getViewerUserLevel(tags);
+  const requiredLevel = USER_LEVELS.includes(required) ? required : 'everyone';
+  return hierarchy[actual] >= hierarchy[requiredLevel];
 }
 
 function createCustomCommandManager({ channelName, sendMessage }) {
@@ -154,9 +246,23 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     return cache.map(commandToClient);
   }
 
+  async function assertTriggersAvailable(triggers, excludingId = '') {
+    const docs = await CustomCommand.find({ channelName: normalizedChannel }).lean();
+    const wanted = new Set(triggers.map((trigger) => `${trigger.triggerType}:${trigger.normalizedTrigger}`));
+    for (const doc of docs) {
+      if (excludingId && String(doc._id) === excludingId) continue;
+      for (const existing of getTriggers(doc)) {
+        if (wanted.has(`${existing.triggerType}:${existing.normalizedTrigger}`)) {
+          throw new Error(`Trigger ${existing.trigger} is already used by another custom command.`);
+        }
+      }
+    }
+  }
+
   async function saveCommand(input = {}) {
     const normalized = validateAndNormalizeInput(input);
     const id = String(input.id || '').trim();
+    await assertTriggersAvailable(normalized.triggers, id);
     let saved;
 
     try {
@@ -171,12 +277,12 @@ function createCustomCommandManager({ channelName, sendMessage }) {
         saved = await CustomCommand.create({ channelName: normalizedChannel, ...normalized });
       }
     } catch (err) {
-      if (err?.code === 11000) throw new Error('A custom command with that trigger and type already exists.');
+      if (err?.code === 11000) throw new Error('One of those custom-command triggers is already in use.');
       throw err;
     }
 
     await refreshCache();
-    console.log(`[Custom Commands] ${id ? 'Updated' : 'Created'} ${saved.triggerType} trigger ${saved.trigger}.`);
+    console.log(`[Custom Commands] ${id ? 'Updated' : 'Created'} command with ${normalized.triggers.length} trigger(s).`);
     return commandToClient(saved);
   }
 
@@ -185,7 +291,7 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     if (!deleted) throw new Error('Custom command was not found.');
     lastTriggeredAt.delete(String(id));
     await refreshCache();
-    console.log(`[Custom Commands] Deleted ${deleted.triggerType} trigger ${deleted.trigger}.`);
+    console.log(`[Custom Commands] Deleted command with ${getTriggers(deleted).length} trigger(s).`);
     return true;
   }
 
@@ -200,11 +306,16 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     return commandToClient(updated);
   }
 
-  async function resetCounter(id) {
+  async function setCounter(id, value) {
+    const numericValue = Number(value);
+    if (!Number.isInteger(numericValue) || numericValue < 0) {
+      throw new Error('Counter must be a whole integer greater than or equal to 0.');
+    }
+
     const updated = await CustomCommand.findOneAndUpdate(
       { _id: id, channelName: normalizedChannel },
-      { $set: { counter: 0 } },
-      { new: true }
+      { $set: { counter: numericValue } },
+      { new: true, runValidators: true }
     );
     if (!updated) throw new Error('Custom command was not found.');
     await refreshCache();
@@ -236,35 +347,63 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     const lower = raw.toLowerCase();
     const { token, query } = getCommandQuery(raw);
 
-    const commandMatch = cache.find((command) => command.enabled !== false && command.triggerType === 'command' && command.normalizedTrigger === token);
-    if (commandMatch) return { command: commandMatch, query };
+    // Exact !command triggers take priority across all custom commands.
+    for (const command of cache) {
+      if (command.enabled === false) continue;
+      const trigger = getTriggers(command).find((entry) => entry.triggerType === 'command' && entry.normalizedTrigger === token);
+      if (trigger) return { command, trigger, query };
+    }
 
-    const inlineMatches = cache
-      .filter((command) => command.enabled !== false && command.triggerType === 'inline' && lower.includes(command.normalizedTrigger))
-      .sort((a, b) => b.normalizedTrigger.length - a.normalizedTrigger.length);
-
+    // For inline phrases, prefer the longest matching phrase to avoid a short
+    // trigger stealing a message from a more specific trigger.
+    const inlineMatches = [];
+    for (const command of cache) {
+      if (command.enabled === false) continue;
+      for (const trigger of getTriggers(command)) {
+        if (trigger.triggerType === 'inline' && lower.includes(trigger.normalizedTrigger)) {
+          inlineMatches.push({ command, trigger });
+        }
+      }
+    }
+    inlineMatches.sort((a, b) => b.trigger.normalizedTrigger.length - a.trigger.normalizedTrigger.length);
     if (!inlineMatches.length) return null;
-    const command = inlineMatches[0];
-    return { command, query: findInlineQuery(raw, command.normalizedTrigger) };
+    const match = inlineMatches[0];
+    return {
+      ...match,
+      query: findInlineQuery(raw, match.trigger.normalizedTrigger)
+    };
   }
 
-  async function handleMessage({ rawMessage, displayName }) {
+  async function handleMessage({ rawMessage, displayName, tags = {} }) {
     const match = findMatch(rawMessage);
     if (!match) return { matched: false };
 
     const command = match.command;
+    const matchedTrigger = match.trigger;
     const commandId = String(command._id);
+
+    if (!meetsUserLevel(tags, command.userLevel || 'everyone')) {
+      return {
+        matched: true,
+        triggerType: matchedTrigger.triggerType,
+        trigger: matchedTrigger.trigger,
+        responded: false,
+        reason: 'userlevel',
+        requiredUserLevel: command.userLevel || 'everyone'
+      };
+    }
+
     const now = Date.now();
     const cooldownMs = Math.max(0, Number(command.cooldownSeconds || 0) * 1000);
     const previous = lastTriggeredAt.get(commandId) || 0;
 
     if (cooldownMs > 0 && now - previous < cooldownMs) {
-      return { matched: true, triggerType: command.triggerType, responded: false, reason: 'cooldown' };
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
     }
 
     const probability = Math.max(0, Math.min(100, Number(command.probability ?? 100)));
     if (probability <= 0 || Math.random() * 100 >= probability) {
-      return { matched: true, triggerType: command.triggerType, responded: false, reason: 'probability' };
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'probability' };
     }
 
     const updated = await CustomCommand.findOneAndUpdate(
@@ -275,11 +414,11 @@ function createCustomCommandManager({ channelName, sendMessage }) {
 
     if (!updated) {
       await refreshCache();
-      return { matched: true, triggerType: command.triggerType, responded: false, reason: 'disabled' };
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'disabled' };
     }
 
     const responses = Array.isArray(updated.responses) ? updated.responses.filter(Boolean) : [];
-    if (!responses.length) return { matched: true, triggerType: command.triggerType, responded: false, reason: 'no_response' };
+    if (!responses.length) return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'no_response' };
 
     const template = responses[Math.floor(Math.random() * responses.length)];
     const rendered = renderResponse(template, {
@@ -288,17 +427,13 @@ function createCustomCommandManager({ channelName, sendMessage }) {
       count: updated.counter
     });
 
-    if (!rendered) return { matched: true, triggerType: command.triggerType, responded: false, reason: 'empty_response' };
+    if (!rendered) return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'empty_response' };
 
-    // Register the exact outgoing text before sending so the IRC echo cannot race
-    // ahead of our recap-noise suppression. Stale entries self-expire quickly.
     noteOwnResponse(rendered);
     let result;
     try {
       result = await sendMessage(normalizedChannel, rendered);
     } catch (err) {
-      // The counter represents successful command responses, so roll back the
-      // atomic increment if Twitch rejected/failed the send.
       await CustomCommand.updateOne(
         { _id: command._id, channelName: normalizedChannel, counter: { $gt: 0 } },
         { $inc: { counter: -1 } }
@@ -310,11 +445,12 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     const cached = cache.find((item) => String(item._id) === commandId);
     if (cached) cached.counter = updated.counter;
 
-    console.log(`[Custom Commands] Triggered ${updated.trigger} -> response ${responses.indexOf(template) + 1}/${responses.length}.`);
+    console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> response ${responses.indexOf(template) + 1}/${responses.length}.`);
 
     return {
       matched: true,
-      triggerType: updated.triggerType,
+      triggerType: matchedTrigger.triggerType,
+      trigger: matchedTrigger.trigger,
       responded: true,
       counter: updated.counter,
       message: rendered,
@@ -328,7 +464,7 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     saveCommand,
     deleteCommand,
     setEnabled,
-    resetCounter,
+    setCounter,
     handleMessage,
     consumeOwnResponse,
     refreshCache
@@ -336,12 +472,18 @@ function createCustomCommandManager({ channelName, sendMessage }) {
 }
 
 module.exports = {
+  MAX_COMMAND_NAME_LENGTH,
   MAX_TRIGGER_LENGTH,
+  MAX_TRIGGERS,
   MAX_RESPONSES,
   MAX_RESPONSE_LENGTH,
   MAX_COOLDOWN_SECONDS,
   RESERVED_COMMANDS,
+  USER_LEVELS,
   createCustomCommandManager,
   normalizeTrigger,
-  renderResponse
+  renderResponse,
+  randomIntegerInclusive,
+  getViewerUserLevel,
+  meetsUserLevel
 };

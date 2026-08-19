@@ -61,28 +61,39 @@
     </div>
 
     <div id="customCommandsPanel" class="section-panel">
-      <h3>Custom Commands</h3>
-      <div class="detail">Create bot-native chat commands and inline phrase triggers. Commands are stored in MongoDB and become live immediately after saving.</div>
-      <div class="custom-command-toolbar">
-        <button id="addCustomCommandBtn" type="button">Add Custom Command</button>
+      <div class="custom-command-header">
+        <h3>Custom Commands</h3>
         <button id="refreshCustomCommandsBtn" class="secondary" type="button">Refresh</button>
       </div>
+      <div class="detail">Create bot-native chat commands and inline phrase triggers. Commands are stored in MongoDB and become live immediately after saving.</div>
       <div id="customCommandsMsg" class="detail"></div>
       <div id="customCommandList" class="custom-command-list"></div>
+      <div class="custom-command-add-row">
+        <button id="addCustomCommandBtn" type="button">Add Custom Command</button>
+      </div>
 
       <div id="customCommandEditor" class="custom-command-editor">
         <h3 id="customCommandEditorTitle">Add Custom Command</h3>
+        <label class="prompt-label" for="customCommandName">Command Name</label>
+        <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
+        <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
+        <div class="custom-trigger-heading">
+          <strong>Triggers</strong>
+          <button id="addCustomTriggerBtn" class="secondary" type="button">Add Trigger</button>
+        </div>
+        <div id="customTriggerHelp" class="detail">Add one or more triggers. Each trigger can independently be a !Command or Inline Phrase, and all triggers share this command's responses, cooldown, probability, counter, and user level.</div>
+        <div id="customCommandTriggers" class="custom-trigger-list"></div>
+
         <div class="custom-command-form-grid">
           <div>
-            <label class="prompt-label" for="customTriggerType">Trigger Type</label>
-            <select id="customTriggerType">
-              <option value="command">!Command</option>
-              <option value="inline">Inline Phrase</option>
+            <label class="prompt-label" for="customUserLevel">User Level (-ul)</label>
+            <select id="customUserLevel">
+              <option value="everyone">Everyone</option>
+              <option value="subscriber">Subscriber</option>
+              <option value="twitch_vip">Twitch VIP</option>
+              <option value="moderator">Moderator</option>
+              <option value="owner">Broadcaster / Owner</option>
             </select>
-          </div>
-          <div>
-            <label class="prompt-label" for="customTrigger">Command / Trigger</label>
-            <input id="customTrigger" maxlength="120" placeholder="Example: !hog">
           </div>
           <div>
             <label class="prompt-label" for="customProbability">Trigger Probability (%)</label>
@@ -93,13 +104,37 @@
             <input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="0">
           </div>
         </div>
-        <div id="customTriggerHelp" class="detail"></div>
+        <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
         <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
 
         <div class="custom-variable-help">
-          <strong>Available response variables</strong>
-          <div class="detail"><code>$(user)</code> / <code>$user</code> = triggering viewer · <code>$(touser)</code> / <code>$touser</code> = first argument or triggering viewer · <code>$(query)</code> / <code>$query</code> = text after the trigger · <code>$(count)</code> / <code>$count</code> = persistent command counter.</div>
-          <div class="detail">No eval is needed. Add multiple responses below; one is chosen randomly when the trigger fires, and every response gets its own 500-character allowance.</div>
+          <div class="custom-variable-help-header">
+            <strong>Available response variables</strong>
+            <button id="toggleCustomVariableHelpBtn" class="secondary" type="button" aria-expanded="false">Show Variables</button>
+          </div>
+          <div id="customVariableHelpBody" class="custom-variable-help-body" hidden>
+            <div class="custom-variable-row">
+              <code>$(user)</code> <span>or</span> <code>$user</code>
+              <div class="detail">The viewer who triggered the command. Example: <code>Hello $(user)!</code> → <code>Hello SomeViewer!</code></div>
+            </div>
+            <div class="custom-variable-row">
+              <code>$(touser)</code> <span>or</span> <code>$touser</code>
+              <div class="detail">The first argument after the trigger, with a leading @ removed. Falls back to the triggering viewer. Example: <code>!bonk @Qwert</code> with <code>Bonked $(touser)!</code> → <code>Bonked Qwert!</code></div>
+            </div>
+            <div class="custom-variable-row">
+              <code>$(query)</code> <span>or</span> <code>$query</code>
+              <div class="detail">Everything after the trigger. Example: <code>!say hello there</code> with <code>You said: $(query)</code> → <code>You said: hello there</code></div>
+            </div>
+            <div class="custom-variable-row">
+              <code>$(count)</code> <span>or</span> <code>$count</code>
+              <div class="detail">This command group's persistent counter after the successful trigger increments it. Example: <code>Hydration #$(count)</code> → <code>Hydration #42</code></div>
+            </div>
+            <div class="custom-variable-row">
+              <code>$(random MIN MAX)</code>
+              <div class="detail">A random whole integer from MIN through MAX, inclusive. Example: <code>You rolled $(random 1 100)!</code> → <code>You rolled 73!</code>. Negative bounds are allowed too.</div>
+            </div>
+            <div class="custom-variable-note detail">No eval is needed. Add multiple responses below; one is chosen randomly when the trigger fires, and every response gets its own 500-character allowance. Each <code>$(random MIN MAX)</code> occurrence is rolled independently when the response is sent.</div>
+          </div>
         </div>
 
         <div class="custom-response-heading">

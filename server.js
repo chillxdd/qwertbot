@@ -14,7 +14,9 @@ const { connectDatabase } = require('./services/database');
 const { createModSessionManager, timingSafeStringEqual } = require('./middleware/modSession');
 const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
 const {
+  MAX_COMMAND_NAME_LENGTH,
   MAX_TRIGGER_LENGTH,
+  MAX_TRIGGERS,
   MAX_RESPONSES,
   MAX_RESPONSE_LENGTH,
   MAX_COOLDOWN_SECONDS,
@@ -625,7 +627,9 @@ app.get('/webui-config', (req, res) => {
     channelName: channelName || 'generalqwert',
     maxStreamLoreLength: MAX_STREAM_LORE_LENGTH,
     customCommands: {
+      maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,
       maxTriggerLength: MAX_TRIGGER_LENGTH,
+      maxTriggers: MAX_TRIGGERS,
       maxResponses: MAX_RESPONSES,
       maxResponseLength: MAX_RESPONSE_LENGTH,
       maxCooldownSeconds: MAX_COOLDOWN_SECONDS
@@ -1156,17 +1160,17 @@ app.post('/custom-commands/toggle', requireModSession, async (req, res) => {
   }
 });
 
-app.post('/custom-commands/reset-counter', requireModSession, async (req, res) => {
+app.post('/custom-commands/set-counter', requireModSession, async (req, res) => {
   if (!databaseConnected || !customCommandManager) {
     return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
   }
 
   try {
-    const command = await customCommandManager.resetCounter(String(req.body?.id || ''));
+    const command = await customCommandManager.setCounter(String(req.body?.id || ''), req.body?.counter);
     return res.json({ success: true, command });
   } catch (err) {
-    console.error('[Custom Commands] Could not reset counter:', err.message || err);
-    return res.status(400).json({ success: false, error: err.message || 'Could not reset custom command counter.' });
+    console.error('[Custom Commands] Could not set counter:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not set custom command counter.' });
   }
 });
 
