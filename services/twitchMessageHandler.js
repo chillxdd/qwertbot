@@ -19,7 +19,7 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
 }
 
-function createTwitchMessageHandler({ getRecapManager, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -117,7 +117,10 @@ function createTwitchMessageHandler({ getRecapManager, botUsername, summaryPrefi
     if (isPokemonCommunityGameCommand(rawMessage)) return;
     if (isBotHourlyRecap(username, rawMessage)) return;
 
+    const customCommandManager = typeof getCustomCommandManager === 'function' ? getCustomCommandManager() : null;
+
     if (username === botUsername) {
+      if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
       recapManager.recordChatMessage({ displayName, rawMessage });
       return;
     }
@@ -139,6 +142,24 @@ function createTwitchMessageHandler({ getRecapManager, botUsername, summaryPrefi
         await recapManager.handleRecapCommand({ channel, displayName });
       }
       return;
+    }
+
+    if (customCommandManager) {
+      try {
+        const customResult = await customCommandManager.handleMessage({ rawMessage, displayName, tags });
+        if (customResult?.matched) {
+          // Explicit !commands are operational noise and stay out of recap logs.
+          // Inline triggers are still normal viewer chat, so preserve the source message.
+          if (customResult.triggerType === 'inline') {
+            recapManager.recordChatMessage({ displayName, rawMessage });
+          }
+          return;
+        }
+      } catch (err) {
+        console.error(`[Custom Commands] Failed while handling ${rawMessage}:`, err?.message || err);
+        // If a known custom command failed to send, avoid feeding the command text to Gemini.
+        if (rawMessage.startsWith('!')) return;
+      }
     }
 
     if (rawMessage.startsWith('!')) {

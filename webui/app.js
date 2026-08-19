@@ -40,7 +40,7 @@ function ensureTwitchChatLoaded() {
 await loadConfig();
 const messaging = initMessagingSection({ $, postJson });
 const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength });
-initCustomCommandsSection({ $ });
+const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
 void messaging;
@@ -171,6 +171,7 @@ function toggleSection(tabId) {
     $(tabId).classList.add('active');
     $(tabId).setAttribute('aria-expanded', 'true');
     if (targetId === 'renderLogsPanel') renderLogs.onVisibilityChange(true);
+    if (targetId === 'customCommandsPanel') customCommands.onVisibilityChange(true);
   }
 }
 Object.keys(sectionMap).forEach((tabId) => {

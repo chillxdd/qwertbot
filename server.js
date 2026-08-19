@@ -13,6 +13,13 @@ const {
 const { connectDatabase } = require('./services/database');
 const { createModSessionManager, timingSafeStringEqual } = require('./middleware/modSession');
 const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
+const {
+  MAX_TRIGGER_LENGTH,
+  MAX_RESPONSES,
+  MAX_RESPONSE_LENGTH,
+  MAX_COOLDOWN_SECONDS,
+  createCustomCommandManager
+} = require('./services/customCommands');
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('./services/streamLore');
 const {
   MAX_PRIMARY_INSTRUCTIONS_LENGTH,
@@ -90,6 +97,7 @@ let databaseConnected = false;
 let usingMongoOAuth = false;
 let twitchClient = null;
 let recapManager = null;
+let customCommandManager = null;
 let twitchReconnectInProgress = false;
 let twitchAuthRecoveryInProgress = false;
 let twitchAuthRecoveryTimer = null;
@@ -255,8 +263,14 @@ function consumeBroadcasterOAuthState(state) {
   return true;
 }
 
+customCommandManager = createCustomCommandManager({
+  channelName,
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message)
+});
+
 const twitchMessageHandler = createTwitchMessageHandler({
   getRecapManager: () => recapManager,
+  getCustomCommandManager: () => customCommandManager,
   botUsername,
   summaryPrefix: SUMMARY_PREFIX
 });
@@ -609,7 +623,13 @@ app.get('/webui-config', (req, res) => {
   res.json({
     success: true,
     channelName: channelName || 'generalqwert',
-    maxStreamLoreLength: MAX_STREAM_LORE_LENGTH
+    maxStreamLoreLength: MAX_STREAM_LORE_LENGTH,
+    customCommands: {
+      maxTriggerLength: MAX_TRIGGER_LENGTH,
+      maxResponses: MAX_RESPONSES,
+      maxResponseLength: MAX_RESPONSE_LENGTH,
+      maxCooldownSeconds: MAX_COOLDOWN_SECONDS
+    }
   });
 });
 
@@ -1079,6 +1099,77 @@ app.post('/recap-control', requireModSession, async (req, res) => {
   }
 });
 
+
+app.post('/custom-commands/list', requireModSession, async (req, res) => {
+  if (!databaseConnected || !customCommandManager) {
+    return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
+  }
+
+  try {
+    const commands = await customCommandManager.listCommands();
+    return res.json({ success: true, commands });
+  } catch (err) {
+    console.error('[Custom Commands] Could not list commands:', err.message || err);
+    return res.status(500).json({ success: false, error: err.message || 'Could not load custom commands.' });
+  }
+});
+
+app.post('/custom-commands/save', requireModSession, async (req, res) => {
+  if (!databaseConnected || !customCommandManager) {
+    return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
+  }
+
+  try {
+    const command = await customCommandManager.saveCommand(req.body || {});
+    return res.json({ success: true, command });
+  } catch (err) {
+    console.error('[Custom Commands] Could not save command:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not save custom command.' });
+  }
+});
+
+app.post('/custom-commands/delete', requireModSession, async (req, res) => {
+  if (!databaseConnected || !customCommandManager) {
+    return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
+  }
+
+  try {
+    await customCommandManager.deleteCommand(String(req.body?.id || ''));
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Custom Commands] Could not delete command:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not delete custom command.' });
+  }
+});
+
+app.post('/custom-commands/toggle', requireModSession, async (req, res) => {
+  if (!databaseConnected || !customCommandManager) {
+    return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
+  }
+
+  try {
+    const command = await customCommandManager.setEnabled(String(req.body?.id || ''), Boolean(req.body?.enabled));
+    return res.json({ success: true, command });
+  } catch (err) {
+    console.error('[Custom Commands] Could not toggle command:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not update custom command.' });
+  }
+});
+
+app.post('/custom-commands/reset-counter', requireModSession, async (req, res) => {
+  if (!databaseConnected || !customCommandManager) {
+    return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
+  }
+
+  try {
+    const command = await customCommandManager.resetCounter(String(req.body?.id || ''));
+    return res.json({ success: true, command });
+  } catch (err) {
+    console.error('[Custom Commands] Could not reset counter:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not reset custom command counter.' });
+  }
+});
+
 app.post('/send-chat', requireModSession, async (req, res) => {
   const { message } = req.body;
 
@@ -1185,6 +1276,14 @@ async function bootstrap() {
     databaseConnected = false;
     console.error('[Database] Startup failed:', err.message || err);
     console.error('[Database] The web dashboard will still start, but MongoDB OAuth cannot work until the connection is fixed.');
+  }
+
+  if (databaseConnected && customCommandManager) {
+    try {
+      await customCommandManager.initialize();
+    } catch (err) {
+      console.error('[Custom Commands] Startup load failed:', err.message || err);
+    }
   }
 
   recapManager = createRecapManager({
