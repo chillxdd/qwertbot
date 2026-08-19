@@ -92,6 +92,11 @@ const customCommandSchema = new mongoose.Schema({
     max: 86400,
     default: 0
   },
+  cooldownResponse: {
+    type: String,
+    default: '',
+    maxlength: 500
+  },
   enabled: {
     type: Boolean,
     default: true

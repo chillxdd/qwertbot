@@ -39,7 +39,7 @@ function ensureTwitchChatLoaded() {
 
 await loadConfig();
 const messaging = initMessagingSection({ $, postJson });
-const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength });
+const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength, maxBotPersonalityLength: config.maxBotPersonalityLength });
 const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
@@ -94,7 +94,7 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   $('recapControls').style.display = 'block';
   $('password').value = '';
   $('loginMsg').textContent = '';
-  if (loadLore) await lore.loadLore();
+  if (loadLore) await lore.loadMemory();
   await messaging.loadPrompt();
   await status();
   // Load the Twitch embed only after the login overlay is gone and the dashboard layout is stable.

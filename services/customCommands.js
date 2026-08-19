@@ -111,6 +111,11 @@ function validateAndNormalizeInput(input = {}) {
     throw new Error(`Cooldown must be between 0 and ${MAX_COOLDOWN_SECONDS} seconds.`);
   }
 
+  const cooldownResponse = String(input.cooldownResponse || '').trim();
+  if (cooldownResponse.length > MAX_RESPONSE_LENGTH) {
+    throw new Error(`Cooldown response can contain at most ${MAX_RESPONSE_LENGTH} characters.`);
+  }
+
   const primary = triggers[0];
   return {
     name,
@@ -123,6 +128,7 @@ function validateAndNormalizeInput(input = {}) {
     userLevel,
     probability,
     cooldownSeconds: Math.round(cooldownSeconds * 1000) / 1000,
+    cooldownResponse,
     enabled: input.enabled !== false
   };
 }
@@ -142,6 +148,7 @@ function commandToClient(command) {
     userLevel: USER_LEVELS.includes(command.userLevel) ? command.userLevel : 'everyone',
     probability: Number(command.probability ?? 100),
     cooldownSeconds: Number(command.cooldownSeconds ?? 0),
+    cooldownResponse: String(command.cooldownResponse || ''),
     enabled: command.enabled !== false,
     counter: Number(command.counter || 0),
     createdAt: command.createdAt || null,
@@ -197,6 +204,12 @@ function renderResponse(template, context) {
     return value === null ? match : String(value);
   });
 
+  const randomUsers = Array.isArray(context.randomUsers) ? [...context.randomUsers] : [];
+  output = output.replace(/\$\(randomuser\)/gi, () => {
+    const chatter = randomUsers.shift();
+    return String(chatter?.displayName || chatter?.login || user);
+  });
+
   const pairs = [
     ['$(user)', user], ['$user', user],
     ['$(touser)', toUser], ['$touser', toUser],
@@ -225,7 +238,7 @@ function meetsUserLevel(tags = {}, required = 'everyone') {
   return hierarchy[actual] >= hierarchy[requiredLevel];
 }
 
-function createCustomCommandManager({ channelName, sendMessage }) {
+function createCustomCommandManager({ channelName, sendMessage, getRandomChatters = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   const lastTriggeredAt = new Map();
@@ -398,12 +411,88 @@ function createCustomCommandManager({ channelName, sendMessage }) {
     const previous = lastTriggeredAt.get(commandId) || 0;
 
     if (cooldownMs > 0 && now - previous < cooldownMs) {
-      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
+      const cooldownTemplate = String(command.cooldownResponse || '').trim();
+      if (!cooldownTemplate) {
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
+      }
+
+      const randomUserCount = (cooldownTemplate.match(/\$\(randomuser\)/gi) || []).length;
+      let randomUsers = [];
+      if (randomUserCount > 0) {
+        if (typeof getRandomChatters !== 'function') {
+          return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'randomuser_unavailable' };
+        }
+        try {
+          randomUsers = await getRandomChatters(randomUserCount);
+        } catch (err) {
+          console.error('[Custom Commands] Could not resolve $(randomuser) for cooldown response:', err.message || err);
+          return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'randomuser_error' };
+        }
+        if (randomUsers.length < randomUserCount) {
+          return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'no_random_chatter' };
+        }
+      }
+
+      const renderedCooldown = renderResponse(cooldownTemplate, {
+        user: displayName,
+        query: match.query,
+        count: Number(command.counter || 0),
+        randomUsers
+      });
+      if (!renderedCooldown) {
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
+      }
+
+      noteOwnResponse(renderedCooldown);
+      const result = await sendMessage(normalizedChannel, renderedCooldown);
+      return {
+        matched: true,
+        triggerType: matchedTrigger.triggerType,
+        trigger: matchedTrigger.trigger,
+        responded: true,
+        reason: 'cooldown',
+        cooldownResponse: true,
+        message: renderedCooldown,
+        sendMethod: result?.method || 'unknown'
+      };
     }
 
     const probability = Math.max(0, Math.min(100, Number(command.probability ?? 100)));
     if (probability <= 0 || Math.random() * 100 >= probability) {
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'probability' };
+    }
+
+    const currentResponses = Array.isArray(command.responses) ? command.responses.filter(Boolean) : [];
+    if (!currentResponses.length) {
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'no_response' };
+    }
+
+    const template = currentResponses[Math.floor(Math.random() * currentResponses.length)];
+    const randomUserCount = (String(template).match(/\$\(randomuser\)/gi) || []).length;
+    let randomUsers = [];
+
+    if (randomUserCount > 0) {
+      if (typeof getRandomChatters !== 'function') {
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'randomuser_unavailable' };
+      }
+
+      try {
+        randomUsers = await getRandomChatters(randomUserCount);
+      } catch (err) {
+        console.error('[Custom Commands] Could not resolve $(randomuser):', err.message || err);
+        return {
+          matched: true,
+          triggerType: matchedTrigger.triggerType,
+          trigger: matchedTrigger.trigger,
+          responded: false,
+          reason: 'randomuser_error'
+        };
+      }
+
+      if (randomUsers.length < randomUserCount) {
+        console.warn('[Custom Commands] $(randomuser) could not find enough eligible current chatters.');
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'no_random_chatter' };
+      }
     }
 
     const updated = await CustomCommand.findOneAndUpdate(
@@ -417,14 +506,12 @@ function createCustomCommandManager({ channelName, sendMessage }) {
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'disabled' };
     }
 
-    const responses = Array.isArray(updated.responses) ? updated.responses.filter(Boolean) : [];
-    if (!responses.length) return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'no_response' };
-
-    const template = responses[Math.floor(Math.random() * responses.length)];
+    const responses = Array.isArray(updated.responses) ? updated.responses.filter(Boolean) : currentResponses;
     const rendered = renderResponse(template, {
       user: displayName,
       query: match.query,
-      count: updated.counter
+      count: updated.counter,
+      randomUsers
     });
 
     if (!rendered) return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'empty_response' };

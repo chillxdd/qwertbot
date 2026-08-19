@@ -28,7 +28,7 @@
     <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="customCommandsTab" class="secondary" type="button">Custom Commands</button>
-      <button id="loreTab" class="secondary" type="button">Lore Management</button>
+      <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
       <button id="renderLogsTab" class="secondary" type="button">Render Logs</button>
     </div>
@@ -74,38 +74,51 @@
 
       <div id="customCommandEditor" class="custom-command-editor">
         <h3 id="customCommandEditorTitle">Add Custom Command</h3>
-        <label class="prompt-label" for="customCommandName">Command Name</label>
-        <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
-        <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
-        <div class="custom-trigger-heading">
-          <strong>Triggers</strong>
-          <button id="addCustomTriggerBtn" class="secondary" type="button">Add Trigger</button>
-        </div>
-        <div id="customTriggerHelp" class="detail">Add one or more triggers. Each trigger can independently be a !Command or Inline Phrase, and all triggers share this command's responses, cooldown, probability, counter, and user level.</div>
-        <div id="customCommandTriggers" class="custom-trigger-list"></div>
 
-        <div class="custom-command-form-grid">
-          <div>
-            <label class="prompt-label" for="customUserLevel">User Level (-ul)</label>
-            <select id="customUserLevel">
-              <option value="everyone">Everyone</option>
-              <option value="subscriber">Subscriber</option>
-              <option value="twitch_vip">Twitch VIP</option>
-              <option value="moderator">Moderator</option>
-              <option value="owner">Broadcaster / Owner</option>
-            </select>
-          </div>
-          <div>
-            <label class="prompt-label" for="customProbability">Trigger Probability (%)</label>
-            <input id="customProbability" type="number" min="0" max="100" step="0.01" value="100">
-          </div>
-          <div>
-            <label class="prompt-label" for="customCooldown">Cooldown (seconds)</label>
-            <input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="0">
-          </div>
+        <div class="custom-editor-block">
+          <label class="prompt-label" for="customCommandName">Command Name</label>
+          <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
+          <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
         </div>
-        <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
-        <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
+
+        <div class="custom-editor-block">
+          <div class="custom-trigger-heading">
+            <strong>Triggers</strong>
+            <button id="addCustomTriggerBtn" class="secondary" type="button">Add Trigger</button>
+          </div>
+          <div id="customTriggerHelp" class="detail">Add one or more triggers. Each trigger can independently be a !Command or Inline Phrase, and all triggers share this command's responses, cooldown, probability, counter, and user level.</div>
+          <div id="customCommandTriggers" class="custom-trigger-list"></div>
+          <div id="customTriggerMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-block">
+          <strong class="custom-block-title">Command Settings</strong>
+          <div class="custom-command-form-grid">
+            <div>
+              <label class="prompt-label" for="customUserLevel">User Level (-ul)</label>
+              <select id="customUserLevel">
+                <option value="everyone">Everyone</option>
+                <option value="subscriber">Subscriber</option>
+                <option value="twitch_vip">Twitch VIP</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Broadcaster / Owner</option>
+              </select>
+            </div>
+            <div>
+              <label class="prompt-label" for="customProbability">Trigger Probability (%)</label>
+              <input id="customProbability" type="number" min="0" max="100" step="0.01" value="100">
+            </div>
+            <div>
+              <label class="prompt-label" for="customCooldown">Cooldown (seconds)</label>
+              <input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="0">
+            </div>
+          </div>
+          <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
+          <label class="prompt-label" for="customCooldownResponse">Cooldown Response (optional)</label>
+          <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
+          <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent only when a valid user triggers this command while it is still cooling down. Variables work here too. The counter does not increment.</span></div>
+          <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
+        </div>
 
         <div class="custom-variable-help">
           <div class="custom-variable-help-header">
@@ -133,16 +146,25 @@
               <code>$(random MIN MAX)</code>
               <div class="detail">A random whole integer from MIN through MAX, inclusive. Example: <code>You rolled $(random 1 100)!</code> → <code>You rolled 73!</code>. Negative bounds are allowed too.</div>
             </div>
-            <div class="custom-variable-note detail">No eval is needed. Add multiple responses below; one is chosen randomly when the trigger fires, and every response gets its own 500-character allowance. Each <code>$(random MIN MAX)</code> occurrence is rolled independently when the response is sent.</div>
+            <div class="custom-variable-row">
+              <code>$(randomuser)</code>
+              <div class="detail">Picks a random user currently connected to Qwert's Twitch chat using Twitch's Get Chatters API. Example: <code>$(randomuser) has been selected!</code> → <code>SomeViewer has been selected!</code></div>
+              <div class="detail">Requires the bot OAuth scope <code>moderator:read:chatters</code>. SqwertArmyBot, Nightbot, StreamElements, and Pokémon Community Game are excluded from the pool.</div>
+            </div>
+            <div class="custom-variable-note detail">No eval is needed. Add multiple responses below; one is chosen randomly when the trigger fires, and every response gets its own 500-character allowance. Each <code>$(random MIN MAX)</code> occurrence rolls independently. Multiple <code>$(randomuser)</code> occurrences choose unique eligible chatters when enough are available.</div>
           </div>
         </div>
 
-        <div class="custom-response-heading">
-          <strong>Possible Responses</strong>
-          <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
+        <div class="custom-editor-block">
+          <div class="custom-response-heading">
+            <strong>Possible Responses</strong>
+            <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
+          </div>
+          <div id="customResponseHelp" class="detail"></div>
+          <div id="customResponseMsg" class="detail custom-field-message"></div>
+          <div id="customCommandResponses"></div>
         </div>
-        <div id="customResponseHelp" class="detail"></div>
-        <div id="customCommandResponses"></div>
+
         <div class="custom-editor-actions">
           <button id="saveCustomCommandBtn" type="button">Save Command</button>
           <button id="cancelCustomCommandBtn" class="secondary" type="button">Cancel</button>
@@ -152,13 +174,33 @@
     </div>
 
     <div id="lorePanel" class="section-panel">
-      <h3>Stream Specific Lore</h3>
-      <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the AI interpret current chat. Saved lore stays in MongoDB until you edit it.</div>
-      <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
-      <button id="saveLoreBtn">Save Lore</button>
-      <button id="undoLoreBtn" class="secondary" type="button">Undo Changes</button>
-      <div id="loreCount" class="detail">0/12000 characters</div>
-      <div id="loreMsg" class="detail"></div>
+      <h3>Memory Management</h3>
+
+      <div class="memory-block">
+        <h4>Stream Specific Lore</h4>
+        <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat. Saved lore stays in MongoDB until you edit it.</div>
+        <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
+        <div class="memory-actions">
+          <button id="saveLoreBtn">Save Lore</button>
+          <button id="undoLoreBtn" class="secondary" type="button">Undo Changes</button>
+        </div>
+        <div id="loreCount" class="detail">0/12000 characters</div>
+        <div id="loreMsg" class="detail"></div>
+      </div>
+
+      <div class="memory-block">
+        <h4>Bot Personality & Tagged Questions</h4>
+        <div class="detail">When a message starts with <code>@SqwertArmyBot</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Leaving this field blank disables tagged AI answers.</div>
+        <label class="prompt-label" for="botPersonality">Personality</label>
+        <textarea id="botPersonality" maxlength="12000" placeholder="Example: You are Professor Oak with exhausted dad energy. Be knowledgeable, concise, slightly dramatic, and keep getting annoyed that nobody lets you out of the bag."></textarea>
+        <div id="botPersonalityCount" class="detail">0/12000 characters</div>
+        <label class="inline-check personality-audience-toggle"><input id="botPersonalityEveryone" type="checkbox"> Allow everyone to ask tagged questions <span class="detail">(off = Mods/Broadcaster only)</span></label>
+        <div class="memory-actions">
+          <button id="saveBotPersonalityBtn" type="button">Save Personality Settings</button>
+          <button id="undoBotPersonalityBtn" class="secondary" type="button">Undo Changes</button>
+        </div>
+        <div id="botPersonalityMsg" class="detail"></div>
+      </div>
     </div>
 
     <div id="oauthPanel" class="section-panel">

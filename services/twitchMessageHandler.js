@@ -19,7 +19,7 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
 }
 
-function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getBotPersonalityManager, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -118,11 +118,29 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     if (isBotHourlyRecap(username, rawMessage)) return;
 
     const customCommandManager = typeof getCustomCommandManager === 'function' ? getCustomCommandManager() : null;
+    const botPersonalityManager = typeof getBotPersonalityManager === 'function' ? getBotPersonalityManager() : null;
 
     if (username === botUsername) {
       if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
+      if (botPersonalityManager?.consumeOwnResponse(rawMessage)) return;
       recapManager.recordChatMessage({ displayName, rawMessage });
       return;
+    }
+
+    if (botPersonalityManager) {
+      try {
+        const personalityResult = await botPersonalityManager.handleTaggedQuestion({ rawMessage, displayName, tags });
+        if (personalityResult?.matched) {
+          // A tagged AI question is still organic viewer chat, even when the
+          // current audience setting prevents the bot from answering it.
+          recapManager.recordChatMessage({ displayName, rawMessage });
+          return;
+        }
+      } catch (err) {
+        console.error(`[Bot Personality] Failed while answering tagged question from ${displayName}:`, err?.message || err);
+        recapManager.recordChatMessage({ displayName, rawMessage });
+        return;
+      }
     }
 
     if (isKnownBotCommand(rawMessage)) {

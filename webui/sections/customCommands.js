@@ -16,6 +16,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   const responsesEl = $('customCommandResponses');
   const msgEl = $('customCommandsMsg');
   const editorMsgEl = $('customCommandEditorMsg');
+  const triggerMsgEl = $('customTriggerMsg');
+  const responseMsgEl = $('customResponseMsg');
 
   function setMessage(text, isError = false) {
     msgEl.textContent = text || '';
@@ -25,6 +27,22 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   function setEditorMessage(text, isError = false) {
     editorMsgEl.textContent = text || '';
     editorMsgEl.classList.toggle('bad', Boolean(isError));
+  }
+
+  function setTriggerMessage(text, isError = false) {
+    triggerMsgEl.textContent = text || '';
+    triggerMsgEl.classList.toggle('bad', Boolean(isError));
+  }
+
+  function setResponseMessage(text, isError = false) {
+    responseMsgEl.textContent = text || '';
+    responseMsgEl.classList.toggle('bad', Boolean(isError));
+  }
+
+  function clearEditorMessages() {
+    setEditorMessage('');
+    setTriggerMessage('');
+    setResponseMessage('');
   }
 
   function triggerRow(value = { triggerType: 'command', trigger: '' }) {
@@ -50,10 +68,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     type.addEventListener('change', updatePlaceholder);
     remove.onclick = () => {
       if (triggersEl.children.length <= 1) {
-        setEditorMessage('A custom command needs at least one trigger.', true);
+        setTriggerMessage('A custom command needs at least one trigger.', true);
         return;
       }
       wrapper.remove();
+      setTriggerMessage('');
       updateAddTriggerState();
     };
     updatePlaceholder();
@@ -67,6 +86,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   function addTrigger(value = { triggerType: 'command', trigger: '' }) {
     if (triggersEl.children.length >= maxTriggers) return;
+    setTriggerMessage('');
     triggersEl.appendChild(triggerRow(value));
     updateAddTriggerState();
   }
@@ -90,10 +110,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     textarea.addEventListener('input', updateCount);
     remove.onclick = () => {
       if (responsesEl.children.length <= 1) {
-        setEditorMessage('A command needs at least one response.', true);
+        setResponseMessage('A command needs at least one response.', true);
         return;
       }
       wrapper.remove();
+      setResponseMessage('');
       updateAddResponseState();
     };
     updateCount();
@@ -107,8 +128,14 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   function addResponse(value = '') {
     if (responsesEl.children.length >= maxResponses) return;
+    setResponseMessage('');
     responsesEl.appendChild(responseRow(value));
     updateAddResponseState();
+  }
+
+
+  function updateCooldownResponseCount() {
+    $('customCooldownResponseCount').textContent = `${$('customCooldownResponse').value.length}/${maxResponseLength}`;
   }
 
   function commandLabel(command) {
@@ -120,7 +147,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   function closeEditor() {
     editingId = null;
     editorEl.classList.remove('open');
-    setEditorMessage('');
+    clearEditorMessages();
   }
 
   function openEditor(command = null) {
@@ -131,6 +158,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customUserLevel').value = command?.userLevel || 'everyone';
     $('customProbability').value = command?.probability ?? 100;
     $('customCooldown').value = command?.cooldownSeconds ?? 0;
+    $('customCooldownResponse').value = command?.cooldownResponse || '';
+    updateCooldownResponseCount();
     $('customEnabled').checked = command?.enabled !== false;
 
     triggersEl.replaceChildren();
@@ -147,7 +176,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
     updateAddTriggerState();
     updateAddResponseState();
-    setEditorMessage('');
+    clearEditorMessages();
     editorEl.classList.add('open');
     $('customCommandName').focus();
   }
@@ -235,9 +264,18 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const responses = [...responsesEl.querySelectorAll('.custom-response-input')].map((el) => el.value.trim()).filter(Boolean);
 
     if (!triggers.length) {
-      setEditorMessage('Add at least one trigger.', true);
+      setTriggerMessage('Add at least one trigger.', true);
+      triggersEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    setTriggerMessage('');
+
+    if (!responses.length) {
+      setResponseMessage('Add at least one response.', true);
+      responsesEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    setResponseMessage('');
 
     const payload = {
       id: editingId || undefined,
@@ -246,6 +284,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       userLevel: $('customUserLevel').value,
       probability: Number($('customProbability').value),
       cooldownSeconds: Number($('customCooldown').value),
+      cooldownResponse: $('customCooldownResponse').value.trim(),
       enabled: $('customEnabled').checked,
       responses
     };
@@ -255,7 +294,17 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const d = await postJson('/custom-commands/save', payload);
     $('saveCustomCommandBtn').disabled = false;
     if (!d.success) {
-      setEditorMessage(d.error || 'Could not save custom command.', true);
+      const errorText = d.error || 'Could not save custom command.';
+      const lowerError = String(errorText).toLowerCase();
+      if (lowerError.includes('trigger')) {
+        setTriggerMessage(errorText, true);
+        triggersEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (lowerError.includes('response')) {
+        setResponseMessage(errorText, true);
+        responsesEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        setEditorMessage(errorText, true);
+      }
       return;
     }
 
@@ -313,6 +362,9 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   $('saveCustomCommandBtn').onclick = saveCommand;
   $('cancelCustomCommandBtn').onclick = closeEditor;
   $('customCooldown').max = String(maxCooldownSeconds);
+  $('customCooldownResponse').maxLength = maxResponseLength;
+  $('customCooldownResponse').addEventListener('input', updateCooldownResponseCount);
+  updateCooldownResponseCount();
   $('customCommandName').maxLength = maxCommandNameLength;
 
   return {

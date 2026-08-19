@@ -23,6 +23,8 @@ const {
   createCustomCommandManager
 } = require('./services/customCommands');
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('./services/streamLore');
+const { MAX_BOT_PERSONALITY_LENGTH, createBotPersonalityManager } = require('./services/botPersonality');
+const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
 const {
   MAX_PRIMARY_INSTRUCTIONS_LENGTH,
   MAX_EXPANSION_INSTRUCTIONS_LENGTH,
@@ -70,7 +72,7 @@ const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
-const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages'];
+const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', REQUIRED_CHATTERS_SCOPE];
 const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
@@ -100,6 +102,7 @@ let usingMongoOAuth = false;
 let twitchClient = null;
 let recapManager = null;
 let customCommandManager = null;
+let botPersonalityManager = null;
 let twitchReconnectInProgress = false;
 let twitchAuthRecoveryInProgress = false;
 let twitchAuthRecoveryTimer = null;
@@ -267,12 +270,20 @@ function consumeBroadcasterOAuthState(state) {
 
 customCommandManager = createCustomCommandManager({
   channelName,
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
+});
+
+botPersonalityManager = createBotPersonalityManager({
+  channelName,
+  botUsername,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message)
 });
 
 const twitchMessageHandler = createTwitchMessageHandler({
   getRecapManager: () => recapManager,
   getCustomCommandManager: () => customCommandManager,
+  getBotPersonalityManager: () => botPersonalityManager,
   botUsername,
   summaryPrefix: SUMMARY_PREFIX
 });
@@ -626,6 +637,7 @@ app.get('/webui-config', (req, res) => {
     success: true,
     channelName: channelName || 'generalqwert',
     maxStreamLoreLength: MAX_STREAM_LORE_LENGTH,
+    maxBotPersonalityLength: MAX_BOT_PERSONALITY_LENGTH,
     customCommands: {
       maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,
       maxTriggerLength: MAX_TRIGGER_LENGTH,
@@ -683,6 +695,7 @@ app.get('/status', async (req, res) => {
   };
 
   const eventSubStatus = getEventSubStatus();
+  let botMissingAllScopes = [...TWITCH_OAUTH_SCOPES];
   let broadcasterMissingAllScopes = [...TWITCH_BROADCASTER_SCOPES];
 
   try {
@@ -692,6 +705,7 @@ app.get('/status', async (req, res) => {
         getBroadcasterAuthStatus(),
         getChatApiReadiness()
       ]);
+      botMissingAllScopes = TWITCH_OAUTH_SCOPES.filter((scope) => !(authStatus.scopes || []).includes(scope));
       broadcasterMissingAllScopes = TWITCH_BROADCASTER_SCOPES.filter((scope) => !(broadcasterAuthStatus.scopes || []).includes(scope));
     }
   } catch (err) {
@@ -731,7 +745,7 @@ app.get('/status', async (req, res) => {
       scopes: authStatus.scopes,
       updatedAt: authStatus.updatedAt,
       usingMongoOAuth,
-      botMissingScopes: chatApiStatus.botMissingScopes || [],
+      botMissingScopes: botMissingAllScopes,
       broadcaster: {
         stored: broadcasterAuthStatus.stored,
         username: broadcasterAuthStatus.username,
@@ -812,6 +826,39 @@ app.post('/stream-lore/save', requireModSession, async (req, res) => {
   } catch (err) {
     console.error('[Lore] Could not save stream-specific lore:', err.message || err);
     return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
+  }
+});
+
+
+app.post('/bot-personality/get', requireModSession, async (req, res) => {
+  if (!databaseConnected || !botPersonalityManager) {
+    return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+  }
+
+  try {
+    const config = await botPersonalityManager.loadConfig();
+    return res.json({ success: true, ...config });
+  } catch (err) {
+    console.error('[Bot Personality] Could not load settings:', err.message || err);
+    return res.status(500).json({ success: false, error: 'Could not load bot personality settings.' });
+  }
+});
+
+app.post('/bot-personality/save', requireModSession, async (req, res) => {
+  if (!databaseConnected || !botPersonalityManager) {
+    return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+  }
+
+  try {
+    const config = await botPersonalityManager.saveConfig({
+      personality: req.body?.personality,
+      audience: req.body?.audience
+    });
+    console.log(`[Bot Personality] Settings saved (${config.personality.length} characters, audience=${config.audience}).`);
+    return res.json({ success: true, ...config });
+  } catch (err) {
+    console.error('[Bot Personality] Could not save settings:', err.message || err);
+    return res.status(400).json({ success: false, error: err.message || 'Could not save bot personality settings.' });
   }
 });
 
@@ -994,7 +1041,7 @@ app.get('/auth/twitch/callback', async (req, res) => {
       });
     }, 500);
 
-    return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API, the legacy IRC connection used to receive chat, and temporary hourly-recap pinning.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+    return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtmlServer(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API, the legacy IRC connection used to receive chat, temporary hourly-recap pinning, and random current-chatter selection for custom commands.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
   } catch (err) {
     console.error('[OAuth] Twitch callback failed:', err.message || err);
     return res.status(500).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Twitch OAuth error</h2><p>${escapeHtmlServer(err.message)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
@@ -1287,6 +1334,14 @@ async function bootstrap() {
       await customCommandManager.initialize();
     } catch (err) {
       console.error('[Custom Commands] Startup load failed:', err.message || err);
+    }
+  }
+
+  if (databaseConnected && botPersonalityManager) {
+    try {
+      await botPersonalityManager.initialize();
+    } catch (err) {
+      console.error('[Bot Personality] Startup load failed:', err.message || err);
     }
   }
 
