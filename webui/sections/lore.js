@@ -1,8 +1,9 @@
-export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityLength }) {
+export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds }) {
   const maxLength = Number(maxLoreLength) || 12000;
   const personalityMaxLength = Number(maxBotPersonalityLength) || 12000;
   $('streamLore').maxLength = maxLength;
   $('botPersonality').maxLength = personalityMaxLength;
+  $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
 
   function updateCount() {
     $('loreCount').textContent = `${$('streamLore').value.length}/${maxLength} characters`;
@@ -56,7 +57,9 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
         return;
       }
       $('botPersonality').value = d.personality || '';
-      $('botPersonalityEveryone').checked = d.audience === 'everyone';
+      $('botPersonalityModsOnly').checked = d.audience === 'mods';
+      $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
+      $('botPersonalityCooldown').value = d.cooldownSeconds ?? 0;
       updatePersonalityCount();
       $('botPersonalityMsg').textContent = d.updatedAt ? 'Saved personality settings loaded.' : 'No personality saved yet.';
     } catch (_) {
@@ -70,19 +73,24 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
       $('botPersonalityMsg').textContent = 'Saving...';
       const d = await postJson('/bot-personality/save', {
         personality: $('botPersonality').value,
-        audience: $('botPersonalityEveryone').checked ? 'everyone' : 'mods'
+        audience: $('botPersonalityModsOnly').checked ? 'mods' : 'everyone',
+        cooldownSeconds: Number($('botPersonalityCooldown').value || 0),
+        modsBypassCooldown: $('botPersonalityModsBypassCooldown').checked
       });
       if (!d.success) {
         $('botPersonalityMsg').textContent = d.error || 'Could not save personality settings.';
         return;
       }
       $('botPersonality').value = d.personality || '';
-      $('botPersonalityEveryone').checked = d.audience === 'everyone';
+      $('botPersonalityModsOnly').checked = d.audience === 'mods';
+      $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
+      $('botPersonalityCooldown').value = d.cooldownSeconds ?? 0;
       updatePersonalityCount();
       const audienceText = d.audience === 'everyone' ? 'Everyone can ask.' : 'Only Mods/Broadcaster can ask.';
+      const cooldownText = Number(d.cooldownSeconds || 0) > 0 ? ` Cooldown: ${d.cooldownSeconds}s${d.modsBypassCooldown ? ' (Mods/Broadcaster bypass).' : '.'}` : ' Cooldown disabled.';
       $('botPersonalityMsg').textContent = d.personality
-        ? `Saved to MongoDB and live immediately. ${audienceText}`
-        : `Personality cleared; tagged AI answers are disabled. ${audienceText}`;
+        ? `Saved to MongoDB and live immediately. ${audienceText}${cooldownText}`
+        : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}`;
     } catch (_) {
       $('botPersonalityMsg').textContent = 'Could not save personality settings.';
     } finally {

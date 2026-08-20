@@ -2,6 +2,7 @@ const BotPersonalityConfig = require('../models/BotPersonalityConfig');
 
 const MAX_BOT_PERSONALITY_LENGTH = 12000;
 const TWITCH_MESSAGE_LIMIT = 500;
+const MAX_BOT_PERSONALITY_COOLDOWN_SECONDS = 86400;
 
 function normalizeChannelName(channelName) {
   return String(channelName || '').toLowerCase().trim();
@@ -87,7 +88,8 @@ function clipTwitchMessage(text, prefix = '') {
 function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore }) {
   const normalizedChannel = normalizeChannelName(channelName);
   const normalizedBotUsername = String(botUsername || '').toLowerCase().trim();
-  let config = { personality: '', audience: 'mods', updatedAt: null };
+  let config = { personality: '', audience: 'mods', cooldownSeconds: 0, modsBypassCooldown: true, updatedAt: null };
+  let lastPublicResponseAt = 0;
   const ownResponses = [];
   const OWN_RESPONSE_TTL_MS = 15000;
 
@@ -115,6 +117,8 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     config = {
       personality: String(doc?.personality || ''),
       audience: normalizeAudience(doc?.audience),
+      cooldownSeconds: Math.max(0, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || 0))),
+      modsBypassCooldown: doc?.modsBypassCooldown !== false,
       updatedAt: doc?.updatedAt || null
     };
     return { ...config };
@@ -122,25 +126,33 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
 
   async function initialize() {
     await loadConfig();
-    console.log(`[Bot Personality] Loaded personality settings (${config.personality.length} characters, audience=${config.audience}).`);
+    console.log(`[Bot Personality] Loaded personality settings (${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
   }
 
-  async function saveConfig({ personality, audience }) {
+  async function saveConfig({ personality, audience, cooldownSeconds, modsBypassCooldown }) {
     const normalizedPersonality = String(personality || '').trim();
     if (normalizedPersonality.length > MAX_BOT_PERSONALITY_LENGTH) {
       throw new Error(`Bot personality cannot exceed ${MAX_BOT_PERSONALITY_LENGTH} characters.`);
     }
 
     const normalizedAudience = normalizeAudience(audience);
+    const normalizedCooldown = Number(cooldownSeconds ?? 0);
+    if (!Number.isFinite(normalizedCooldown) || normalizedCooldown < 0 || normalizedCooldown > MAX_BOT_PERSONALITY_COOLDOWN_SECONDS) {
+      throw new Error(`AI question cooldown must be between 0 and ${MAX_BOT_PERSONALITY_COOLDOWN_SECONDS} seconds.`);
+    }
+    const roundedCooldown = Math.round(normalizedCooldown * 1000) / 1000;
+    const normalizedBypass = Boolean(modsBypassCooldown);
     const doc = await BotPersonalityConfig.findOneAndUpdate(
       { channelName: normalizedChannel },
-      { $set: { personality: normalizedPersonality, audience: normalizedAudience } },
+      { $set: { personality: normalizedPersonality, audience: normalizedAudience, cooldownSeconds: roundedCooldown, modsBypassCooldown: normalizedBypass } },
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     ).lean();
 
     config = {
       personality: String(doc?.personality || ''),
       audience: normalizeAudience(doc?.audience),
+      cooldownSeconds: Math.max(0, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || 0))),
+      modsBypassCooldown: doc?.modsBypassCooldown !== false,
       updatedAt: doc?.updatedAt || null
     };
     return { ...config };
@@ -170,8 +182,16 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       return { matched: true, responded: false, reason: 'personality_empty' };
     }
 
-    if (config.audience === 'mods' && !isModOrBroadcaster(tags)) {
+    const viewerIsMod = isModOrBroadcaster(tags);
+    if (config.audience === 'mods' && !viewerIsMod) {
       return { matched: true, responded: false, reason: 'audience' };
+    }
+
+    const bypassCooldown = viewerIsMod && config.modsBypassCooldown;
+    const cooldownMs = Math.max(0, Number(config.cooldownSeconds || 0) * 1000);
+    if (!bypassCooldown && cooldownMs > 0 && Date.now() - lastPublicResponseAt < cooldownMs) {
+      const remainingMs = Math.max(0, cooldownMs - (Date.now() - lastPublicResponseAt));
+      return { matched: true, responded: false, reason: 'cooldown', remainingSeconds: Math.ceil(remainingMs / 1000) };
     }
 
     let streamLore = '';
@@ -218,6 +238,7 @@ Output only the answer.`;
 
     noteOwnResponse(rendered);
     const result = await sendMessage(normalizedChannel, rendered);
+    if (!bypassCooldown) lastPublicResponseAt = Date.now();
     return { matched: true, responded: true, message: rendered, sendMethod: result?.method || 'unknown' };
   }
 
@@ -232,5 +253,6 @@ Output only the answer.`;
 
 module.exports = {
   MAX_BOT_PERSONALITY_LENGTH,
+  MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
   createBotPersonalityManager
 };

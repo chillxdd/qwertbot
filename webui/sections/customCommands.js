@@ -39,10 +39,39 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     responseMsgEl.classList.toggle('bad', Boolean(isError));
   }
 
+  function responseMode() {
+    return $('customResponseMode').value || 'equal';
+  }
+
+  function updateResponseModeUi() {
+    const mode = responseMode();
+    const help = $('customResponseModeHelp');
+    if (mode === 'weighted') {
+      help.textContent = 'Specified Weight chooses proportionally by weight. Example: weights 1, 2, 7 are roughly 10%, 20%, 70%.';
+    } else if (mode === 'ifelse') {
+      help.textContent = 'If / Else checks the first word after the matched trigger, case-insensitively. Set a word such as genesect; leave one condition blank for Else.';
+    } else {
+      help.textContent = 'Equal Odds randomly chooses between all responses.';
+    }
+    responsesEl.querySelectorAll('.custom-response-row').forEach((row) => {
+      row.querySelector('.custom-response-weight-wrap').hidden = mode !== 'weighted';
+      row.querySelector('.custom-response-condition-wrap').hidden = mode !== 'ifelse';
+    });
+    updateAddResponseState();
+  }
+
   function clearEditorMessages() {
     setEditorMessage('');
     setTriggerMessage('');
     setResponseMessage('');
+  }
+
+  function escAttr(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   function triggerRow(value = { triggerType: 'command', trigger: '' }) {
@@ -91,10 +120,19 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     updateAddTriggerState();
   }
 
-  function responseRow(value = '') {
+  function responseRow(value = '', weight = 1, condition = '') {
     const wrapper = document.createElement('div');
     wrapper.className = 'custom-response-row';
     wrapper.innerHTML = `
+      <div class="custom-response-rule-row">
+        <label class="custom-response-weight-wrap">Weight
+          <input class="custom-response-weight" type="number" min="0" step="0.01" value="${escAttr(weight ?? 1)}">
+        </label>
+        <label class="custom-response-condition-wrap">If first word equals
+          <input class="custom-response-condition" type="text" maxlength="80" placeholder="Example: genesect" value="${escAttr(condition || '')}">
+          <span class="detail">Leave blank for Else.</span>
+        </label>
+      </div>
       <textarea class="custom-response-input" maxlength="${maxResponseLength}" placeholder="Response text..."></textarea>
       <div class="custom-response-footer">
         <span class="detail custom-response-count">0/${maxResponseLength}</span>
@@ -123,14 +161,20 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   function updateAddResponseState() {
     $('addCustomResponseBtn').disabled = responsesEl.children.length >= maxResponses;
-    $('customResponseHelp').textContent = `${responsesEl.children.length}/${maxResponses} response slots. One response is selected at random each time the command actually fires.`;
+    const mode = responseMode();
+    const detail = mode === 'weighted'
+      ? 'Responses are selected proportionally by their weights.'
+      : mode === 'ifelse'
+        ? 'The first word after the trigger selects a matching response; one blank condition can act as Else.'
+        : 'One response is selected at equal random odds each time the command actually fires.';
+    $('customResponseHelp').textContent = `${responsesEl.children.length}/${maxResponses} response slots. ${detail}`;
   }
 
-  function addResponse(value = '') {
+  function addResponse(value = '', weight = 1, condition = '') {
     if (responsesEl.children.length >= maxResponses) return;
     setResponseMessage('');
-    responsesEl.appendChild(responseRow(value));
-    updateAddResponseState();
+    responsesEl.appendChild(responseRow(value, weight, condition));
+    updateResponseModeUi();
   }
 
 
@@ -142,6 +186,12 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     if (command?.name) return command.name;
     const triggers = command?.triggers?.length ? command.triggers : [{ triggerType: command?.triggerType, trigger: command?.trigger }];
     return triggers[0]?.trigger || 'custom command';
+  }
+
+  function responseModeLabel(mode) {
+    if (mode === 'weighted') return 'Weighted';
+    if (mode === 'ifelse') return 'If / Else';
+    return 'Equal Odds';
   }
 
   function closeEditor() {
@@ -159,6 +209,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customProbability').value = command?.probability ?? 100;
     $('customCooldown').value = command?.cooldownSeconds ?? 0;
     $('customCooldownResponse').value = command?.cooldownResponse || '';
+    $('customResponseMode').value = command?.responseMode || 'equal';
     updateCooldownResponseCount();
     $('customEnabled').checked = command?.enabled !== false;
 
@@ -172,10 +223,12 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
     responsesEl.replaceChildren();
     const responseValues = command?.responses?.length ? command.responses : [''];
-    responseValues.forEach(addResponse);
+    const responseWeights = command?.responseWeights || [];
+    const responseConditions = command?.responseConditions || [];
+    responseValues.forEach((value, index) => addResponse(value, responseWeights[index] ?? 1, responseConditions[index] || ''));
 
     updateAddTriggerState();
-    updateAddResponseState();
+    updateResponseModeUi();
     clearEditorMessages();
     editorEl.classList.add('open');
     $('customCommandName').focus();
@@ -211,7 +264,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
               ${statusBadge(command)}
             </div>
             <div class="custom-trigger-chip-list">${triggerChips}</div>
-            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${command.responses.length} ${responseWord} · Counter: ${esc(command.counter)}</div>
+            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · Counter: ${esc(command.counter)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary custom-edit-btn" type="button">Edit</button>
@@ -261,7 +314,14 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       triggerType: row.querySelector('.custom-trigger-type').value,
       trigger: row.querySelector('.custom-trigger-input').value.trim()
     })).filter((item) => item.trigger);
-    const responses = [...responsesEl.querySelectorAll('.custom-response-input')].map((el) => el.value.trim()).filter(Boolean);
+    const responseEntries = [...responsesEl.querySelectorAll('.custom-response-row')].map((row) => ({
+      response: row.querySelector('.custom-response-input').value.trim(),
+      weight: Number(row.querySelector('.custom-response-weight').value),
+      condition: row.querySelector('.custom-response-condition').value.trim()
+    })).filter((entry) => entry.response);
+    const responses = responseEntries.map((entry) => entry.response);
+    const responseWeights = responseEntries.map((entry) => entry.weight);
+    const responseConditions = responseEntries.map((entry) => entry.condition);
 
     if (!triggers.length) {
       setTriggerMessage('Add at least one trigger.', true);
@@ -286,6 +346,9 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       cooldownSeconds: Number($('customCooldown').value),
       cooldownResponse: $('customCooldownResponse').value.trim(),
       enabled: $('customEnabled').checked,
+      responseMode: responseMode(),
+      responseWeights,
+      responseConditions,
       responses
     };
 
@@ -359,6 +422,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   $('refreshCustomCommandsBtn').onclick = () => loadCommands();
   $('addCustomTriggerBtn').onclick = () => addTrigger();
   $('addCustomResponseBtn').onclick = () => addResponse('');
+  $('customResponseMode').onchange = updateResponseModeUi;
   $('saveCustomCommandBtn').onclick = saveCommand;
   $('cancelCustomCommandBtn').onclick = closeEditor;
   $('customCooldown').max = String(maxCooldownSeconds);

@@ -23,7 +23,7 @@ const {
   createCustomCommandManager
 } = require('./services/customCommands');
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('./services/streamLore');
-const { MAX_BOT_PERSONALITY_LENGTH, createBotPersonalityManager } = require('./services/botPersonality');
+const { MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, createBotPersonalityManager } = require('./services/botPersonality');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
 const {
   MAX_PRIMARY_INSTRUCTIONS_LENGTH,
@@ -639,6 +639,7 @@ app.get('/webui-config', (req, res) => {
     channelName: channelName || 'generalqwert',
     maxStreamLoreLength: MAX_STREAM_LORE_LENGTH,
     maxBotPersonalityLength: MAX_BOT_PERSONALITY_LENGTH,
+    maxBotPersonalityCooldownSeconds: MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
     customCommands: {
       maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,
       maxTriggerLength: MAX_TRIGGER_LENGTH,
@@ -853,9 +854,11 @@ app.post('/bot-personality/save', requireModSession, async (req, res) => {
   try {
     const config = await botPersonalityManager.saveConfig({
       personality: req.body?.personality,
-      audience: req.body?.audience
+      audience: req.body?.audience,
+      cooldownSeconds: req.body?.cooldownSeconds,
+      modsBypassCooldown: req.body?.modsBypassCooldown
     });
-    console.log(`[Bot Personality] Settings saved (${config.personality.length} characters, audience=${config.audience}).`);
+    console.log(`[Bot Personality] Settings saved (${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
     return res.json({ success: true, ...config });
   } catch (err) {
     console.error('[Bot Personality] Could not save settings:', err.message || err);

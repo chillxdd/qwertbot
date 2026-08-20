@@ -75,6 +75,19 @@ const customCommandSchema = new mongoose.Schema({
       message: 'A command must have 1-25 responses, each between 1 and 500 characters.'
     }
   },
+  responseMode: {
+    type: String,
+    enum: ['equal', 'weighted', 'ifelse'],
+    default: 'equal'
+  },
+  responseWeights: {
+    type: [Number],
+    default: []
+  },
+  responseConditions: {
+    type: [String],
+    default: []
+  },
   userLevel: {
     type: String,
     enum: ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'],

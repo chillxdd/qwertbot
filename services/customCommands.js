@@ -9,6 +9,7 @@ const MAX_COOLDOWN_SECONDS = 86400;
 const RESERVED_COMMANDS = new Set(['!recap', '!startrecap', '!stoprecap']);
 const OWN_RESPONSE_TTL_MS = 15000;
 const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
+const RESPONSE_MODES = ['equal', 'weighted', 'ifelse'];
 
 function normalizeTrigger(triggerType, value) {
   let trigger = String(value || '').trim().replace(/\s+/g, ' ');
@@ -17,6 +18,13 @@ function normalizeTrigger(triggerType, value) {
     if (trigger && !trigger.startsWith('!')) trigger = `!${trigger}`;
   }
   return trigger.toLowerCase();
+}
+
+function normalizeResponseCondition(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  const first = raw.split(/\s+/)[0] || '';
+  return first.replace(/^[^a-z0-9_@-]+|[^a-z0-9_@-]+$/gi, '');
 }
 
 function normalizeTriggerEntry(input = {}) {
@@ -97,6 +105,33 @@ function validateAndNormalizeInput(input = {}) {
     }
   }
 
+  const responseMode = RESPONSE_MODES.includes(String(input.responseMode || '').toLowerCase())
+    ? String(input.responseMode).toLowerCase()
+    : 'equal';
+  const rawWeights = Array.isArray(input.responseWeights) ? input.responseWeights : [];
+  const responseWeights = responses.map((_, index) => {
+    const value = Number(rawWeights[index] ?? 1);
+    if (Number.isFinite(value) && value >= 0) return value;
+    return responseMode === 'weighted' ? NaN : 1;
+  });
+  if (responseMode === 'weighted') {
+    if (responseWeights.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error('Every response weight must be a number greater than or equal to 0.');
+    }
+    if (!responseWeights.some((value) => value > 0)) {
+      throw new Error('Weighted responses need at least one response with a weight greater than 0.');
+    }
+  }
+
+  const rawConditions = Array.isArray(input.responseConditions) ? input.responseConditions : [];
+  const responseConditions = responses.map((_, index) => normalizeResponseCondition(rawConditions[index]));
+  if (responseMode === 'ifelse') {
+    const nonBlank = responseConditions.filter(Boolean);
+    if (new Set(nonBlank).size !== nonBlank.length) throw new Error('If/Else response words must be unique.');
+    if (responseConditions.filter((value) => !value).length > 1) throw new Error('If/Else mode can have only one blank Else response.');
+    if (responseConditions.some((value) => value.length > 80)) throw new Error('If/Else match words cannot exceed 80 characters.');
+  }
+
   const userLevel = USER_LEVELS.includes(String(input.userLevel || '').toLowerCase())
     ? String(input.userLevel).toLowerCase()
     : 'everyone';
@@ -125,6 +160,9 @@ function validateAndNormalizeInput(input = {}) {
     trigger: primary.trigger,
     normalizedTrigger: primary.normalizedTrigger,
     responses,
+    responseMode,
+    responseWeights,
+    responseConditions,
     userLevel,
     probability,
     cooldownSeconds: Math.round(cooldownSeconds * 1000) / 1000,
@@ -145,6 +183,9 @@ function commandToClient(command) {
     triggerType: primary.triggerType,
     trigger: primary.trigger,
     responses: Array.isArray(command.responses) ? command.responses : [],
+    responseMode: RESPONSE_MODES.includes(command.responseMode) ? command.responseMode : 'equal',
+    responseWeights: Array.isArray(command.responseWeights) ? command.responseWeights : [],
+    responseConditions: Array.isArray(command.responseConditions) ? command.responseConditions : [],
     userLevel: USER_LEVELS.includes(command.userLevel) ? command.userLevel : 'everyone',
     probability: Number(command.probability ?? 100),
     cooldownSeconds: Number(command.cooldownSeconds ?? 0),
@@ -220,6 +261,41 @@ function renderResponse(template, context) {
   for (const [token, value] of pairs) output = replaceAllToken(output, token, value);
 
   return Array.from(output).slice(0, MAX_RESPONSE_LENGTH).join('').trim();
+}
+
+function normalizeIfElseWord(query) {
+  return normalizeResponseCondition(String(query || '').trim().split(/\s+/)[0] || '');
+}
+
+function chooseResponseTemplate(command, responses, query) {
+  const mode = RESPONSE_MODES.includes(command?.responseMode) ? command.responseMode : 'equal';
+  if (!responses.length) return { template: '', index: -1, mode };
+
+  if (mode === 'weighted') {
+    const weights = responses.map((_, index) => {
+      const value = Number(command?.responseWeights?.[index] ?? 1);
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    });
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    if (total <= 0) return { template: '', index: -1, mode };
+    let roll = Math.random() * total;
+    for (let index = 0; index < responses.length; index += 1) {
+      roll -= weights[index];
+      if (roll < 0) return { template: responses[index], index, mode };
+    }
+    return { template: responses[responses.length - 1], index: responses.length - 1, mode };
+  }
+
+  if (mode === 'ifelse') {
+    const conditions = responses.map((_, index) => String(command?.responseConditions?.[index] || '').trim().toLowerCase());
+    const word = normalizeIfElseWord(query);
+    let index = conditions.findIndex((condition) => condition && condition === word);
+    if (index === -1) index = conditions.findIndex((condition) => !condition);
+    return index === -1 ? { template: '', index: -1, mode } : { template: responses[index], index, mode };
+  }
+
+  const index = Math.floor(Math.random() * responses.length);
+  return { template: responses[index], index, mode };
 }
 
 function getViewerUserLevel(tags = {}) {
@@ -467,7 +543,11 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'no_response' };
     }
 
-    const template = currentResponses[Math.floor(Math.random() * currentResponses.length)];
+    const selection = chooseResponseTemplate(command, currentResponses, match.query);
+    const template = selection.template;
+    if (!template) {
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: selection.mode === 'ifelse' ? 'ifelse_no_match' : 'no_response' };
+    }
     const randomUserCount = (String(template).match(/\$\(randomuser\)/gi) || []).length;
     let randomUsers = [];
 
@@ -532,7 +612,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     const cached = cache.find((item) => String(item._id) === commandId);
     if (cached) cached.counter = updated.counter;
 
-    console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> response ${responses.indexOf(template) + 1}/${responses.length}.`);
+    console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> response ${selection.index + 1}/${responses.length} (${selection.mode}).`);
 
     return {
       matched: true,
@@ -567,10 +647,14 @@ module.exports = {
   MAX_COOLDOWN_SECONDS,
   RESERVED_COMMANDS,
   USER_LEVELS,
+  RESPONSE_MODES,
   createCustomCommandManager,
   normalizeTrigger,
+  normalizeResponseCondition,
   renderResponse,
   randomIntegerInclusive,
   getViewerUserLevel,
-  meetsUserLevel
+  meetsUserLevel,
+  chooseResponseTemplate,
+  normalizeIfElseWord
 };

@@ -18,6 +18,16 @@ const botPersonalityConfigSchema = new mongoose.Schema({
     type: String,
     enum: ['everyone', 'mods'],
     default: 'mods'
+  },
+  cooldownSeconds: {
+    type: Number,
+    min: 0,
+    max: 86400,
+    default: 0
+  },
+  modsBypassCooldown: {
+    type: Boolean,
+    default: true
   }
 }, {
   timestamps: true
