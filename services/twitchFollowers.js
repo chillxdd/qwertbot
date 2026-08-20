@@ -188,14 +188,21 @@ function formatFollowAge(followedAt, now = new Date()) {
   const minutes = Math.floor(remainingSeconds / 60);
   const seconds = remainingSeconds - minutes * 60;
 
-  const parts = [];
-  if (years) parts.push(plural(years, 'year'));
-  if (months) parts.push(plural(months, 'month'));
-  if (days) parts.push(plural(days, 'day'));
-  if (hours) parts.push(plural(hours, 'hour'));
-  if (minutes) parts.push(plural(minutes, 'minute'));
-  if (seconds || !parts.length) parts.push(plural(seconds, 'second'));
-  return parts.join(', ');
+  // Keep Twitch chat output compact by showing only the most meaningful units.
+  if (years > 0) {
+    return months > 0
+      ? `${plural(years, 'year')}, ${plural(months, 'month')}`
+      : plural(years, 'year');
+  }
+  if (months > 0) {
+    return days > 0
+      ? `${plural(months, 'month')}, ${plural(days, 'day')}`
+      : plural(months, 'month');
+  }
+  if (days > 0) return plural(days, 'day');
+  if (hours > 0) return plural(hours, 'hour');
+  if (minutes > 0) return plural(minutes, 'minute');
+  return plural(seconds, 'second');
 }
 
 function formatFollowDate(followedAt) {
