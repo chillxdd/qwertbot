@@ -450,7 +450,11 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   return {
     loadTimers,
     onVisibilityChange(visible) {
-      if (visible) void loadTimers();
+      if (!visible) {
+        if (editingId === null && editorEl.classList.contains('open')) closeEditor();
+        return;
+      }
+      void loadTimers();
     }
   };
 }

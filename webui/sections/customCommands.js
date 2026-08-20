@@ -537,7 +537,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   return {
     async onVisibilityChange(visible) {
-      if (visible && !loaded) {
+      if (!visible) {
+        if (editingId === null && editorEl.classList.contains('open')) closeEditor();
+        return;
+      }
+      if (!loaded) {
         await Promise.all([loadCommands(), loadGlobalCooldown()]);
       }
     },

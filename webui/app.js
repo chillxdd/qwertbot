@@ -161,8 +161,8 @@ function selectCommandsView(view = 'commands', { load = true } = {}) {
   $('customCommandsViewTab').setAttribute('aria-selected', commandsSelected ? 'true' : 'false');
   $('timersViewTab').setAttribute('aria-selected', commandsSelected ? 'false' : 'true');
   if (load) {
-    if (commandsSelected) customCommands.onVisibilityChange(true);
-    else timers.onVisibilityChange(true);
+    customCommands.onVisibilityChange(commandsSelected);
+    timers.onVisibilityChange(!commandsSelected);
   }
 }
 $('customCommandsViewTab').onclick = () => selectCommandsView('commands');
@@ -185,6 +185,10 @@ function toggleSection(tabId) {
     $(buttonId).classList.remove('active');
     $(buttonId).setAttribute('aria-expanded', 'false');
     if (panelId === 'renderLogsPanel') renderLogs.onVisibilityChange(false);
+    if (panelId === 'customCommandsPanel') {
+      customCommands.onVisibilityChange(false);
+      timers.onVisibilityChange(false);
+    }
   });
   if (shouldOpen) {
     target.classList.add('open');
