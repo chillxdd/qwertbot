@@ -1,5 +1,6 @@
 const CustomCommand = require('../models/CustomCommand');
 const CustomCommandSettings = require('../models/CustomCommandSettings');
+const { getFollowInfo: getTwitchFollowInfo, formatFollowAge, formatFollowDate } = require('./twitchFollowers');
 
 const MAX_COMMAND_NAME_LENGTH = 80;
 const MAX_TRIGGER_LENGTH = 120;
@@ -241,6 +242,8 @@ function renderResponse(template, context) {
   const query = String(context.query || '');
   const toUser = firstTarget(query, user);
   const count = String(context.count ?? 0);
+  const followAge = String(context.followAge || '');
+  const followDate = String(context.followDate || '');
 
   let output = String(template || '');
   output = output.replace(/\$\(random\s+(-?\d+)\s+(-?\d+)\)/gi, (match, min, max) => {
@@ -258,12 +261,36 @@ function renderResponse(template, context) {
     ['$(user)', user], ['$user', user],
     ['$(touser)', toUser], ['$touser', toUser],
     ['$(query)', query], ['$query', query],
-    ['$(count)', count], ['$count', count]
+    ['$(count)', count], ['$count', count],
+    ['$(followage)', followAge], ['$followage', followAge],
+    ['$(followdate)', followDate], ['$followdate', followDate]
   ];
 
   for (const [token, value] of pairs) output = replaceAllToken(output, token, value);
 
   return Array.from(output).slice(0, MAX_RESPONSE_LENGTH).join('').trim();
+}
+
+function templateNeedsFollowInfo(template) {
+  return /\$\(follow(?:age|date)\)|\$follow(?:age|date)\b/i.test(String(template || ''));
+}
+
+async function resolveFollowContext({ template, query, displayName, getFollowInfo = getTwitchFollowInfo }) {
+  if (!templateNeedsFollowInfo(template)) return { followAge: '', followDate: '' };
+
+  const target = firstTarget(query, displayName);
+  const info = await getFollowInfo({ viewerLogin: target });
+  if (!info?.foundUser) {
+    throw new Error(`Twitch user ${target} was not found.`);
+  }
+  if (!info?.isFollowing || !info?.followedAt) {
+    return { followAge: 'not following', followDate: 'not following' };
+  }
+
+  return {
+    followAge: formatFollowAge(info.followedAt),
+    followDate: formatFollowDate(info.followedAt)
+  };
 }
 
 function normalizeIfElseWord(query) {
@@ -317,7 +344,7 @@ function meetsUserLevel(tags = {}, required = 'everyone') {
   return hierarchy[actual] >= hierarchy[requiredLevel];
 }
 
-function createCustomCommandManager({ channelName, sendMessage, getRandomChatters = null }) {
+function createCustomCommandManager({ channelName, sendMessage, getRandomChatters = null, getFollowInfo = getTwitchFollowInfo }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   let globalCooldownSeconds = DEFAULT_GLOBAL_COOLDOWN_SECONDS;
@@ -570,11 +597,25 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
         }
       }
 
+      let followContext = { followAge: '', followDate: '' };
+      try {
+        followContext = await resolveFollowContext({
+          template: cooldownTemplate,
+          query: match.query,
+          displayName,
+          getFollowInfo
+        });
+      } catch (err) {
+        console.error('[Custom Commands] Could not resolve follow variable for cooldown response:', err.message || err);
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'follow_lookup_error' };
+      }
+
       const renderedCooldown = renderResponse(cooldownTemplate, {
         user: displayName,
         query: match.query,
         count: Number(command.counter || 0),
-        randomUsers
+        randomUsers,
+        ...followContext
       });
       if (!renderedCooldown) {
         return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
@@ -647,6 +688,25 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       }
     }
 
+    let followContext = { followAge: '', followDate: '' };
+    try {
+      followContext = await resolveFollowContext({
+        template,
+        query: match.query,
+        displayName,
+        getFollowInfo
+      });
+    } catch (err) {
+      console.error('[Custom Commands] Could not resolve follow variable:', err.message || err);
+      return {
+        matched: true,
+        triggerType: matchedTrigger.triggerType,
+        trigger: matchedTrigger.trigger,
+        responded: false,
+        reason: 'follow_lookup_error'
+      };
+    }
+
     if (!acquireGlobalResponseSlot()) {
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
     }
@@ -674,7 +734,8 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       user: displayName,
       query: match.query,
       count: updated.counter,
-      randomUsers
+      randomUsers,
+      ...followContext
     });
 
     if (!rendered) {
@@ -750,5 +811,7 @@ module.exports = {
   getViewerUserLevel,
   meetsUserLevel,
   chooseResponseTemplate,
-  normalizeIfElseWord
+  normalizeIfElseWord,
+  templateNeedsFollowInfo,
+  resolveFollowContext
 };
