@@ -60,3 +60,9 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 
 /* Tagged-question optional cooldown response */
 .personality-cooldown-response-panel{margin-top:8px;padding:10px 12px;border:1px solid #2a2a30;border-radius:6px;background:#111114}.personality-cooldown-response-panel[hidden]{display:none}.personality-cooldown-response-panel textarea{min-height:76px;margin:5px 0 5px}.personality-cooldown-response-panel code{color:#bf94ff}
+/* Custom command list sorting */
+.custom-command-list-controls{display:flex;align-items:flex-end;gap:8px;margin-left:auto}
+.custom-command-sort-label{display:flex;align-items:center;gap:7px;font-size:12px;color:#c9c9d1;white-space:nowrap}
+.custom-command-sort-label select{width:auto;min-width:220px;margin:0;padding:8px 30px 8px 9px;font-size:12px}
+.custom-command-list-controls button{margin:0}
+@media(max-width:700px){.custom-command-header{align-items:flex-start;flex-direction:column}.custom-command-list-controls{width:100%;margin-left:0;align-items:stretch}.custom-command-sort-label{flex:1}.custom-command-sort-label select{min-width:0;flex:1}.custom-command-list-controls button{flex:0 0 auto}}

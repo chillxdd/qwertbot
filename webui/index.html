@@ -63,7 +63,19 @@
     <div id="customCommandsPanel" class="section-panel">
       <div class="custom-command-header">
         <h3>Custom Commands</h3>
-        <button id="refreshCustomCommandsBtn" class="secondary" type="button">Refresh</button>
+        <div class="custom-command-list-controls">
+          <label class="custom-command-sort-label" for="customCommandSort">Sort
+            <select id="customCommandSort" aria-label="Sort custom commands">
+              <option value="created_asc">Date added — oldest first</option>
+              <option value="created_desc">Date added — newest first</option>
+              <option value="name_asc">Name — A to Z</option>
+              <option value="name_desc">Name — Z to A</option>
+              <option value="counter_desc">Counter / uses — highest first</option>
+              <option value="counter_asc">Counter / uses — lowest first</option>
+            </select>
+          </label>
+          <button id="refreshCustomCommandsBtn" class="secondary" type="button">Refresh</button>
+        </div>
       </div>
       <div class="detail">Create bot-native chat commands and inline phrase triggers. Commands are stored in MongoDB and become live immediately after saving.</div>
       <div id="customCommandsMsg" class="detail"></div>

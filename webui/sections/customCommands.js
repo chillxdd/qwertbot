@@ -10,6 +10,9 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   let editingId = null;
   let loaded = false;
 
+  const SORT_STORAGE_KEY = 'sqwert-custom-command-sort';
+  const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'counter_desc', 'counter_asc']);
+
   const listEl = $('customCommandList');
   const editorEl = $('customCommandEditor');
   const triggersEl = $('customCommandTriggers');
@@ -242,13 +245,46 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       : '<span class="custom-command-state disabled">Disabled</span>';
   }
 
+  function selectedSort() {
+    const value = $('customCommandSort')?.value || 'created_asc';
+    return VALID_SORTS.has(value) ? value : 'created_asc';
+  }
+
+  function commandCreatedMs(command) {
+    const value = Date.parse(command?.createdAt || '');
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function compareCommandNames(a, b) {
+    return commandLabel(a).localeCompare(commandLabel(b), undefined, { sensitivity: 'base', numeric: true });
+  }
+
+  function sortedCommands() {
+    const sort = selectedSort();
+    return [...commands].sort((a, b) => {
+      let result = 0;
+      if (sort === 'name_asc') result = compareCommandNames(a, b);
+      else if (sort === 'name_desc') result = compareCommandNames(b, a);
+      else if (sort === 'counter_desc') result = Number(b?.counter || 0) - Number(a?.counter || 0);
+      else if (sort === 'counter_asc') result = Number(a?.counter || 0) - Number(b?.counter || 0);
+      else if (sort === 'created_desc') result = commandCreatedMs(b) - commandCreatedMs(a);
+      else result = commandCreatedMs(a) - commandCreatedMs(b);
+
+      // Keep ties deterministic so cards do not jump around between refreshes.
+      if (result === 0) result = compareCommandNames(a, b);
+      if (result === 0) result = String(a?.id || '').localeCompare(String(b?.id || ''));
+      return result;
+    });
+  }
+
   function renderList() {
     if (!commands.length) {
       listEl.innerHTML = '<div class="coming-soon custom-empty-state">No custom commands yet. Add one to get started.</div>';
       return;
     }
 
-    listEl.innerHTML = commands.map((command) => {
+    const visibleCommands = sortedCommands();
+    listEl.innerHTML = visibleCommands.map((command) => {
       const triggers = command?.triggers?.length ? command.triggers : [{ triggerType: command.triggerType, trigger: command.trigger }];
       const responseWord = command.responses.length === 1 ? 'response' : 'responses';
       const triggerWord = triggers.length === 1 ? 'trigger' : 'triggers';
@@ -429,6 +465,18 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customCooldownResponseWrap').hidden = !enabled;
     if (enabled) $('customCooldownResponse').focus();
   };
+
+  const sortSelect = $('customCommandSort');
+  if (sortSelect) {
+    try {
+      const savedSort = localStorage.getItem(SORT_STORAGE_KEY);
+      if (VALID_SORTS.has(savedSort)) sortSelect.value = savedSort;
+    } catch {}
+    sortSelect.onchange = () => {
+      try { localStorage.setItem(SORT_STORAGE_KEY, selectedSort()); } catch {}
+      renderList();
+    };
+  }
 
   $('addCustomCommandBtn').onclick = () => openEditor();
   $('refreshCustomCommandsBtn').onclick = () => loadCommands();
