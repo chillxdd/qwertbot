@@ -101,6 +101,17 @@ async function callGemini(prompt) {
 
 
 
+
+function toUnicodeBoldSans(text) {
+  return Array.from(String(text || '')).map((ch) => {
+    const code = ch.codePointAt(0);
+    if (code >= 65 && code <= 90) return String.fromCodePoint(0x1D5D4 + (code - 65));
+    if (code >= 97 && code <= 122) return String.fromCodePoint(0x1D5EE + (code - 97));
+    if (code >= 48 && code <= 57) return String.fromCodePoint(0x1D7EC + (code - 48));
+    return ch;
+  }).join('');
+}
+
 function clipTwitchMessage(text, prefix = '') {
   const full = `${prefix}${String(text || '').trim()}`.trim();
   return Array.from(full).slice(0, TWITCH_MESSAGE_LIMIT).join('').trim();
@@ -312,7 +323,7 @@ RULES:
 Output only the answer.`;
 
     const answer = await callGemini(prompt);
-    const personaPrefix = config.name ? `(as ${config.name}): ` : '';
+    const personaPrefix = config.name ? `(${toUnicodeBoldSans(`as ${config.name}`)}): ` : '';
     const rendered = clipTwitchMessage(answer, personaPrefix);
     if (!rendered) return { matched: true, responded: false, reason: 'empty_response' };
 
