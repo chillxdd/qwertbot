@@ -2,7 +2,7 @@ const express = require('express');
 const tmi = require('tmi.js');
 const path = require('path');
 
-const { createRecapManager, TWITCH_MESSAGE_LIMIT } = require('./commands/recap');
+const { createRecapManager, SUMMARY_PREFIX, TWITCH_MESSAGE_LIMIT } = require('./commands/recap');
 
 const { connectDatabase } = require('./services/database');
 const { createModSessionManager } = require('./middleware/modSession');
