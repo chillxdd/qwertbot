@@ -9,6 +9,9 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   let editingId = null;
   let loaded = false;
 
+  const SORT_STORAGE_KEY = 'sqwert-timer-sort';
+  const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'interval_asc', 'interval_desc']);
+
   const listEl = $('timerList');
   const editorEl = $('timerEditor');
   const responsesEl = $('timerResponses');
@@ -42,6 +45,37 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     return mode === 'weighted' ? 'Specified Weight' : 'Equal Odds';
   }
 
+  function selectedSort() {
+    const value = $('timerSort')?.value || 'created_asc';
+    return VALID_SORTS.has(value) ? value : 'created_asc';
+  }
+
+  function timerCreatedMs(timer) {
+    const value = Date.parse(timer?.createdAt || '');
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function compareTimerNames(a, b) {
+    return String(a?.name || 'Timer').localeCompare(String(b?.name || 'Timer'), undefined, { sensitivity: 'base', numeric: true });
+  }
+
+  function sortedTimers() {
+    const sort = selectedSort();
+    return [...timers].sort((a, b) => {
+      let result = 0;
+      if (sort === 'name_asc') result = compareTimerNames(a, b);
+      else if (sort === 'name_desc') result = compareTimerNames(b, a);
+      else if (sort === 'interval_asc') result = Number(a?.intervalSeconds || 0) - Number(b?.intervalSeconds || 0);
+      else if (sort === 'interval_desc') result = Number(b?.intervalSeconds || 0) - Number(a?.intervalSeconds || 0);
+      else if (sort === 'created_desc') result = timerCreatedMs(b) - timerCreatedMs(a);
+      else result = timerCreatedMs(a) - timerCreatedMs(b);
+
+      if (result === 0) result = compareTimerNames(a, b);
+      if (result === 0) result = String(a?.id || '').localeCompare(String(b?.id || ''));
+      return result;
+    });
+  }
+
   function renderList() {
     listEl.innerHTML = '';
     if (!timers.length) {
@@ -49,7 +83,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       return;
     }
 
-    for (const timer of timers) {
+    for (const timer of sortedTimers()) {
       const card = document.createElement('div');
       card.className = 'custom-command-card';
       const responseCount = Array.isArray(timer.responses) ? timer.responses.length : 0;
@@ -235,6 +269,18 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     } catch (err) {
       setMessage(err.message || 'Could not delete timer.', true);
     }
+  }
+
+  const sortSelect = $('timerSort');
+  if (sortSelect) {
+    try {
+      const savedSort = localStorage.getItem(SORT_STORAGE_KEY);
+      if (VALID_SORTS.has(savedSort)) sortSelect.value = savedSort;
+    } catch {}
+    sortSelect.onchange = () => {
+      try { localStorage.setItem(SORT_STORAGE_KEY, selectedSort()); } catch {}
+      renderList();
+    };
   }
 
   $('addTimerBtn').onclick = () => openEditor();

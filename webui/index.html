@@ -194,7 +194,19 @@
       <div id="timersView" class="subsection-view">
         <div class="custom-command-header">
           <h3>Timers</h3>
-          <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
+          <div class="custom-command-list-controls">
+            <label class="custom-command-sort-label" for="timerSort">Sort
+              <select id="timerSort" aria-label="Sort timers">
+                <option value="created_asc">Date added — oldest first</option>
+                <option value="created_desc">Date added — newest first</option>
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="interval_asc">Interval — shortest first</option>
+                <option value="interval_desc">Interval — longest first</option>
+              </select>
+            </label>
+            <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
+          </div>
         </div>
         <div class="detail">Send automated chat messages on a repeating interval while Qwert is live. Timers are stored in MongoDB and become live immediately after saving.</div>
         <div id="timersMsg" class="detail"></div>
