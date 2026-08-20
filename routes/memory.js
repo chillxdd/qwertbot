@@ -1,6 +1,6 @@
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('../services/streamLore');
 
-function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, channelName }) {
+function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
   app.post('/stream-lore/get', requireModSession, async (req, res) => {
     if (!getDatabaseConnected()) {
       return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
@@ -58,13 +58,48 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
         audience: req.body?.audience,
         cooldownSeconds: req.body?.cooldownSeconds,
         modsBypassCooldown: req.body?.modsBypassCooldown,
-        cooldownResponse: req.body?.cooldownResponse
+        cooldownResponse: req.body?.cooldownResponse,
+        sessionMemory: req.body?.sessionMemory
       });
       console.log(`[Tagged Questions] Settings saved (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
       return res.json({ success: true, ...config });
     } catch (err) {
       console.error('[Tagged Questions] Could not save settings:', err.message || err);
       return res.status(400).json({ success: false, error: err.message || 'Could not save bot personality settings.' });
+    }
+  });
+
+  app.post('/session-memory/status', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    const manager = typeof getRecapManager === 'function' ? getRecapManager() : null;
+    if (!manager?.getSessionMemoryStatus) {
+      return res.json({ success: true, enabled: false, streamLive: false, blockCount: 0, detailedCharacters: 0, compactCharacters: 0, currentWindowMessages: 0 });
+    }
+    try {
+      const status = await manager.getSessionMemoryStatus();
+      return res.json({ success: true, ...status });
+    } catch (err) {
+      console.error('[Session Memory] Could not load status:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not load session memory status.' });
+    }
+  });
+
+  app.post('/session-memory/clear', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    const manager = typeof getRecapManager === 'function' ? getRecapManager() : null;
+    if (!manager?.clearCurrentSessionMemory) {
+      return res.status(503).json({ success: false, error: 'Recap manager is not ready.' });
+    }
+    try {
+      const result = await manager.clearCurrentSessionMemory();
+      return res.status(result.success ? 200 : 409).json(result);
+    } catch (err) {
+      console.error('[Session Memory] Could not clear current stream memory:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not clear current stream session memory.' });
     }
   });
 }

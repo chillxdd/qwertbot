@@ -30,6 +30,18 @@ const recapEventSchema = new mongoose.Schema({
   text: { type: String, required: true }
 }, { _id: false });
 
+
+const sessionMemoryBlockSchema = new mongoose.Schema({
+  sequence: { type: Number, required: true },
+  startedAtMs: { type: Number, default: null },
+  endedAtMs: { type: Number, required: true },
+  detailedSummary: { type: String, required: true, maxlength: 3000 },
+  compactSummary: { type: String, required: true, maxlength: 550 },
+  topics: { type: [String], default: [] },
+  people: { type: [String], default: [] },
+  createdAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const activeStateSchema = new mongoose.Schema({
   recapMessages: { type: [recapMessageSchema], default: [] },
   messageSequence: { type: Number, default: 0 },
@@ -52,6 +64,7 @@ const streamRecapSessionSchema = new mongoose.Schema(
     streamId: { type: String, required: true, unique: true, index: true },
     startedAt: { type: Date, default: null },
     recaps: { type: [recapEntrySchema], default: [] },
+    sessionMemoryBlocks: { type: [sessionMemoryBlockSchema], default: [] },
     activeState: { type: activeStateSchema, default: null }
   },
   { timestamps: true }

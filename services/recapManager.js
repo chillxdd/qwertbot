@@ -1,12 +1,16 @@
 const {
   getRecentStreamRecaps,
   saveStreamRecap,
+  getSessionMemoryBlocks,
+  saveSessionMemoryBlock,
+  clearSessionMemory,
   getActiveRecapState,
   saveActiveRecapState,
   clearStreamRecapsByChannel
 } = require('./streamRecapHistory');
 const { getStreamLore } = require('./streamLore');
-const { generateRecap, SUMMARY_PREFIX } = require('./recapGenerator');
+const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
+const { generateSessionMemoryBlock, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
 const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
@@ -28,7 +32,8 @@ function createRecapManager({
   channelName,
   getTwitchAccessToken,
   refreshTwitchAccessToken,
-  validateTwitchAccessToken
+  validateTwitchAccessToken,
+  getSessionMemoryConfig
 }) {
   let twitchClientId = (process.env.TWITCH_CLIENT_ID || '').trim();
   let streamStateInitialized = false;
@@ -59,6 +64,15 @@ function createRecapManager({
   let activeStateSaveInProgress = false;
   let activeStateSavePromise = null;
   let lastRecapCommandUse = 0;
+
+  function readSessionMemoryConfig() {
+    try {
+      return normalizeSessionMemoryConfig(typeof getSessionMemoryConfig === 'function' ? getSessionMemoryConfig() : {});
+    } catch (err) {
+      console.error('[Session Memory] Could not read settings; using defaults:', err?.message || err);
+      return normalizeSessionMemoryConfig();
+    }
+  }
 
   function addStreamContext({ title = '', category = '', gameId = '' }) {
     const item = {
@@ -645,6 +659,42 @@ function createRecapManager({
         }
       }
 
+      if (currentStreamId) {
+        const sessionMemoryConfig = readSessionMemoryConfig();
+        if (sessionMemoryConfig.enabled) {
+          try {
+            const generatedAtMs = Date.now();
+            const sourceTimes = [
+              ...messageSnapshot.map((item) => Number(item?.timestamp || 0)),
+              ...contextSnapshot.map((item) => Number(item?.timestamp || 0)),
+              ...eventSnapshot.map((item) => Number(item?.timestamp || 0))
+            ].filter((value) => value > 0);
+            const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
+            const memoryChatLogs = sanitizeChatForGemini(chatLogs).logs;
+            const memoryBlock = await generateSessionMemoryBlock({
+              chatLogs: memoryChatLogs,
+              streamContexts: contextSnapshot,
+              twitchEvents: eventSnapshot,
+              streamLore,
+              publicRecap: recapSummaryBody,
+              streamTiming: { windowStartedAtMs, generatedAtMs },
+              config: sessionMemoryConfig
+            });
+            if (memoryBlock) {
+              await saveSessionMemoryBlock({
+                streamId: currentStreamId,
+                channelName,
+                startedAt: streamSessionStartedAt || null,
+                block: memoryBlock
+              });
+              console.log(`[Session Memory] Stored hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
+            }
+          } catch (memoryErr) {
+            console.error('[Session Memory] Hourly memory generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
+          }
+        }
+      }
+
       discardMessageSnapshot(snapshotMaxId);
       discardContextSnapshot(snapshotMaxContextId);
       discardEventSnapshot(snapshotMaxEventId);
@@ -768,6 +818,44 @@ function createRecapManager({
     return getRecentStreamRecaps({ streamId: currentStreamId, limit });
   }
 
+  async function getSessionMemoryStatus() {
+    const config = readSessionMemoryConfig();
+    if (!currentStreamId || !streamLive) {
+      return { enabled: config.enabled, streamLive: false, blockCount: 0, detailedCharacters: 0, compactCharacters: 0, currentWindowMessages: recapMessages.length };
+    }
+    const blocks = await getSessionMemoryBlocks({ streamId: currentStreamId });
+    return {
+      enabled: config.enabled,
+      streamLive: true,
+      streamId: currentStreamId,
+      blockCount: blocks.length,
+      detailedCharacters: blocks.reduce((sum, block) => sum + String(block?.detailedSummary || '').length, 0),
+      compactCharacters: blocks.reduce((sum, block) => sum + String(block?.compactSummary || '').length, 0),
+      currentWindowMessages: recapMessages.length,
+      latestBlockAt: blocks.at(-1)?.endedAtMs || null
+    };
+  }
+
+  async function getSessionMemoryContext(question = '') {
+    const config = readSessionMemoryConfig();
+    if (!config.enabled || !currentStreamId || !streamLive) return { text: '', stats: { enabled: config.enabled, blockCount: 0, contextCharacters: 0 } };
+    const blocks = await getSessionMemoryBlocks({ streamId: currentStreamId });
+    return buildSessionMemoryContext({
+      blocks,
+      question,
+      recentChatLogs: recapMessages.map((item) => item.text),
+      config,
+      streamLive
+    });
+  }
+
+  async function clearCurrentSessionMemory() {
+    if (!currentStreamId || !streamLive) return { success: false, message: 'No active Twitch stream session.' };
+    await clearSessionMemory({ streamId: currentStreamId });
+    console.log('[Session Memory] Current stream memory blocks cleared by moderator.');
+    return { success: true, message: 'Current stream session memory cleared.' };
+  }
+
   async function start() {
     if (!channelName) {
       console.error('[Recap] Cannot start automatic recaps: TWITCH_CHANNEL is missing.');
@@ -812,6 +900,9 @@ function createRecapManager({
     getCurrentWindowContexts,
     getCurrentWindowEvents,
     getCurrentStreamRecapHistory,
+    getSessionMemoryStatus,
+    getSessionMemoryContext,
+    clearCurrentSessionMemory,
     getStatus
   };
 }

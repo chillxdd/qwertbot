@@ -209,7 +209,8 @@ botPersonalityManager = createBotPersonalityManager({
       title: status.currentStreamTitle || '',
       category: status.currentStreamCategory || ''
     };
-  }
+  },
+  getSessionMemoryContext: (question) => recapManager?.getSessionMemoryContext?.(question) || { text: '' }
 });
 
 const twitchMessageHandler = createTwitchMessageHandler({
@@ -501,6 +502,7 @@ registerMemoryRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => databaseConnected,
   getBotPersonalityManager: () => botPersonalityManager,
+  getRecapManager: () => recapManager,
   channelName
 });
 
@@ -584,7 +586,8 @@ async function bootstrap() {
     channelName,
     getTwitchAccessToken: getBotAccessToken,
     refreshTwitchAccessToken: refreshBotAccessToken,
-    validateTwitchAccessToken: validateAnyBotToken
+    validateTwitchAccessToken: validateAnyBotToken,
+    getSessionMemoryConfig: () => botPersonalityManager?.getConfig?.()?.sessionMemory || {}
   });
 
   const accessToken = await resolveStartupToken();

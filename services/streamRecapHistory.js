@@ -47,6 +47,53 @@ async function saveStreamRecap({ streamId, channelName, startedAt, text }) {
   ).lean();
 }
 
+
+async function getSessionMemoryBlocks({ streamId }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  if (!normalizedStreamId) return [];
+  const session = await StreamRecapSession.findOne({ streamId: normalizedStreamId }).select({ sessionMemoryBlocks: 1 }).lean();
+  return Array.isArray(session?.sessionMemoryBlocks) ? session.sessionMemoryBlocks : [];
+}
+
+async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  const normalizedChannelName = normalizeChannelName(channelName);
+  if (!normalizedStreamId || !normalizedChannelName || !block?.detailedSummary) return null;
+
+  const existing = await StreamRecapSession.findOne({ streamId: normalizedStreamId }).select({ sessionMemoryBlocks: 1 }).lean();
+  const sequence = Array.isArray(existing?.sessionMemoryBlocks) ? existing.sessionMemoryBlocks.length + 1 : 1;
+
+  const memoryBlock = {
+    sequence,
+    startedAtMs: block.startedAtMs || null,
+    endedAtMs: Number(block.endedAtMs || Date.now()),
+    detailedSummary: String(block.detailedSummary || '').trim(),
+    compactSummary: String(block.compactSummary || block.detailedSummary || '').trim(),
+    topics: Array.isArray(block.topics) ? block.topics : [],
+    people: Array.isArray(block.people) ? block.people : [],
+    createdAt: new Date()
+  };
+
+  return StreamRecapSession.findOneAndUpdate(
+    { streamId: normalizedStreamId },
+    {
+      $setOnInsert: {
+        channelName: normalizedChannelName,
+        streamId: normalizedStreamId,
+        startedAt: startedAt ? new Date(startedAt) : null
+      },
+      $push: { sessionMemoryBlocks: memoryBlock }
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  ).lean();
+}
+
+async function clearSessionMemory({ streamId }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  if (!normalizedStreamId) return null;
+  return StreamRecapSession.updateOne({ streamId: normalizedStreamId }, { $set: { sessionMemoryBlocks: [] } });
+}
+
 async function getActiveRecapState({ streamId }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   if (!normalizedStreamId) return null;
@@ -88,6 +135,9 @@ async function clearStreamRecapsByChannel(channelName) {
 module.exports = {
   getRecentStreamRecaps,
   saveStreamRecap,
+  getSessionMemoryBlocks,
+  saveSessionMemoryBlock,
+  clearSessionMemory,
   getActiveRecapState,
   saveActiveRecapState,
   clearActiveRecapState,

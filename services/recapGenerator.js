@@ -578,5 +578,6 @@ module.exports = {
   generateRecap,
   SUMMARY_PREFIX,
   TWITCH_MESSAGE_LIMIT,
-  SUMMARY_TEXT_LIMIT
+  SUMMARY_TEXT_LIMIT,
+  sanitizeChatForGemini
 };

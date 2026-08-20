@@ -39,6 +39,14 @@ const botPersonalityConfigSchema = new mongoose.Schema({
     type: String,
     default: '',
     maxlength: 500
+  },
+  sessionMemory: {
+    enabled: { type: Boolean, default: true },
+    recentDetailedHours: { type: Number, min: 1, max: 8, default: 2 },
+    maxContextCharacters: { type: Number, min: 4000, max: 40000, default: 18000 },
+    recentChatMessages: { type: Number, min: 0, max: 100, default: 30 },
+    relevantOlderBlocks: { type: Number, min: 0, max: 6, default: 2 },
+    promptInstructions: { type: String, default: '', maxlength: 6000 }
   }
 }, {
   timestamps: true
