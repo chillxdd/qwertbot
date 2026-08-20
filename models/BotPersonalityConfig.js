@@ -21,9 +21,9 @@ const botPersonalityConfigSchema = new mongoose.Schema({
   },
   cooldownSeconds: {
     type: Number,
-    min: 0,
+    min: 5,
     max: 86400,
-    default: 0
+    default: 5
   },
   modsBypassCooldown: {
     type: Boolean,

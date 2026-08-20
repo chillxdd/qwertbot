@@ -209,6 +209,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customProbability').value = command?.probability ?? 100;
     $('customCooldown').value = command?.cooldownSeconds ?? 0;
     $('customCooldownResponse').value = command?.cooldownResponse || '';
+    $('customUseCooldownResponse').checked = Boolean(command?.cooldownResponse);
+    $('customCooldownResponseWrap').hidden = !$('customUseCooldownResponse').checked;
     $('customResponseMode').value = command?.responseMode || 'equal';
     updateCooldownResponseCount();
     $('customEnabled').checked = command?.enabled !== false;
@@ -344,7 +346,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       userLevel: $('customUserLevel').value,
       probability: Number($('customProbability').value),
       cooldownSeconds: Number($('customCooldown').value),
-      cooldownResponse: $('customCooldownResponse').value.trim(),
+      cooldownResponse: $('customUseCooldownResponse').checked ? $('customCooldownResponse').value.trim() : '',
       enabled: $('customEnabled').checked,
       responseMode: responseMode(),
       responseWeights,
@@ -409,13 +411,23 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     setMessage(`${label} deleted.`);
   }
 
-  const variableHelpButton = $('toggleCustomVariableHelpBtn');
-  const variableHelpBody = $('customVariableHelpBody');
-  variableHelpButton.onclick = () => {
-    const willShow = variableHelpBody.hidden;
-    variableHelpBody.hidden = !willShow;
-    variableHelpButton.textContent = willShow ? 'Hide Variables' : 'Show Variables';
-    variableHelpButton.setAttribute('aria-expanded', String(willShow));
+  const variablesDialog = $('customVariablesDialog');
+  $('showCustomVariablesBtn').onclick = () => {
+    if (typeof variablesDialog.showModal === 'function') variablesDialog.showModal();
+    else variablesDialog.setAttribute('open', '');
+  };
+  $('closeCustomVariablesBtn').onclick = () => {
+    if (typeof variablesDialog.close === 'function') variablesDialog.close();
+    else variablesDialog.removeAttribute('open');
+  };
+  variablesDialog.addEventListener('click', (event) => {
+    if (event.target === variablesDialog && typeof variablesDialog.close === 'function') variablesDialog.close();
+  });
+
+  $('customUseCooldownResponse').onchange = () => {
+    const enabled = $('customUseCooldownResponse').checked;
+    $('customCooldownResponseWrap').hidden = !enabled;
+    if (enabled) $('customCooldownResponse').focus();
   };
 
   $('addCustomCommandBtn').onclick = () => openEditor();

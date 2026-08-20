@@ -2,6 +2,7 @@ const BotPersonalityConfig = require('../models/BotPersonalityConfig');
 
 const MAX_BOT_PERSONALITY_LENGTH = 12000;
 const TWITCH_MESSAGE_LIMIT = 500;
+const MIN_BOT_PERSONALITY_COOLDOWN_SECONDS = 5;
 const MAX_BOT_PERSONALITY_COOLDOWN_SECONDS = 86400;
 
 function normalizeChannelName(channelName) {
@@ -71,13 +72,21 @@ async function callGemini(prompt) {
 
 
 function stripLeadingViewerMention(text, displayName) {
-  const answer = String(text || '').trim();
+  let answer = String(text || '').trim();
   const viewer = String(displayName || '').replace(/^@+/, '').trim();
   if (!answer || !viewer) return answer;
 
   const escapedViewer = viewer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const mentionPattern = new RegExp(`^@${escapedViewer}(?:\\s+|[:,\-]\\s*)+`, 'i');
-  return answer.replace(mentionPattern, '').trim();
+  // Gemini can occasionally repeat the reply target more than once despite
+  // being told not to. Remove every matching leading viewer label before the
+  // bot adds its single guaranteed @mention.
+  const leadingViewerPattern = new RegExp(`^@?${escapedViewer}(?:\\s*[:,\-]\\s*|\\s+)`, 'i');
+  for (let i = 0; i < 6; i += 1) {
+    const stripped = answer.replace(leadingViewerPattern, '').trimStart();
+    if (stripped === answer) break;
+    answer = stripped;
+  }
+  return answer.trim();
 }
 
 function clipTwitchMessage(text, prefix = '') {
@@ -88,7 +97,7 @@ function clipTwitchMessage(text, prefix = '') {
 function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore }) {
   const normalizedChannel = normalizeChannelName(channelName);
   const normalizedBotUsername = String(botUsername || '').toLowerCase().trim();
-  let config = { personality: '', audience: 'mods', cooldownSeconds: 0, modsBypassCooldown: true, updatedAt: null };
+  let config = { personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, updatedAt: null };
   let lastPublicResponseAt = 0;
   const ownResponses = [];
   const OWN_RESPONSE_TTL_MS = 15000;
@@ -117,7 +126,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     config = {
       personality: String(doc?.personality || ''),
       audience: normalizeAudience(doc?.audience),
-      cooldownSeconds: Math.max(0, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || 0))),
+      cooldownSeconds: Math.max(MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))),
       modsBypassCooldown: doc?.modsBypassCooldown !== false,
       updatedAt: doc?.updatedAt || null
     };
@@ -136,9 +145,9 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     }
 
     const normalizedAudience = normalizeAudience(audience);
-    const normalizedCooldown = Number(cooldownSeconds ?? 0);
-    if (!Number.isFinite(normalizedCooldown) || normalizedCooldown < 0 || normalizedCooldown > MAX_BOT_PERSONALITY_COOLDOWN_SECONDS) {
-      throw new Error(`AI question cooldown must be between 0 and ${MAX_BOT_PERSONALITY_COOLDOWN_SECONDS} seconds.`);
+    const normalizedCooldown = Number(cooldownSeconds ?? MIN_BOT_PERSONALITY_COOLDOWN_SECONDS);
+    if (!Number.isFinite(normalizedCooldown) || normalizedCooldown < MIN_BOT_PERSONALITY_COOLDOWN_SECONDS || normalizedCooldown > MAX_BOT_PERSONALITY_COOLDOWN_SECONDS) {
+      throw new Error(`AI question cooldown must be between ${MIN_BOT_PERSONALITY_COOLDOWN_SECONDS} and ${MAX_BOT_PERSONALITY_COOLDOWN_SECONDS} seconds.`);
     }
     const roundedCooldown = Math.round(normalizedCooldown * 1000) / 1000;
     const normalizedBypass = Boolean(modsBypassCooldown);
@@ -151,7 +160,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     config = {
       personality: String(doc?.personality || ''),
       audience: normalizeAudience(doc?.audience),
-      cooldownSeconds: Math.max(0, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || 0))),
+      cooldownSeconds: Math.max(MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))),
       modsBypassCooldown: doc?.modsBypassCooldown !== false,
       updatedAt: doc?.updatedAt || null
     };
@@ -253,6 +262,7 @@ Output only the answer.`;
 
 module.exports = {
   MAX_BOT_PERSONALITY_LENGTH,
+  MIN_BOT_PERSONALITY_COOLDOWN_SECONDS,
   MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
   createBotPersonalityManager
 };

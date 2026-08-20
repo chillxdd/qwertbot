@@ -73,7 +73,10 @@
       </div>
 
       <div id="customCommandEditor" class="custom-command-editor">
-        <h3 id="customCommandEditorTitle">Add Custom Command</h3>
+        <div class="custom-editor-header">
+          <h3 id="customCommandEditorTitle">Add Custom Command</h3>
+          <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
+        </div>
 
         <div class="custom-editor-block">
           <label class="prompt-label" for="customCommandName">Command Name</label>
@@ -114,51 +117,21 @@
             </div>
           </div>
           <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
-          <label class="prompt-label" for="customCooldownResponse">Cooldown Response (optional)</label>
-          <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
-          <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent only when a valid user triggers this command while it is still cooling down. Variables work here too. The counter does not increment.</span></div>
-          <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
-        </div>
-
-        <div class="custom-variable-help">
-          <div class="custom-variable-help-header">
-            <strong>Available response variables</strong>
-            <button id="toggleCustomVariableHelpBtn" class="secondary" type="button" aria-expanded="false">Show Variables</button>
-          </div>
-          <div id="customVariableHelpBody" class="custom-variable-help-body" hidden>
-            <div class="custom-variable-row">
-              <code>$(user)</code> <span>or</span> <code>$user</code>
-              <div class="detail">The viewer who triggered the command. Example: <code>Hello $(user)!</code> → <code>Hello SomeViewer!</code></div>
-            </div>
-            <div class="custom-variable-row">
-              <code>$(touser)</code> <span>or</span> <code>$touser</code>
-              <div class="detail">The first argument after the trigger, with a leading @ removed. Falls back to the triggering viewer. Example: <code>!bonk @Qwert</code> with <code>Bonked $(touser)!</code> → <code>Bonked Qwert!</code></div>
-            </div>
-            <div class="custom-variable-row">
-              <code>$(query)</code> <span>or</span> <code>$query</code>
-              <div class="detail">Everything after the trigger. Example: <code>!say hello there</code> with <code>You said: $(query)</code> → <code>You said: hello there</code></div>
-            </div>
-            <div class="custom-variable-row">
-              <code>$(count)</code> <span>or</span> <code>$count</code>
-              <div class="detail">This command group's persistent counter after the successful trigger increments it. Example: <code>Hydration #$(count)</code> → <code>Hydration #42</code></div>
-            </div>
-            <div class="custom-variable-row">
-              <code>$(random MIN MAX)</code>
-              <div class="detail">A random whole integer from MIN through MAX, inclusive. Example: <code>You rolled $(random 1 100)!</code> → <code>You rolled 73!</code>. Negative bounds are allowed too.</div>
-            </div>
-            <div class="custom-variable-row">
-              <code>$(randomuser)</code>
-              <div class="detail">Picks a random user currently connected to Qwert's Twitch chat using Twitch's Get Chatters API. Example: <code>$(randomuser) has been selected!</code> → <code>SomeViewer has been selected!</code></div>
-              <div class="detail">Requires the bot OAuth scope <code>moderator:read:chatters</code>. SqwertArmyBot, Nightbot, StreamElements, and Pokémon Community Game are excluded from the pool.</div>
-            </div>
-            <div class="custom-variable-note detail">No eval is needed. Add multiple responses below; one is chosen randomly when the trigger fires, and every response gets its own 500-character allowance. Each <code>$(random MIN MAX)</code> occurrence rolls independently. Multiple <code>$(randomuser)</code> occurrences choose unique eligible chatters when enough are available.</div>
+          <label class="inline-check custom-option-toggle"><input id="customUseCooldownResponse" type="checkbox"> Send a response when this command is on cooldown</label>
+          <div id="customCooldownResponseWrap" class="custom-optional-panel" hidden>
+            <label class="prompt-label" for="customCooldownResponse">Cooldown Response</label>
+            <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
+            <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent only when a valid user triggers this command while it is still cooling down. Variables work here too. The counter does not increment.</span></div>
           </div>
         </div>
 
         <div class="custom-editor-block">
           <div class="custom-response-heading">
             <strong>Possible Responses</strong>
-            <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
+            <div class="custom-response-heading-actions">
+              <button id="showCustomVariablesBtn" class="secondary" type="button">Response Variables</button>
+              <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
+            </div>
           </div>
           <div class="custom-response-mode-wrap">
             <label class="prompt-label" for="customResponseMode">Response Type</label>
@@ -170,9 +143,25 @@
             <div id="customResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
           </div>
           <div id="customResponseHelp" class="detail"></div>
-          <div id="customResponseMsg" class="detail custom-field-message"></div>
           <div id="customCommandResponses"></div>
+          <div id="customResponseMsg" class="detail custom-field-message"></div>
         </div>
+
+        <dialog id="customVariablesDialog" class="custom-variables-dialog">
+          <div class="custom-dialog-header">
+            <h3>Available Response Variables</h3>
+            <button id="closeCustomVariablesBtn" class="secondary" type="button" aria-label="Close response variables">Close</button>
+          </div>
+          <div class="custom-variable-help-body">
+            <div class="custom-variable-row"><code>$(user)</code> <span>or</span> <code>$user</code><div class="detail">Viewer who triggered the command. Example: <code>Hello $(user)!</code> → <code>Hello SomeViewer!</code></div></div>
+            <div class="custom-variable-row"><code>$(touser)</code> <span>or</span> <code>$touser</code><div class="detail">First argument after the trigger, with a leading @ removed; falls back to the triggering viewer. Example: <code>!bonk @Qwert</code> + <code>Bonked $(touser)!</code> → <code>Bonked Qwert!</code></div></div>
+            <div class="custom-variable-row"><code>$(query)</code> <span>or</span> <code>$query</code><div class="detail">Everything after the trigger. Example: <code>!say hello there</code> + <code>You said: $(query)</code> → <code>You said: hello there</code></div></div>
+            <div class="custom-variable-row"><code>$(count)</code> <span>or</span> <code>$count</code><div class="detail">Persistent counter after a successful trigger increments it. Example: <code>Hydration #$(count)</code> → <code>Hydration #42</code></div></div>
+            <div class="custom-variable-row"><code>$(random MIN MAX)</code><div class="detail">Random whole integer from MIN through MAX, inclusive. Example: <code>$(random 1 100)</code> → <code>73</code>.</div></div>
+            <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding SqwertArmyBot and known utility bots. Example: <code>$(randomuser) has been selected!</code></div><div class="detail">Requires bot OAuth scope <code>moderator:read:chatters</code>.</div></div>
+            <div class="custom-variable-note detail">No eval is needed. Multiple response entries each keep their own 500-character allowance.</div>
+          </div>
+        </dialog>
 
         <div class="custom-editor-actions">
           <button id="saveCustomCommandBtn" type="button">Save Command</button>
@@ -208,8 +197,8 @@
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsBypassCooldown" type="checkbox" checked> Mods/Broadcaster bypass cooldown</label>
           <div class="personality-cooldown-field">
             <label class="prompt-label" for="botPersonalityCooldown">Tagged-question cooldown (seconds)</label>
-            <input id="botPersonalityCooldown" type="number" min="0" max="86400" step="0.001" value="0">
-            <div class="detail">Global cooldown for regular viewers. 0 disables it. Bypassing mods do not start or extend the viewer cooldown.</div>
+            <input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5">
+            <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
           </div>
         </div>
         <div class="memory-actions">
