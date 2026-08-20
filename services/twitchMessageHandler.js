@@ -137,7 +137,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           return;
         }
       } catch (err) {
-        console.error(`[Bot Personality] Failed while answering tagged question from ${displayName}:`, err?.message || err);
+        console.error(`[Tagged Questions] Failed while answering tagged question from ${displayName}:`, err?.message || err);
         recapManager.recordChatMessage({ displayName, rawMessage });
         return;
       }

@@ -63,7 +63,7 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
       }
       return res.json(result);
     } catch (err) {
-      console.error('WebUI recap-control error:', err);
+      console.error('[Recap] WebUI recap-control error:', err);
       return res.status(500).json({ success: false, error: 'Failed to change recap state.' });
     }
   });
@@ -81,7 +81,7 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
     try {
       previousRecaps = await recapManager.getCurrentStreamRecapHistory(5);
     } catch (historyErr) {
-      console.error('Could not load previous recap history for WebUI current-window test:', historyErr.message || historyErr);
+      console.error('[Recap] Could not load previous recap history for WebUI current-window test:', historyErr.message || historyErr);
     }
 
     try {
@@ -90,7 +90,7 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
         streamLore = String(loreRecord?.text || '');
       }
     } catch (loreErr) {
-      console.error('Could not load stream-specific lore for WebUI current-window test:', loreErr.message || loreErr);
+      console.error('[Recap] Could not load stream-specific lore for WebUI current-window test:', loreErr.message || loreErr);
     }
 
     if (logs.length === 0 && twitchEvents.length === 0) {
@@ -124,7 +124,7 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
         affectedMessages: result.sanitization.affectedMessages
       });
     } catch (err) {
-      console.error('Summary test error:', err);
+      console.error('[Recap] Summary test error:', err);
       return res.status(500).json({
         success: false,
         error: { message: err.message, name: err.name, details: err.toString(), inputBlocked: err.inputBlocked || false }

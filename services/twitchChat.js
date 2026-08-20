@@ -326,20 +326,20 @@ async function restorePreviousPin({ temporaryMessageId, previousPin }) {
   try {
     currentPin = await getPinnedChatMessage();
   } catch (err) {
-    console.warn(`[Pins] Could not verify the current pin before restoration: ${err?.message || err}`);
+    console.warn(`[Recap Pins] Could not verify the current pin before restoration: ${err?.message || err}`);
     return;
   }
 
   // If a moderator or broadcaster changed the pin while the recap was displayed,
   // respect that manual action and do not overwrite it.
   if (!currentPin || currentPin.message_id !== temporaryMessageId) {
-    console.log('[Pins] The temporary recap pin is no longer the active pin. Leaving the current pin state untouched.');
+    console.log('[Recap Pins] The temporary recap pin is no longer the active pin. Leaving the current pin state untouched.');
     return;
   }
 
   if (!previousPin?.message_id) {
     await unpinChatMessage(temporaryMessageId);
-    console.log('[Pins] Temporary recap pin removed. There was no previous pin to restore.');
+    console.log('[Recap Pins] Temporary recap pin removed. There was no previous pin to restore.');
     return;
   }
 
@@ -349,7 +349,7 @@ async function restorePreviousPin({ temporaryMessageId, previousPin }) {
   // do not resurrect it after its original expiry time.
   if (remaining !== null && remaining < 30) {
     await unpinChatMessage(temporaryMessageId);
-    console.log('[Pins] Previous pin would have expired during the recap pin window, so it was not restored.');
+    console.log('[Recap Pins] Previous pin would have expired during the recap pin window, so it was not restored.');
     return;
   }
 
@@ -358,7 +358,7 @@ async function restorePreviousPin({ temporaryMessageId, previousPin }) {
     : { durationSeconds: Math.min(1800, remaining) };
 
   await pinChatMessage(previousPin.message_id, restoreOptions);
-  console.log('[Pins] Previous pinned message restored after the hourly recap.');
+  console.log('[Recap Pins] Previous pinned message restored after the hourly recap.');
 }
 
 async function startTemporaryChatPin({ messageId, previousPin = null, displaySeconds = 60 }) {
@@ -376,7 +376,7 @@ async function startTemporaryChatPin({ messageId, previousPin = null, displaySec
 
   await pinChatMessage(messageId, { durationSeconds: twitchPinDuration });
   activeTemporaryPinMessageId = messageId;
-  console.log(`[Pins] Hourly recap pinned for approximately ${seconds} seconds.`);
+  console.log(`[Recap Pins] Hourly recap pinned for approximately ${seconds} seconds.`);
 
   activePinRestoreTimer = setTimeout(() => {
     const temporaryMessageId = messageId;
@@ -384,7 +384,7 @@ async function startTemporaryChatPin({ messageId, previousPin = null, displaySec
 
     restorePreviousPin({ temporaryMessageId, previousPin })
       .catch((err) => {
-        console.warn(`[Pins] Could not restore the previous pin: ${err?.message || err}`);
+        console.warn(`[Recap Pins] Could not restore the previous pin: ${err?.message || err}`);
       })
       .finally(() => {
         if (activeTemporaryPinMessageId === temporaryMessageId) {

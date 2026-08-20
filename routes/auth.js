@@ -146,7 +146,7 @@ function registerAuthRoutes(app, options) {
         }
 
         await storeBroadcasterAuthorizationCodeResult(tokenData);
-        console.log(`[OAuth] Broadcaster authorization saved to MongoDB for ${authorizedLogin}.`);
+        console.log(`[OAuth Broadcaster] Authorization saved to MongoDB for ${authorizedLogin}.`);
 
         let eventSubNote = 'EventSub setup will be retried automatically if needed.';
         try {
@@ -191,11 +191,11 @@ function registerAuthRoutes(app, options) {
 
       await storeAuthorizationCodeResult(tokenData);
       setUsingMongoOAuth(true);
-      console.log(`[OAuth] Bot authorization saved to MongoDB for ${authorizedLogin}.`);
+      console.log(`[OAuth Bot] Authorization saved to MongoDB for ${authorizedLogin}.`);
 
       setTimeout(() => {
         reconnectTwitchClient('updated MongoDB OAuth authorization').catch((err) => {
-          console.error('[OAuth] Twitch reconnect after authorization failed:', err.message || err);
+          console.error('[OAuth Bot] Twitch reconnect after authorization failed:', err.message || err);
         });
       }, 500);
 
@@ -233,7 +233,7 @@ function registerAuthRoutes(app, options) {
         return res.status(410).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Authorization link already used</h2><p><strong>${escapeHtml(existing.username || channelName || 'Qwert')}</strong> has already granted all currently required broadcaster permissions.</p><p>This private authorization link is no longer needed.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
       }
     } catch (err) {
-      console.error('[OAuth] Could not check existing broadcaster authorization:', err.message || err);
+      console.error('[OAuth Broadcaster] Could not check existing authorization:', err.message || err);
       return res.status(500).send('Could not verify broadcaster authorization status.');
     }
 

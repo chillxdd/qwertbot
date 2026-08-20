@@ -184,7 +184,7 @@ async function sendGeminiPrompt(prompt) {
   }
 
   if (!response.ok) {
-    console.error('[Gemini API Error]', JSON.stringify(data, null, 2));
+    console.error('[Recap Gemini] API error:', JSON.stringify(data, null, 2));
     const error = new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
     error.status = response.status;
     error.geminiData = data;
@@ -447,9 +447,9 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   if (recapChannelName) {
     try {
       promptConfig = await getRecapPromptConfig(recapChannelName);
-      console.log(`[Gemini] Loaded recap prompt instructions from ${promptConfig.source === 'mongodb' ? 'MongoDB' : 'code defaults'}.`);
+      console.log(`[Recap Gemini] Loaded recap prompt instructions from ${promptConfig.source === 'mongodb' ? 'MongoDB' : 'code defaults'}.`);
     } catch (promptErr) {
-      console.error('[Gemini] Could not load recap prompt config from MongoDB. Using code defaults:', promptErr.message || promptErr);
+      console.error('[Recap Gemini] Could not load recap prompt config from MongoDB. Using code defaults:', promptErr.message || promptErr);
       promptConfig = getDefaultRecapPromptConfig();
     }
   }
@@ -457,7 +457,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   const sanitization = sanitizeChatForGemini(chatLogs);
 
   if (sanitization.sanitized) {
-    console.log(`[Gemini] Sanitized ${sanitization.censoredCount} sensitive term(s) across ${sanitization.affectedMessages} message(s).`);
+    console.log(`[Recap Gemini] Sanitized ${sanitization.censoredCount} sensitive term(s) across ${sanitization.affectedMessages} message(s).`);
   }
 
   let primaryData;
@@ -477,13 +477,13 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   let summary = extractGeminiText(primaryData);
 
   if (!summary) {
-    console.error('[Gemini Unexpected Response]', JSON.stringify(primaryData, null, 2));
+    console.error('[Recap Gemini] Unexpected response:', JSON.stringify(primaryData, null, 2));
     throw new Error('Gemini returned a successful response but no readable text output was found.');
   }
 
   summary = normalizeRecap(summary);
-  console.log('[Gemini Primary Recap]', summary);
-  console.log(`[Gemini Primary Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
+  console.log('[Recap Gemini] Primary recap:', summary);
+  console.log(`[Recap Gemini] Primary length: ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
 
   const sourceMessageCount = sanitization.logs.length;
   const activeChatWindow = sourceMessageCount >= ACTIVE_CHAT_MESSAGE_THRESHOLD;
@@ -504,7 +504,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
       ? ACTIVE_CHAT_ACCEPTABLE_MIN
       : NORMAL_CHAT_ACCEPTABLE_MIN;
 
-    console.log(`[Gemini] Recap is under ${expansionThreshold} chars with ${sourceMessageCount} source messages (${activityLabel}). Up to ${MAX_EXPANSION_ATTEMPTS} expansion attempts will target ${expansionTargetMin}-${SUMMARY_TEXT_LIMIT} chars; outputs under ${acceptableMin} chars are considered too short when supported material exists.`);
+    console.log(`[Recap Gemini] Recap is under ${expansionThreshold} chars with ${sourceMessageCount} source messages (${activityLabel}). Up to ${MAX_EXPANSION_ATTEMPTS} expansion attempts will target ${expansionTargetMin}-${SUMMARY_TEXT_LIMIT} chars; outputs under ${acceptableMin} chars are considered too short when supported material exists.`);
 
     let longestSummary = summary;
 
@@ -527,48 +527,48 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
         let expandedSummary = extractGeminiText(expansionData);
 
         if (!expandedSummary) {
-          console.log(`[Gemini] Expansion attempt ${attempt} returned no readable recap.`);
+          console.log(`[Recap Gemini] Expansion attempt ${attempt} returned no readable recap.`);
           continue;
         }
 
         expandedSummary = normalizeRecap(expandedSummary);
-        console.log(`[Gemini Expanded Recap Attempt ${attempt}]`, expandedSummary);
-        console.log(`[Gemini Expanded Length Attempt ${attempt}] ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`);
+        console.log(`[Recap Gemini] Expanded recap attempt ${attempt}:`, expandedSummary);
+        console.log(`[Recap Gemini] Expanded length attempt ${attempt}: ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`);
 
         if (expandedSummary.length > longestSummary.length) {
           longestSummary = expandedSummary;
-          console.log(`[Gemini] Expansion attempt ${attempt} is the new longest valid recap.`);
+          console.log(`[Recap Gemini] Expansion attempt ${attempt} is the new longest valid recap.`);
         } else {
-          console.log(`[Gemini] Expansion attempt ${attempt} was not longer than the best recap so far.`);
+          console.log(`[Recap Gemini] Expansion attempt ${attempt} was not longer than the best recap so far.`);
         }
 
         if (longestSummary.length >= acceptableMin) {
-          console.log(`[Gemini] Recap reached the acceptable minimum of ${acceptableMin} chars; no further expansion retry is needed.`);
+          console.log(`[Recap Gemini] Recap reached the acceptable minimum of ${acceptableMin} chars; no further expansion retry is needed.`);
           break;
         }
 
         if (attempt < MAX_EXPANSION_ATTEMPTS) {
-          console.log(`[Gemini] Best recap is still only ${longestSummary.length} chars. Retrying expansion with a stricter length instruction.`);
+          console.log(`[Recap Gemini] Best recap is still only ${longestSummary.length} chars. Retrying expansion with a stricter length instruction.`);
         }
       } catch (err) {
-        console.error(`[Gemini Expansion Error Attempt ${attempt}]`, err);
+        console.error(`[Recap Gemini] Expansion error attempt ${attempt}:`, err);
         if (attempt < MAX_EXPANSION_ATTEMPTS) {
-          console.log('[Gemini] Retrying expansion after the failed attempt.');
+          console.log('[Recap Gemini] Retrying expansion after the failed attempt.');
         }
       }
     }
 
     if (longestSummary.length > summary.length) {
       summary = longestSummary;
-      console.log('[Gemini] Longest expanded recap selected.');
+      console.log('[Recap Gemini] Longest expanded recap selected.');
     } else {
-      console.log('[Gemini] No expansion improved the primary recap. Keeping primary recap.');
+      console.log('[Recap Gemini] No expansion improved the primary recap. Keeping primary recap.');
     }
   }
 
   summary = enforceSummaryLimit(summary);
-  console.log('[Gemini Final Recap]', summary);
-  console.log(`[Gemini Final Length] ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
+  console.log('[Recap Gemini] Final recap:', summary);
+  console.log(`[Recap Gemini] Final length: ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
 
   return { summary, sanitization };
 }

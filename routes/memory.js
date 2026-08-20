@@ -9,7 +9,7 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
       const lore = await getStreamLore(channelName);
       return res.json({ success: true, text: lore.text, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH });
     } catch (err) {
-      console.error('[Lore] Could not load stream-specific lore:', err.message || err);
+      console.error('[Memory] Could not load stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: 'Could not load stream-specific lore.' });
     }
   });
@@ -24,10 +24,10 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     }
     try {
       const lore = await saveStreamLore(channelName, text);
-      console.log(`[Lore] Stream-specific lore saved to MongoDB (${lore.text.length} characters).`);
+      console.log(`[Memory] Stream-specific lore saved to MongoDB (${lore.text.length} characters).`);
       return res.json({ success: true, text: lore.text, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH });
     } catch (err) {
-      console.error('[Lore] Could not save stream-specific lore:', err.message || err);
+      console.error('[Memory] Could not save stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
     }
   });
@@ -41,7 +41,7 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
       const config = await manager.loadConfig();
       return res.json({ success: true, ...config });
     } catch (err) {
-      console.error('[Bot Personality] Could not load settings:', err.message || err);
+      console.error('[Tagged Questions] Could not load settings:', err.message || err);
       return res.status(500).json({ success: false, error: 'Could not load bot personality settings.' });
     }
   });
@@ -53,16 +53,17 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     }
     try {
       const config = await manager.saveConfig({
+        name: req.body?.name,
         personality: req.body?.personality,
         audience: req.body?.audience,
         cooldownSeconds: req.body?.cooldownSeconds,
         modsBypassCooldown: req.body?.modsBypassCooldown,
         cooldownResponse: req.body?.cooldownResponse
       });
-      console.log(`[Bot Personality] Settings saved (${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
+      console.log(`[Tagged Questions] Settings saved (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
       return res.json({ success: true, ...config });
     } catch (err) {
-      console.error('[Bot Personality] Could not save settings:', err.message || err);
+      console.error('[Tagged Questions] Could not save settings:', err.message || err);
       return res.status(400).json({ success: false, error: err.message || 'Could not save bot personality settings.' });
     }
   });

@@ -9,6 +9,12 @@ const botPersonalityConfigSchema = new mongoose.Schema({
     lowercase: true,
     trim: true
   },
+  name: {
+    type: String,
+    default: '',
+    maxlength: 80,
+    trim: true
+  },
   personality: {
     type: String,
     default: '',

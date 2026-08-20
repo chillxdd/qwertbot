@@ -1,8 +1,13 @@
-export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds }) {
+export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityNameLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds, botUsername }) {
   const maxLength = Number(maxLoreLength) || 12000;
+  const personalityNameMaxLength = Number(maxBotPersonalityNameLength) || 80;
   const personalityMaxLength = Number(maxBotPersonalityLength) || 12000;
   $('streamLore').maxLength = maxLength;
+  $('botPersonalityName').maxLength = personalityNameMaxLength;
   $('botPersonality').maxLength = personalityMaxLength;
+  const taggedMention = String(botUsername || '').replace(/^@+/, '').trim();
+  if ($('botTaggedQuestionMention')) $('botTaggedQuestionMention').textContent = taggedMention ? `@${taggedMention}` : '@<bot_username>';
+
   $('botPersonalityCooldown').min = 5;
   $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
   $('botPersonalityCooldownResponse').maxLength = 500;
@@ -62,6 +67,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
         $('botPersonalityMsg').textContent = d.error || 'Could not load personality settings.';
         return;
       }
+      $('botPersonalityName').value = d.name || '';
       $('botPersonality').value = d.personality || '';
       $('botPersonalityModsOnly').checked = d.audience === 'mods';
       $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
@@ -87,6 +93,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
       $('saveBotPersonalityBtn').disabled = true;
       $('botPersonalityMsg').textContent = 'Saving...';
       const d = await postJson('/bot-personality/save', {
+        name: $('botPersonalityName').value,
         personality: $('botPersonality').value,
         audience: $('botPersonalityModsOnly').checked ? 'mods' : 'everyone',
         cooldownSeconds,
@@ -97,6 +104,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
         $('botPersonalityMsg').textContent = d.error || 'Could not save personality settings.';
         return;
       }
+      $('botPersonalityName').value = d.name || '';
       $('botPersonality').value = d.personality || '';
       $('botPersonalityModsOnly').checked = d.audience === 'mods';
       $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;

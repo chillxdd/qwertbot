@@ -8,7 +8,7 @@ const {
   MAX_COOLDOWN_SECONDS
 } = require('../services/customCommands');
 const { MAX_STREAM_LORE_LENGTH } = require('../services/streamLore');
-const { MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
+const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
 const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('../services/renderLogs');
 const { getAuthStatus } = require('../services/twitchAuth');
 const { getBroadcasterAuthStatus } = require('../services/twitchBroadcasterAuth');
@@ -22,6 +22,7 @@ function registerDashboardRoutes(app, options) {
     dashboardPassword,
     modSessionLifetimeMs,
     channelName,
+    botUsername,
     twitchClientId,
     twitchClientSecret,
     botScopes,
@@ -37,7 +38,9 @@ function registerDashboardRoutes(app, options) {
     res.json({
       success: true,
       channelName: channelName || 'generalqwert',
+      botUsername: botUsername || '',
       maxStreamLoreLength: MAX_STREAM_LORE_LENGTH,
+      maxBotPersonalityNameLength: MAX_BOT_PERSONALITY_NAME_LENGTH,
       maxBotPersonalityLength: MAX_BOT_PERSONALITY_LENGTH,
       maxBotPersonalityCooldownSeconds: MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
       customCommands: {

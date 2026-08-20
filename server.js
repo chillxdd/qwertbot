@@ -62,7 +62,7 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use('/webui', express.static(path.join(__dirname, 'webui')));
 
 if (!QWERT_OAUTH_LINK_SECRET) {
-  console.warn('WARNING: QWERT_OAUTH_LINK_SECRET is not set. Private Qwert broadcaster authorization will be unavailable.');
+  console.warn('[Startup] QWERT_OAUTH_LINK_SECRET is not set. Private Qwert broadcaster authorization will be unavailable.');
 }
 
 let botConnected = false;
@@ -132,7 +132,7 @@ const chatClientProxy = {
         previousPin = await getPinnedChatMessage();
         pinSnapshotReady = true;
       } catch (pinErr) {
-        console.warn(`[Pins] Could not read the current pinned message before the recap. The recap will still send, but it will not be temporarily pinned: ${pinErr?.message || pinErr}`);
+        console.warn(`[Recap Pins] Could not read the current pinned message before the recap. The recap will still send, but it will not be temporarily pinned: ${pinErr?.message || pinErr}`);
       }
     }
 
@@ -153,7 +153,7 @@ const chatClientProxy = {
             displaySeconds: 60
           });
         } catch (pinErr) {
-          console.warn(`[Pins] Hourly recap was sent, but temporary pinning could not start: ${pinErr?.message || pinErr}`);
+          console.warn(`[Recap Pins] Hourly recap was sent, but temporary pinning could not start: ${pinErr?.message || pinErr}`);
         }
       }
 
@@ -218,7 +218,7 @@ async function getBotAccessToken() {
       return stored;
     }
   } catch (err) {
-    console.error('[OAuth] Failed to read stored Twitch token:', err.message || err);
+    console.error('[OAuth Bot] Failed to read stored Twitch token:', err.message || err);
   }
 
   usingMongoOAuth = false;
@@ -254,7 +254,7 @@ async function recoverTwitchIrcAuthentication(reason = 'IRC authentication failu
   clearTwitchAuthRecoveryTimer();
 
   try {
-    console.warn(`[OAuth] ${reason}. Validating the stored bot token and refreshing it if needed.`);
+    console.warn(`[OAuth Bot] ${reason}. Validating the stored bot token and refreshing it if needed.`);
 
     // If MongoDB already contains a newer valid token, use it. Otherwise a 401
     // from /validate automatically refreshes the token and saves the rotated
@@ -264,9 +264,9 @@ async function recoverTwitchIrcAuthentication(reason = 'IRC authentication failu
 
     usingMongoOAuth = true;
     await reconnectTwitchClient(reason, { accessToken });
-    console.log('[OAuth] IRC authentication recovery completed successfully.');
+    console.log('[OAuth Bot] IRC authentication recovery completed successfully.');
   } catch (err) {
-    console.error('[OAuth] IRC authentication recovery failed:', err.message || err);
+    console.error('[OAuth Bot] IRC authentication recovery failed:', err.message || err);
 
     // A revoked/invalid refresh token genuinely requires consent again. Do not
     // hammer Twitch in that case. Transient network/5xx failures get one delayed
@@ -275,12 +275,12 @@ async function recoverTwitchIrcAuthentication(reason = 'IRC authentication failu
       twitchAuthRecoveryTimer = setTimeout(() => {
         twitchAuthRecoveryTimer = null;
         recoverTwitchIrcAuthentication('retry after IRC authentication failure').catch((retryErr) => {
-          console.error('[OAuth] Delayed IRC authentication recovery failed:', retryErr.message || retryErr);
+          console.error('[OAuth Bot] Delayed IRC authentication recovery failed:', retryErr.message || retryErr);
         });
       }, 15000);
-      console.warn('[OAuth] IRC authentication recovery will retry in 15 seconds.');
+      console.warn('[OAuth Bot] IRC authentication recovery will retry in 15 seconds.');
     } else {
-      console.error('[OAuth] Twitch reports that the bot authorization itself is no longer refreshable. Manual bot reauthorization is required.');
+      console.error('[OAuth Bot] Twitch reports that the bot authorization itself is no longer refreshable. Manual bot reauthorization is required.');
     }
   } finally {
     twitchAuthRecoveryInProgress = false;
@@ -297,7 +297,7 @@ async function validateStoredOAuthSessions() {
 
     if (validBotToken) {
       usingMongoOAuth = true;
-      console.log('[OAuth] Hourly bot token validation succeeded.');
+      console.log('[OAuth Bot] Hourly token validation succeeded.');
 
       // If validation had to refresh the token, rebuild the IRC client with the
       // newly stored token now instead of waiting for Twitch to force a RECONNECT.
@@ -307,22 +307,22 @@ async function validateStoredOAuthSessions() {
     }
   } catch (err) {
     if (err?.reauthorizationRequired) {
-      console.error('[OAuth] Bot authorization can no longer be refreshed. Manual bot reauthorization is required.');
+      console.error('[OAuth Bot] Authorization can no longer be refreshed. Manual bot reauthorization is required.');
     } else {
-      console.warn('[OAuth] Hourly bot token validation failed:', err.message || err);
+      console.warn('[OAuth Bot] Hourly token validation failed:', err.message || err);
     }
   }
 
   try {
     const broadcasterToken = await getValidBroadcasterAccessToken({ allowRefresh: true });
     if (broadcasterToken) {
-      console.log('[OAuth] Hourly broadcaster token validation succeeded.');
+      console.log('[OAuth Broadcaster] Hourly token validation succeeded.');
     }
   } catch (err) {
     if (err?.reauthorizationRequired) {
-      console.error('[OAuth] Broadcaster authorization can no longer be refreshed. Qwert must authorize again.');
+      console.error('[OAuth Broadcaster] Authorization can no longer be refreshed. Qwert must authorize again.');
     } else {
-      console.warn('[OAuth] Hourly broadcaster token validation failed:', err.message || err);
+      console.warn('[OAuth Broadcaster] Hourly token validation failed:', err.message || err);
     }
   }
 }
@@ -341,16 +341,16 @@ async function resolveStartupToken() {
     const stored = await getValidAccessToken({ allowRefresh: true });
     if (stored) {
       usingMongoOAuth = true;
-      console.log('[OAuth] Using Twitch token stored in MongoDB.');
+      console.log('[OAuth Bot] Using Twitch token stored in MongoDB.');
       return stored;
     }
   } catch (err) {
-    console.error('[OAuth] Stored Twitch token could not be used:', err.message || err);
+    console.error('[OAuth Bot] Stored Twitch token could not be used:', err.message || err);
   }
 
   if (FALLBACK_ACCESS_TOKEN) {
     usingMongoOAuth = false;
-    console.warn('[OAuth] Using legacy TWITCH_BOT_ACCESS_TOKEN fallback. Authorize the bot in the WebUI to move fully to MongoDB OAuth.');
+    console.warn('[OAuth Bot] Using legacy TWITCH_BOT_ACCESS_TOKEN fallback. Authorize the bot in the WebUI to move fully to MongoDB OAuth.');
     return FALLBACK_ACCESS_TOKEN;
   }
 
@@ -375,7 +375,7 @@ function attachTwitchHandlers(client, generation) {
     // arriving after the IRC access token has expired.
     if (usingMongoOAuth && isIrcAuthenticationFailure(reason)) {
       recoverTwitchIrcAuthentication('IRC disconnect reported an authentication failure').catch((err) => {
-        console.error('[OAuth] IRC disconnect recovery error:', err.message || err);
+        console.error('[OAuth Bot] IRC disconnect recovery error:', err.message || err);
       });
     }
   });
@@ -385,7 +385,7 @@ function attachTwitchHandlers(client, generation) {
 
     if (usingMongoOAuth && isIrcAuthenticationFailure(message)) {
       recoverTwitchIrcAuthentication('IRC NOTICE reported an authentication failure').catch((err) => {
-        console.error('[OAuth] IRC notice recovery error:', err.message || err);
+        console.error('[OAuth Bot] IRC notice recovery error:', err.message || err);
       });
     }
   });
@@ -433,7 +433,7 @@ async function createAndConnectTwitchClient(accessToken) {
   twitchClient = client;
   await client.connect();
   botConnected = true;
-  console.log(`Connected to Twitch channel: #${channelName}`);
+  console.log(`[Bot] Connected to Twitch channel: #${channelName}`);
   return client;
 }
 
@@ -474,6 +474,7 @@ registerDashboardRoutes(app, {
   dashboardPassword: DASHBOARD_PASSWORD,
   modSessionLifetimeMs: MOD_SESSION_LIFETIME,
   channelName,
+  botUsername,
   twitchClientId: TWITCH_CLIENT_ID,
   twitchClientSecret: TWITCH_CLIENT_SECRET,
   botScopes: TWITCH_OAUTH_SCOPES,
@@ -549,7 +550,7 @@ async function bootstrap() {
     try {
       await botPersonalityManager.initialize();
     } catch (err) {
-      console.error('[Bot Personality] Startup load failed:', err.message || err);
+      console.error('[Tagged Questions] Startup load failed:', err.message || err);
     }
   }
 
@@ -583,13 +584,13 @@ async function bootstrap() {
     try {
       const broadcasterToken = await getValidBroadcasterAccessToken({ allowRefresh: true });
       if (broadcasterToken) {
-        console.log('[OAuth] Broadcaster token validated at startup.');
+        console.log('[OAuth Broadcaster] Token validated at startup.');
       }
     } catch (err) {
       if (err?.reauthorizationRequired) {
-        console.error('[OAuth] Broadcaster authorization cannot be refreshed. Qwert must authorize again.');
+        console.error('[OAuth Broadcaster] Authorization cannot be refreshed. Qwert must authorize again.');
       } else {
-        console.log('[OAuth] Broadcaster startup validation pending:', err.message || err);
+        console.log('[OAuth Broadcaster] Startup validation pending:', err.message || err);
       }
     }
 
@@ -605,24 +606,24 @@ async function bootstrap() {
 }
 
 process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Promise Rejection:', reason);
+  console.error('[Process] Unhandled Promise Rejection:', reason);
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+  console.error('[Process] Uncaught Exception:', err);
 });
 
 app.listen(PORT, () => {
-  console.log(`Web server running on port ${PORT}`);
-  console.log('Gemini model: gemini-3.5-flash-lite');
-  console.log(`Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`);
-  console.log('Automatic hourly recap mode enabled.');
-  console.log('First recap: 60 minutes.');
-  console.log('Recurring recap: every 60 minutes.');
-  console.log('Stream title/category check: every 30 seconds.');
-  console.log(`Twitch OAuth callback: ${TWITCH_REDIRECT_URI}`);
-  console.log('Twitch OAuth tokens are stored in MongoDB and are never logged.');
-  console.log('OAuth health: bot and broadcaster sessions validate automatically every 50 minutes and refresh on 401.');
+  console.log(`[Startup] Web server running on port ${PORT}`);
+  console.log('[Startup] Gemini model: gemini-3.5-flash-lite');
+  console.log(`[Startup] Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`);
+  console.log('[Recap] Automatic hourly recap mode enabled.');
+  console.log('[Recap] First recap: 60 minutes.');
+  console.log('[Recap] Recurring recap: every 60 minutes.');
+  console.log('[Recap] Stream title/category check: every 30 seconds.');
+  console.log(`[OAuth] Twitch OAuth callback: ${TWITCH_REDIRECT_URI}`);
+  console.log('[OAuth] Twitch OAuth tokens are stored in MongoDB and are never logged.');
+  console.log('[OAuth] Bot and broadcaster sessions validate automatically every 50 minutes and refresh on 401.');
 });
 
 bootstrap().catch((err) => {

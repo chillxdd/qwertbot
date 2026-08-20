@@ -121,7 +121,7 @@ async function syncStoredIdentity(auth, validation) {
   await TwitchAuth.updateOne({ provider: 'twitch' }, { $set: update });
 
   if (needsLogin) {
-    console.log(`[OAuth] Twitch bot login updated in MongoDB to ${validatedLogin}.`);
+    console.log(`[OAuth Bot] Twitch bot login updated in MongoDB to ${validatedLogin}.`);
   }
 
   return { ...auth, ...update };
@@ -185,7 +185,7 @@ async function refreshStoredToken() {
       username: validation.login || auth.username || ''
     });
 
-    console.log('[OAuth] Twitch access token refreshed and saved to MongoDB.');
+    console.log('[OAuth Bot] Twitch access token refreshed and saved to MongoDB.');
     return saved;
   })();
 

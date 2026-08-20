@@ -200,7 +200,10 @@
 
       <div class="memory-block">
         <h4>Bot Personality & Tagged Questions</h4>
-        <div class="detail">When a message starts with <code>@SqwertArmyBot</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Leaving this field blank disables tagged AI answers.</div>
+        <div class="detail">When a message starts with <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Leaving the Personality field blank disables tagged AI answers.</div>
+        <label class="prompt-label" for="botPersonalityName">Name</label>
+        <input id="botPersonalityName" type="text" maxlength="80" placeholder="Example: OakBot">
+        <div class="detail">Optional. Tagged AI replies will begin with <code>(as Name):</code>. This affects tagged questions only; hourly recaps and other bot messages are unchanged.</div>
         <label class="prompt-label" for="botPersonality">Personality</label>
         <textarea id="botPersonality" maxlength="12000" placeholder="Example: You are Professor Oak with exhausted dad energy. Be knowledgeable, concise, slightly dramatic, and keep getting annoyed that nobody lets you out of the bag."></textarea>
         <div id="botPersonalityCount" class="detail">0/12000 characters</div>

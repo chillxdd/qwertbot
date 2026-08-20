@@ -194,7 +194,7 @@ async function refreshBroadcasterToken() {
       username: validation.login || auth.username || ''
     });
 
-    console.log('[OAuth] Broadcaster Twitch token refreshed and saved to MongoDB.');
+    console.log('[OAuth Broadcaster] Twitch token refreshed and saved to MongoDB.');
     return saved;
   })();
 

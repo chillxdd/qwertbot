@@ -125,7 +125,7 @@ function createRecapManager({
     });
 
     if (response.status === 401 && allowRefresh) {
-      console.warn('[Recap] Twitch API returned 401. Refreshing OAuth token.');
+      console.warn('[OAuth Bot] Recap stream-status request returned 401. Refreshing bot OAuth token.');
       const refreshed = await refreshTwitchAccessToken();
       accessToken = refreshed?.accessToken || await getAccessTokenOrThrow();
       twitchClientId = (process.env.TWITCH_CLIENT_ID || twitchClientId).trim();
@@ -163,11 +163,11 @@ function createRecapManager({
     try {
       const validation = await validateTwitchAccessToken(token);
       if (validation?.client_id) twitchClientId = validation.client_id;
-      console.log('[Recap] Twitch OAuth token validated.');
+      console.log('[OAuth Bot] Recap stream-status bot token validated.');
     } catch (err) {
       if (err.status === 401 && typeof refreshTwitchAccessToken === 'function') {
         await refreshTwitchAccessToken();
-        console.log('[Recap] Twitch OAuth token refreshed after validation failure.');
+        console.log('[OAuth Bot] Recap stream-status bot token refreshed after validation failure.');
         return;
       }
       throw err;
@@ -644,7 +644,7 @@ function createRecapManager({
     try {
       await validateStoredToken();
     } catch (err) {
-      console.error('[Recap] Initial Twitch token validation failed:', err.message || err);
+      console.error('[OAuth Bot] Initial recap stream-status bot token validation failed:', err.message || err);
       return;
     }
 
@@ -653,7 +653,7 @@ function createRecapManager({
     streamPollTimer = setInterval(checkStreamStatus, STREAM_STATUS_POLL_INTERVAL);
     tokenValidationTimer = setInterval(() => {
       validateStoredToken().catch((err) => {
-        console.error('[Recap] Hourly Twitch token validation failed:', err.message || err);
+        console.error('[OAuth Bot] Recap stream-status bot token validation failed:', err.message || err);
       });
     }, TOKEN_VALIDATION_INTERVAL);
 
