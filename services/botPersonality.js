@@ -274,11 +274,12 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       }
     }
 
-    let streamContext = { streamLive: false, title: '', category: '' };
+    let streamContext = { statusKnown: false, streamLive: false, title: '', category: '' };
     if (typeof getStreamContext === 'function') {
       try {
         const context = getStreamContext() || {};
         streamContext = {
+          statusKnown: context.statusKnown !== false,
           streamLive: Boolean(context.streamLive),
           title: String(context.title || context.currentStreamTitle || '').trim(),
           category: String(context.category || context.currentStreamCategory || '').trim()
@@ -298,12 +299,18 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       }
     }
 
-    const currentStreamContext = streamContext.streamLive
+    const currentStreamContext = !streamContext.statusKnown
       ? `CURRENT TWITCH STREAM CONTEXT:
+- Live status: UNKNOWN (stream-status polling has not initialized yet).
+- Do not assume Qwert is live or describe anything as happening right now.`
+      : streamContext.streamLive
+        ? `CURRENT TWITCH STREAM CONTEXT:
+- Live status: LIVE
 - Title: ${streamContext.title || 'Unknown'}
 - Category/game: ${streamContext.category || 'Unknown'}`
-      : `CURRENT TWITCH STREAM CONTEXT:
-- Qwert is not currently live, or current stream metadata is unavailable.`;
+        : `CURRENT TWITCH STREAM CONTEXT:
+- Live status: OFFLINE
+- Qwert is not currently live on Twitch.`;
 
     const prompt = `You are ${botUsername || 'the configured Twitch bot'}, a Twitch chat bot answering one viewer question in GeneralQwert's chat.
 
@@ -325,6 +332,7 @@ RULES:
 - Answer the question directly while following the supplied personality.
 - Use the current Twitch title and category/game as the strongest background context for interpreting vague or game-specific questions.
 - If Qwert is currently live in a category that conflicts with older lore, prefer the current category for ambiguous questions. Do not force unrelated lore from another game into the answer.
+- Treat LIVE/OFFLINE status as authoritative current-state context. If status is OFFLINE, never imply that Qwert is currently streaming, playing, watching, returning to, or doing anything on stream. Phrase supported session-memory facts as things that happened earlier/previously instead. If status is UNKNOWN, also avoid claims that he is currently live.
 - The current title/category are BACKGROUND METADATA only. They may help interpret what game or topic the viewer means, but they are NOT proof that a specific event, action, result, boss attempt, win, loss, joke, or gameplay moment happened.
 - You may use stream-specific lore to understand recurring jokes, people, terminology, history, and channel-specific context when it is relevant to the current stream context or explicitly referenced by the viewer.
 - Stream-specific lore is BACKGROUND CONTEXT, not proof that something is happening right now. Do not turn lore into a current event, current action, or current fact unless the viewer's question itself establishes it.

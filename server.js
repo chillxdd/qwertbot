@@ -205,6 +205,7 @@ botPersonalityManager = createBotPersonalityManager({
   getStreamContext: () => {
     const status = recapManager?.getStatus?.() || {};
     return {
+      statusKnown: Boolean(status.streamStateInitialized),
       streamLive: Boolean(status.streamLive),
       title: status.currentStreamTitle || '',
       category: status.currentStreamCategory || ''
