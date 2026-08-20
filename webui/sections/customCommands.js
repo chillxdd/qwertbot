@@ -211,6 +211,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   function closeEditor() {
     editingId = null;
     editorEl.classList.remove('open');
+    if (editorEl.open && typeof editorEl.close === 'function') editorEl.close();
+    else editorEl.removeAttribute('open');
     clearEditorMessages();
   }
 
@@ -247,6 +249,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     updateResponseModeUi();
     clearEditorMessages();
     editorEl.classList.add('open');
+    if (typeof editorEl.showModal === 'function' && !editorEl.open) editorEl.showModal();
+    else editorEl.setAttribute('open', '');
     $('customCommandName').focus();
   }
 
@@ -599,6 +603,10 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   $('customResponseMode').onchange = updateResponseModeUi;
   $('saveCustomCommandBtn').onclick = saveCommand;
   $('cancelCustomCommandBtn').onclick = closeEditor;
+  $('closeCustomCommandEditorBtn').onclick = closeEditor;
+  editorEl.addEventListener('click', (event) => { if (event.target === editorEl && !variablesDialog.open) closeEditor(); });
+  editorEl.addEventListener('cancel', (event) => { event.preventDefault(); if (!variablesDialog.open) closeEditor(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && editorEl.classList.contains('open') && !variablesDialog.open) closeEditor(); });
   $('customGlobalCooldown').max = String(maxCooldownSeconds);
   $('customGlobalCooldown').value = String(defaultGlobalCooldownSeconds);
   $('customCooldown').max = String(maxCooldownSeconds);
@@ -610,7 +618,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   return {
     async onVisibilityChange(visible) {
       if (!visible) {
-        if (editingId === null && editorEl.classList.contains('open')) closeEditor();
+        if (editorEl.classList.contains('open')) closeEditor();
         return;
       }
       if (!loaded) {

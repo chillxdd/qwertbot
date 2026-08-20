@@ -1,6 +1,7 @@
 import { $, esc, postJson } from './shared.js';
 import { initMessagingSection } from './sections/messaging.js';
 import { initLoreSection } from './sections/lore.js';
+import { initViewerProfilesSection } from './sections/viewerProfiles.js';
 import { initCustomCommandsSection } from './sections/customCommands.js';
 import { initTimersSection } from './sections/timers.js';
 import { initOauthSection } from './sections/oauth.js';
@@ -40,7 +41,8 @@ function ensureTwitchChatLoaded() {
 
 await loadConfig();
 const messaging = initMessagingSection({ $, postJson });
-const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername });
+const viewerProfiles = initViewerProfilesSection({ $, esc, postJson });
+const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername, viewerProfiles });
 const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
 const timers = initTimersSection({ $, esc, postJson, config: config.timers || {} });
 const oauth = initOauthSection({ $, postJson });
@@ -189,6 +191,7 @@ function toggleSection(tabId) {
       customCommands.onVisibilityChange(false);
       timers.onVisibilityChange(false);
     }
+    if (panelId === 'lorePanel') viewerProfiles.onVisibilityChange(false);
   });
   if (shouldOpen) {
     target.classList.add('open');

@@ -1,4 +1,4 @@
-export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityNameLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds, botUsername }) {
+export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityNameLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds, botUsername, viewerProfiles }) {
   const maxLength = Number(maxLoreLength) || 12000;
   const personalityNameMaxLength = Number(maxBotPersonalityNameLength) || 80;
   const personalityMaxLength = Number(maxBotPersonalityLength) || 12000;
@@ -17,13 +17,20 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityFailureResponse').maxLength = 500;
 
   function selectMemoryView(view) {
-    const loreSelected = view !== 'personality';
+    const selected = ['lore', 'personality', 'profiles'].includes(view) ? view : 'lore';
+    const loreSelected = selected === 'lore';
+    const personalitySelected = selected === 'personality';
+    const profilesSelected = selected === 'profiles';
     $('streamLoreView').classList.toggle('open', loreSelected);
-    $('botPersonalityView').classList.toggle('open', !loreSelected);
+    $('botPersonalityView').classList.toggle('open', personalitySelected);
+    $('viewerProfilesView').classList.toggle('open', profilesSelected);
     $('streamLoreViewTab').classList.toggle('active', loreSelected);
-    $('botPersonalityViewTab').classList.toggle('active', !loreSelected);
+    $('botPersonalityViewTab').classList.toggle('active', personalitySelected);
+    $('viewerProfilesViewTab').classList.toggle('active', profilesSelected);
     $('streamLoreViewTab').setAttribute('aria-selected', loreSelected ? 'true' : 'false');
-    $('botPersonalityViewTab').setAttribute('aria-selected', loreSelected ? 'false' : 'true');
+    $('botPersonalityViewTab').setAttribute('aria-selected', personalitySelected ? 'true' : 'false');
+    $('viewerProfilesViewTab').setAttribute('aria-selected', profilesSelected ? 'true' : 'false');
+    if (viewerProfiles?.onVisibilityChange) viewerProfiles.onVisibilityChange(profilesSelected);
   }
 
   function updateCount() {
@@ -247,6 +254,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
 
   $('streamLoreViewTab').onclick = () => selectMemoryView('lore');
   $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
+  $('viewerProfilesViewTab').onclick = () => selectMemoryView('profiles');
   $('streamLore').oninput = updateCount;
   $('saveLoreBtn').onclick = saveLore;
   $('undoLoreBtn').onclick = loadLore;

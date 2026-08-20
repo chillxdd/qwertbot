@@ -1,5 +1,6 @@
 const BotPersonalityConfig = require('../models/BotPersonalityConfig');
 const { normalizeSessionMemoryConfig } = require('./sessionMemory');
+const { getRelevantViewerProfiles, formatViewerProfilesForPrompt } = require('./viewerProfiles');
 
 const MAX_BOT_PERSONALITY_NAME_LENGTH = 80;
 const MAX_BOT_PERSONALITY_LENGTH = 12000;
@@ -396,6 +397,14 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       }
     }
 
+    let viewerProfileContext = '';
+    try {
+      const relevantProfiles = await getRelevantViewerProfiles(normalizedChannel, question, 4);
+      viewerProfileContext = formatViewerProfilesForPrompt(relevantProfiles);
+    } catch (err) {
+      console.error('[Tagged Questions] Could not load relevant viewer profiles:', err?.message || err);
+    }
+
     const currentStreamContext = !streamContext.statusKnown
       ? `CURRENT TWITCH STREAM CONTEXT:
 - Live status: UNKNOWN (stream-status polling has not initialized yet).
@@ -422,6 +431,9 @@ ${streamLore || '(none saved)'}
 CURRENT-STREAM SESSION MEMORY (temporary same-stream evidence; may include completed hourly memory blocks and recent meaningful chat):
 ${sessionMemoryContext || '(no session memory available)'}
 
+RELEVANT VIEWER PROFILES (persistent community context; only profiles referenced by this question are included):
+${viewerProfileContext || '(no relevant viewer profiles)'}
+
 VIEWER: ${String(displayName || 'viewer')}
 QUESTION: ${question}
 
@@ -434,6 +446,8 @@ RULES:
 - You may use stream-specific lore to understand recurring jokes, people, terminology, history, and channel-specific context when it is relevant to the current stream context or explicitly referenced by the viewer.
 - Stream-specific lore is BACKGROUND CONTEXT, not proof that something is happening right now. Do not turn lore into a current event, current action, or current fact unless the viewer's question itself establishes it.
 - Current-stream session memory is evidence only for facts explicitly preserved from this current Twitch stream. Use it to answer specific questions about earlier moments in the same stream, but preserve any uncertainty written in the memory.
+- Relevant viewer profiles are persistent background context about community members. Moderator-pinned notes are authoritative profile context; AI-learned observations may be imperfect and should be phrased with appropriate caution when confidence is low.
+- Do not use viewer profiles to invent current-stream events, and do not mention a profile that is irrelevant to the viewer's question.
 - Recent meaningful chat inside session memory may cover events too new to have an hourly memory block. Treat viewer statements as viewer statements unless they clearly establish a fact.
 - If session memory conflicts with current title/category metadata, remember that title/category are only metadata; do not erase a supported earlier-stream fact merely because the category later changed.
 - If the viewer explicitly asks about something documented in the lore, you may answer from that lore even if it relates to a different game than the current category.

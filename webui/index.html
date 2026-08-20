@@ -125,10 +125,13 @@
         <button id="addCustomCommandBtn" type="button">Add Custom Command</button>
       </div>
 
-      <div id="customCommandEditor" class="custom-command-editor">
+      <dialog id="customCommandEditor" class="custom-command-editor entity-editor-dialog">
         <div class="custom-editor-header">
           <h3 id="customCommandEditorTitle">Add Custom Command</h3>
-          <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
+          <div class="custom-editor-header-actions">
+            <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
+            <button id="closeCustomCommandEditorBtn" class="secondary" type="button">Close</button>
+          </div>
         </div>
 
         <div class="custom-editor-block">
@@ -200,6 +203,17 @@
           <div id="customResponseMsg" class="detail custom-field-message"></div>
         </div>
 
+
+
+        <div class="custom-editor-actions">
+          <button id="saveCustomCommandBtn" type="button">Save Command</button>
+          <button id="cancelCustomCommandBtn" class="secondary" type="button">Cancel</button>
+        </div>
+        <div id="customCommandEditorMsg" class="detail"></div>
+      </dialog>
+
+      </div>
+
         <dialog id="customVariablesDialog" class="custom-variables-dialog">
           <div class="custom-dialog-header">
             <h3>Available Response Variables</h3>
@@ -217,15 +231,6 @@
             <div class="custom-variable-note detail">No eval is needed. Multiple response entries each keep their own 500-character allowance.</div>
           </div>
         </dialog>
-
-        <div class="custom-editor-actions">
-          <button id="saveCustomCommandBtn" type="button">Save Command</button>
-          <button id="cancelCustomCommandBtn" class="secondary" type="button">Cancel</button>
-        </div>
-        <div id="customCommandEditorMsg" class="detail"></div>
-      </div>
-
-      </div>
 
       <div id="timersView" class="subsection-view">
         <div class="custom-command-header">
@@ -290,10 +295,13 @@
           <button id="addTimerBtn" type="button">Add Timer</button>
         </div>
 
-        <div id="timerEditor" class="custom-command-editor">
+        <dialog id="timerEditor" class="custom-command-editor entity-editor-dialog">
           <div class="custom-editor-header">
             <h3 id="timerEditorTitle">Add Timer</h3>
-            <label class="inline-check custom-enabled-check"><input id="timerEnabled" type="checkbox" checked> Enabled</label>
+            <div class="custom-editor-header-actions">
+              <label class="inline-check custom-enabled-check"><input id="timerEnabled" type="checkbox" checked> Enabled</label>
+              <button id="closeTimerEditorBtn" class="secondary" type="button">Close</button>
+            </div>
           </div>
 
           <div class="custom-editor-block">
@@ -367,7 +375,16 @@
             <div id="timerResponseMsg" class="detail custom-field-message"></div>
           </div>
 
-          <dialog id="timerVariablesDialog" class="custom-variables-dialog">
+  
+
+          <div class="custom-editor-actions">
+            <button id="saveTimerBtn" type="button">Save Timer</button>
+            <button id="cancelTimerBtn" class="secondary" type="button">Cancel</button>
+          </div>
+          <div id="timerEditorMsg" class="detail"></div>
+        </dialog>
+
+        <dialog id="timerVariablesDialog" class="custom-variables-dialog">
             <div class="custom-dialog-header">
               <h3>Available Timer Variables</h3>
               <button id="closeTimerVariablesBtn" class="secondary" type="button" aria-label="Close timer variables">Close</button>
@@ -378,13 +395,6 @@
               <div class="custom-variable-note detail">Timer responses have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, and <code>$(count)</code> are unavailable.</div>
             </div>
           </dialog>
-
-          <div class="custom-editor-actions">
-            <button id="saveTimerBtn" type="button">Save Timer</button>
-            <button id="cancelTimerBtn" class="secondary" type="button">Cancel</button>
-          </div>
-          <div id="timerEditorMsg" class="detail"></div>
-        </div>
 
         <dialog id="timerPreviewDialog" class="custom-variables-dialog">
           <div class="custom-dialog-header">
@@ -401,6 +411,7 @@
       <div class="subsection-nav" role="tablist" aria-label="Memory management views">
         <button id="streamLoreViewTab" class="secondary active" type="button" aria-selected="true">Stream-Specific Lore</button>
         <button id="botPersonalityViewTab" class="secondary" type="button" aria-selected="false">Bot Personality & Tagged Questions</button>
+        <button id="viewerProfilesViewTab" class="secondary" type="button" aria-selected="false">Viewer Profiles</button>
       </div>
 
       <div id="streamLoreView" class="subsection-view open">
@@ -508,6 +519,95 @@
         </div>
         <div id="botPersonalityMsg" class="detail"></div>
       </div>
+      </div>
+
+      <div id="viewerProfilesView" class="subsection-view">
+        <div class="memory-block">
+          <div class="custom-command-header">
+            <div>
+              <h4>Viewer Profiles</h4>
+              <div class="detail">Persistent, moderator-reviewable profiles learned from meaningful chat during the hourly recap cycle. Profiles never influence public recap generation.</div>
+            </div>
+            <div class="custom-command-list-controls">
+              <label class="list-search-wrap" for="viewerProfileSearch">
+                <span class="sr-only">Search viewer profiles</span>
+                <input id="viewerProfileSearch" class="list-search-input" type="search" placeholder="Search viewer profiles..." autocomplete="off" aria-label="Search viewer profiles">
+              </label>
+              <label class="custom-command-sort-label" for="viewerProfileSort">Sort
+                <select id="viewerProfileSort" aria-label="Sort viewer profiles">
+                  <option value="updated_desc">Recently updated</option>
+                  <option value="name_asc">Name — A to Z</option>
+                  <option value="name_desc">Name — Z to A</option>
+                  <option value="facts_desc">Learned facts — most first</option>
+                </select>
+              </label>
+              <button id="refreshViewerProfilesBtn" class="secondary" type="button">Refresh</button>
+            </div>
+          </div>
+
+          <div class="viewer-profile-settings-card">
+            <div>
+              <strong>Profile Learning &amp; Tagged Questions</strong>
+              <div class="detail">Automatic learning extracts only durable, non-sensitive viewer observations from the same hourly chat intelligence pass used for Session Memory. Tagged-question use is independent and can stay disabled while profiles learn.</div>
+            </div>
+            <div class="viewer-profile-settings-toggles">
+              <label class="inline-check"><input id="viewerProfileLearningEnabled" type="checkbox" checked> Automatic Viewer Profile Learning</label>
+              <label class="inline-check"><input id="viewerProfilesTaggedEnabled" type="checkbox"> Use Viewer Profiles in Tagged Questions</label>
+              <button id="saveViewerProfileSettingsBtn" class="secondary" type="button">Save Settings</button>
+            </div>
+          </div>
+          <div id="viewerProfileSettingsMsg" class="detail"></div>
+
+          <div id="viewerProfilesMsg" class="detail"></div>
+          <div id="viewerProfileList" class="custom-command-list"></div>
+          <div id="viewerProfilePagination" class="list-pagination" aria-label="Viewer profile pagination">
+            <label class="list-page-size">Show
+              <select id="viewerProfilePageSize" aria-label="Viewer profiles per page">
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
+            </label>
+            <div id="viewerProfilePageLabel" class="list-page-label">Page 1 of 1</div>
+            <div class="list-page-buttons">
+              <button id="viewerProfilePrevPage" class="secondary" type="button" aria-label="Previous viewer profile page">←</button>
+              <button id="viewerProfileNextPage" class="secondary" type="button" aria-label="Next viewer profile page">→</button>
+            </div>
+          </div>
+          <div class="custom-command-add-row"><button id="addViewerProfileBtn" type="button">Add Viewer Profile</button></div>
+        </div>
+
+        <dialog id="viewerProfileDialog" class="custom-variables-dialog viewer-profile-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3 id="viewerProfileDialogTitle">Viewer Profile</h3>
+              <div id="viewerProfileDialogMeta" class="detail"></div>
+            </div>
+            <button id="closeViewerProfileBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div class="viewer-profile-dialog-body">
+            <div class="viewer-profile-form-grid">
+              <div><label class="prompt-label" for="viewerProfileUsername">Twitch Username</label><input id="viewerProfileUsername" type="text" maxlength="80" placeholder="coosgoose"></div>
+              <div><label class="prompt-label" for="viewerProfileDisplayName">Display Name</label><input id="viewerProfileDisplayName" type="text" maxlength="80" placeholder="CoosGoose"></div>
+            </div>
+            <label class="prompt-label" for="viewerProfileAliases">Aliases / nicknames</label>
+            <input id="viewerProfileAliases" type="text" maxlength="1000" placeholder="Coos, Goose">
+            <div class="detail">Comma-separated. Used to recognize profile references in tagged questions.</div>
+            <div class="viewer-profile-form-grid viewer-profile-toggle-grid">
+              <label class="inline-check"><input id="viewerProfileEnabled" type="checkbox" checked> Available to Tagged Questions</label>
+              <label class="inline-check"><input id="viewerProfileLearningForUser" type="checkbox" checked> Allow Automatic Learning for this viewer</label>
+            </div>
+            <label class="prompt-label" for="viewerProfilePinnedNotes">Moderator-Pinned Notes</label>
+            <textarea id="viewerProfilePinnedNotes" maxlength="4000" placeholder="Optional moderator-approved context. These notes are treated as more authoritative than AI-learned observations."></textarea>
+            <div class="custom-response-heading"><strong>AI-Learned Observations</strong><span id="viewerProfileFactCount" class="detail">0 facts</span></div>
+            <div id="viewerProfileFacts" class="viewer-profile-facts"></div>
+            <div class="custom-editor-actions">
+              <button id="saveViewerProfileBtn" type="button">Save Profile</button>
+              <button id="deleteViewerProfileBtn" class="danger" type="button">Delete Profile</button>
+            </div>
+            <div id="viewerProfileDialogMsg" class="detail"></div>
+          </div>
+        </dialog>
       </div>
     </div>
 

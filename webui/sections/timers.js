@@ -324,11 +324,14 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       syncResponseMode();
     }
     editorEl.classList.add('open');
-    editorEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (typeof editorEl.showModal === 'function' && !editorEl.open) editorEl.showModal();
+    else editorEl.setAttribute('open', '');
   }
 
   function closeEditor() {
     editorEl.classList.remove('open');
+    if (editorEl.open && typeof editorEl.close === 'function') editorEl.close();
+    else editorEl.removeAttribute('open');
     clearEditor();
   }
 
@@ -510,6 +513,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   $('timerResponseMode').onchange = syncResponseMode;
   $('saveTimerBtn').onclick = saveTimer;
   $('cancelTimerBtn').onclick = closeEditor;
+  $('closeTimerEditorBtn').onclick = closeEditor;
+  editorEl.addEventListener('click', (event) => { if (event.target === editorEl && !$('timerVariablesDialog').open && !$('timerPreviewDialog').open) closeEditor(); });
+  editorEl.addEventListener('cancel', (event) => { event.preventDefault(); if (!$('timerVariablesDialog').open && !$('timerPreviewDialog').open) closeEditor(); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && editorEl.classList.contains('open') && !$('timerVariablesDialog').open && !$('timerPreviewDialog').open) closeEditor(); });
   $('showTimerVariablesBtn').onclick = () => $('timerVariablesDialog').showModal();
   $('closeTimerVariablesBtn').onclick = () => $('timerVariablesDialog').close();
   $('timerVariablesDialog').addEventListener('click', (event) => { if (event.target === $('timerVariablesDialog')) $('timerVariablesDialog').close(); });
@@ -523,7 +530,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     loadTimers,
     onVisibilityChange(visible) {
       if (!visible) {
-        if (editingId === null && editorEl.classList.contains('open')) closeEditor();
+        if (editorEl.classList.contains('open')) closeEditor();
         return;
       }
       void loadTimers();

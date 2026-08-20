@@ -101,9 +101,9 @@ function truncateText(text, maxLength) {
   return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], twitchEvents = [], streamLore = '', streamTiming = {}, publicRecap = '', config = {} }) {
+async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], twitchEvents = [], streamLore = '', streamTiming = {}, publicRecap = '', config = {}, viewerLearningEnabled = false }) {
   const normalizedConfig = normalizeSessionMemoryConfig(config);
-  if (!normalizedConfig.enabled) return null;
+  if (!normalizedConfig.enabled && !viewerLearningEnabled) return null;
 
   const sourceChat = Array.isArray(chatLogs) ? chatLogs.filter(Boolean) : [];
   const sourceEvents = Array.isArray(twitchEvents) ? twitchEvents : [];
@@ -117,6 +117,17 @@ async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], 
     ? sourceEvents.map((item) => `- ${String(item?.text || '').trim()}`).filter((line) => line !== '-').join('\n')
     : '(none)';
   const extraInstructions = normalizedConfig.promptInstructions || '(none)';
+
+  const viewerLearningRules = viewerLearningEnabled ? `
+- For viewerUpdates, only include durable viewer-specific information that would still be useful in future streams.
+- Only learn a fact from something the viewer says about themselves, or from a clearly established recurring interaction involving them. Do not treat another chatter's claim about a person as truth.
+- Learn viewer profile facts from SOURCE CHAT only. Never create viewer facts from Stream Lore, title/category metadata, public recap text, or verified Twitch events.
+- Do not store sensitive/private personal data, health information, religion, politics, sexuality, legal names, contact details, precise locations, financial information, or anything that would be creepy/invasive to retain.
+- Avoid one-off moods, temporary activities, throwaway opinions, sarcasm, guesses, and ephemeral facts.
+- viewerUpdates should be empty when nothing durable is worth remembering.` : '';
+  const jsonShape = viewerLearningEnabled
+    ? '{"detailedSummary":"...","compactSummary":"...","topics":["..."],"people":["..."],"viewerUpdates":[{"username":"chat username exactly as shown","displayName":"display name","observations":[{"fact":"durable concise fact","confidence":"low|medium|high"}]}]}'
+    : '{"detailedSummary":"...","compactSummary":"...","topics":["..."],"people":["..."]}';
 
   const prompt = `You are building TEMPORARY CURRENT-STREAM MEMORY for a Twitch chat bot in GeneralQwert's channel. This memory exists only until the stream ends and is used to answer viewer questions later in the same stream.
 
@@ -152,11 +163,11 @@ RULES:
 - detailedSummary must be at most ${MAX_DETAILED_SUMMARY_LENGTH} characters.
 - compactSummary must be at most ${MAX_COMPACT_SUMMARY_LENGTH} characters and should act like an index of the most important facts/topics in this block.
 - topics should contain short retrieval keywords/phrases.
-- people should contain viewer/streamer names explicitly relevant to retained facts.
+- people should contain viewer/streamer names explicitly relevant to retained facts.${viewerLearningRules}
 - Return valid JSON only, no markdown fences.
 
 JSON SHAPE:
-{"detailedSummary":"...","compactSummary":"...","topics":["..."],"people":["..."]}`;
+${jsonShape}`;
 
   const raw = await callGemini(prompt);
   let parsed;
@@ -170,13 +181,25 @@ JSON SHAPE:
   const compactSummary = truncateText(parsed?.compactSummary || detailedSummary, MAX_COMPACT_SUMMARY_LENGTH);
   if (!detailedSummary && !compactSummary) return null;
 
+  const viewerUpdates = viewerLearningEnabled && Array.isArray(parsed?.viewerUpdates)
+    ? parsed.viewerUpdates.slice(0, 40).map((update) => ({
+        username: String(update?.username || '').trim(),
+        displayName: String(update?.displayName || update?.username || '').trim(),
+        observations: (Array.isArray(update?.observations) ? update.observations : []).slice(0, 12).map((observation) => ({
+          fact: truncateText(observation?.fact || observation?.text || '', 400),
+          confidence: ['low', 'medium', 'high'].includes(observation?.confidence) ? observation.confidence : 'medium'
+        })).filter((observation) => observation.fact)
+      })).filter((update) => update.username && update.observations.length)
+    : [];
+
   return {
     startedAtMs,
     endedAtMs,
     detailedSummary: detailedSummary || compactSummary,
     compactSummary: compactSummary || detailedSummary,
     topics: normalizeList(parsed?.topics),
-    people: normalizeList(parsed?.people)
+    people: normalizeList(parsed?.people),
+    viewerUpdates
   };
 }
 

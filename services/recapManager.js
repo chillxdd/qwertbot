@@ -11,6 +11,7 @@ const {
 const { getStreamLore } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
 const { generateSessionMemoryBlock, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
+const { getViewerProfileSettings, applyViewerProfileUpdates } = require('./viewerProfiles');
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
 const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
@@ -661,7 +662,13 @@ function createRecapManager({
 
       if (currentStreamId) {
         const sessionMemoryConfig = readSessionMemoryConfig();
-        if (sessionMemoryConfig.enabled) {
+        let viewerProfileSettings = { automaticLearningEnabled: false };
+        try {
+          viewerProfileSettings = await getViewerProfileSettings(channelName);
+        } catch (settingsErr) {
+          console.error('[Viewer Profiles] Could not load viewer-profile settings for hourly learning:', settingsErr?.message || settingsErr);
+        }
+        if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled) {
           try {
             const generatedAtMs = Date.now();
             const sourceTimes = [
@@ -678,9 +685,10 @@ function createRecapManager({
               streamLore,
               publicRecap: recapSummaryBody,
               streamTiming: { windowStartedAtMs, generatedAtMs },
-              config: sessionMemoryConfig
+              config: sessionMemoryConfig,
+              viewerLearningEnabled: viewerProfileSettings.automaticLearningEnabled
             });
-            if (memoryBlock) {
+            if (memoryBlock && sessionMemoryConfig.enabled) {
               await saveSessionMemoryBlock({
                 streamId: currentStreamId,
                 channelName,
@@ -689,8 +697,16 @@ function createRecapManager({
               });
               console.log(`[Session Memory] Stored hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
             }
+            if (memoryBlock?.viewerUpdates?.length && viewerProfileSettings.automaticLearningEnabled) {
+              const profileResult = await applyViewerProfileUpdates({
+                channelName,
+                chatLogs: memoryChatLogs,
+                updates: memoryBlock.viewerUpdates
+              });
+              console.log(`[Viewer Profiles] Hourly learning processed ${memoryBlock.viewerUpdates.length} candidate viewer update(s); applied ${profileResult.applied}, skipped ${profileResult.skipped}.`);
+            }
           } catch (memoryErr) {
-            console.error('[Session Memory] Hourly memory generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
+            console.error('[Session Memory/Viewer Profiles] Hourly intelligence generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
           }
         }
       }

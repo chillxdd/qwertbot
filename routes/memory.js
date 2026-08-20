@@ -1,4 +1,5 @@
 const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('../services/streamLore');
+const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, setFactEnabled, deleteViewerProfile } = require('../services/viewerProfiles');
 
 function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
   app.post('/stream-lore/get', requireModSession, async (req, res) => {
@@ -103,6 +104,81 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
       return res.status(500).json({ success: false, error: 'Could not clear current stream session memory.' });
     }
   });
+  app.post('/viewer-profiles/settings/get', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const settings = await getViewerProfileSettings(channelName);
+      return res.json({ success: true, settings });
+    } catch (err) {
+      console.error('[Viewer Profiles] Could not load settings:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not load viewer profile settings.' });
+    }
+  });
+
+  app.post('/viewer-profiles/settings/save', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const settings = await saveViewerProfileSettings(channelName, req.body || {});
+      return res.json({ success: true, settings });
+    } catch (err) {
+      console.error('[Viewer Profiles] Could not save settings:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not save viewer profile settings.' });
+    }
+  });
+
+  app.post('/viewer-profiles/list', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profiles = await listViewerProfiles(channelName);
+      return res.json({ success: true, profiles });
+    } catch (err) {
+      console.error('[Viewer Profiles] Could not list profiles:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not load viewer profiles.' });
+    }
+  });
+
+  app.post('/viewer-profiles/get', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await getViewerProfile(channelName, req.body?.id || req.body?.username);
+      if (!profile) return res.status(404).json({ success: false, error: 'Viewer profile not found.' });
+      return res.json({ success: true, profile });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'Could not load viewer profile.' });
+    }
+  });
+
+  app.post('/viewer-profiles/save', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await saveViewerProfile(channelName, req.body || {});
+      return res.json({ success: true, profile });
+    } catch (err) {
+      console.error('[Viewer Profiles] Could not save profile:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not save viewer profile.' });
+    }
+  });
+
+  app.post('/viewer-profiles/fact-toggle', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await setFactEnabled(channelName, req.body?.profileId, req.body?.factId, req.body?.enabled);
+      return res.json({ success: true, profile });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not update viewer fact.' });
+    }
+  });
+
+  app.post('/viewer-profiles/delete', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const result = await deleteViewerProfile(channelName, req.body?.id);
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not delete viewer profile.' });
+    }
+  });
+
 }
 
 module.exports = { registerMemoryRoutes };
