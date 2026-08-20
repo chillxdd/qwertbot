@@ -208,7 +208,28 @@
             <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
           </div>
         </div>
-        <div class="detail">Send automated chat messages on a repeating interval while Qwert is live. Timers are stored in MongoDB and become live immediately after saving.</div>
+        <div class="detail">Background chat messages that run only while Qwert is live. Scheduling, activity counters, history, and next-fire state are persisted in MongoDB so Render restarts do not reset them.</div>
+
+        <div class="custom-editor-block timer-global-settings">
+          <div class="custom-response-heading">
+            <strong>Global Timer Settings</strong>
+            <button id="saveTimerSettingsBtn" class="secondary" type="button">Save Settings</button>
+          </div>
+          <div class="timer-settings-grid">
+            <div>
+              <label class="prompt-label" for="timerGlobalStartDelay">Global stream-start delay (seconds)</label>
+              <input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0">
+              <div class="detail">No timer may fire before this much stream uptime has passed.</div>
+            </div>
+            <div>
+              <label class="prompt-label" for="timerGlobalSpacing">Minimum time between timer messages (seconds)</label>
+              <input id="timerGlobalSpacing" type="number" min="0" max="3600" step="1" value="60">
+              <div class="detail">If several timers are due, they wait and drain naturally instead of posting together.</div>
+            </div>
+          </div>
+          <div id="timerSettingsMsg" class="detail custom-field-message"></div>
+        </div>
+
         <div id="timersMsg" class="detail"></div>
         <div id="timerList" class="custom-command-list"></div>
         <div class="custom-command-add-row">
@@ -224,25 +245,52 @@
           <div class="custom-editor-block">
             <label class="prompt-label" for="timerName">Timer Name</label>
             <input id="timerName" type="text" maxlength="80" placeholder="Example: Discord Reminder">
-            <div class="detail">A friendly dashboard name for this timer. It is not included in the Twitch message.</div>
+            <div class="detail">A friendly dashboard name. It is never included in the Twitch message.</div>
           </div>
 
           <div class="custom-editor-block">
-            <strong class="custom-block-title">Timer Settings</strong>
+            <strong class="custom-block-title">Schedule</strong>
             <div class="timer-settings-grid">
               <div>
                 <label class="prompt-label" for="timerInterval">Interval (seconds)</label>
-                <input id="timerInterval" type="number" min="30" max="86400" step="1" value="300">
+                <input id="timerInterval" type="number" min="30" max="86400" step="1" value="900">
               </div>
               <div>
-                <label class="prompt-label" for="timerResponseMode">Response Type</label>
-                <select id="timerResponseMode">
-                  <option value="equal">Equal Odds</option>
-                  <option value="weighted">Specified Weight</option>
+                <label class="prompt-label" for="timerStartDelay">Per-timer stream-start delay (optional)</label>
+                <input id="timerStartDelay" type="number" min="0" max="86400" step="1" placeholder="Use global delay">
+              </div>
+              <div>
+                <label class="prompt-label" for="timerJitter">Random timing variation ± seconds</label>
+                <input id="timerJitter" type="number" min="0" max="86400" step="1" value="0">
+              </div>
+              <div>
+                <label class="prompt-label" for="timerPriority">Priority</label>
+                <select id="timerPriority">
+                  <option value="high">High</option>
+                  <option value="normal" selected>Normal</option>
+                  <option value="low">Low</option>
                 </select>
               </div>
             </div>
-            <div class="detail">Enabled timers count only while the stream is live. When the stream goes live, each timer waits its full interval before its first message. Minimum interval: 30 seconds.</div>
+            <div class="detail">A per-timer start delay is optional, but if set it cannot be lower than the global stream-start delay. Jitter is recalculated after each successful firing.</div>
+            <div id="timerScheduleMsg" class="detail custom-field-message"></div>
+          </div>
+
+          <div class="custom-editor-block">
+            <strong class="custom-block-title">Activity Requirements</strong>
+            <div class="timer-settings-grid">
+              <div>
+                <label class="prompt-label" for="timerMinimumMessages">Minimum chat messages</label>
+                <input id="timerMinimumMessages" type="number" min="0" max="100000" step="1" value="0">
+                <div class="detail">0 disables this requirement. Count resets after a successful scheduled/manual firing.</div>
+              </div>
+              <div>
+                <label class="prompt-label" for="timerMinimumViewers">Minimum viewers</label>
+                <input id="timerMinimumViewers" type="number" min="0" max="1000000" step="1" value="0">
+                <div class="detail">0 disables this requirement. Uses Twitch's current stream viewer count.</div>
+              </div>
+            </div>
+            <div id="timerActivityMsg" class="detail custom-field-message"></div>
           </div>
 
           <div class="custom-editor-block">
@@ -253,7 +301,14 @@
                 <button id="addTimerResponseBtn" class="secondary" type="button">Add Response</button>
               </div>
             </div>
-            <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+            <div class="custom-response-mode-wrap">
+              <label class="prompt-label" for="timerResponseMode">Response Type</label>
+              <select id="timerResponseMode">
+                <option value="equal">Equal Odds</option>
+                <option value="weighted">Specified Weight</option>
+              </select>
+              <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+            </div>
             <div id="timerResponses"></div>
             <div id="timerResponseMsg" class="detail custom-field-message"></div>
           </div>
@@ -266,7 +321,7 @@
             <div class="custom-variable-help-body">
               <div class="custom-variable-row"><code>$(random MIN MAX)</code><div class="detail">Random whole integer from MIN through MAX, inclusive.</div></div>
               <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots. Requires bot OAuth scope <code>moderator:read:chatters</code>.</div></div>
-              <div class="custom-variable-note detail">Timer responses do not have a triggering viewer, query, or counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, and <code>$(count)</code> are not available.</div>
+              <div class="custom-variable-note detail">Timer responses have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, and <code>$(count)</code> are unavailable.</div>
             </div>
           </dialog>
 
@@ -276,6 +331,14 @@
           </div>
           <div id="timerEditorMsg" class="detail"></div>
         </div>
+
+        <dialog id="timerPreviewDialog" class="custom-variables-dialog">
+          <div class="custom-dialog-header">
+            <h3>Timer Preview</h3>
+            <button id="closeTimerPreviewBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div id="timerPreviewBody" class="custom-variable-help-body"></div>
+        </dialog>
       </div>
     </div>
 

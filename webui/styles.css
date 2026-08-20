@@ -85,3 +85,10 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 #timerEditorMsg.bad{margin-top:10px;padding:7px 9px;border:1px solid #ff3b3b;border-radius:4px;background:rgba(255,59,59,.08)}
 #timerResponseMsg{margin-top:8px}
 @media(max-width:600px){.subsection-nav{grid-template-columns:1fr}.timer-settings-grid{grid-template-columns:1fr}}
+
+.timer-global-settings { margin-top: 14px; }
+.timer-card .custom-command-card-main { min-width: 0; }
+.timer-card-actions { flex-wrap: wrap; justify-content: flex-end; }
+.timer-history { margin-top: 6px; }
+.timer-history summary { cursor: pointer; }
+.timer-preview-text { margin-top: 12px; padding: 12px; border: 1px solid #3b3b46; border-radius: 8px; background: #111216; white-space: pre-wrap; word-break: break-word; }

@@ -1,4 +1,5 @@
 const ChatTimer = require('../models/ChatTimer');
+const TimerConfig = require('../models/TimerConfig');
 
 const MAX_TIMER_NAME_LENGTH = 80;
 const MIN_TIMER_INTERVAL_SECONDS = 30;
@@ -6,18 +7,84 @@ const MAX_TIMER_INTERVAL_SECONDS = 86400;
 const MAX_TIMER_RESPONSES = 25;
 const MAX_TIMER_RESPONSE_LENGTH = 500;
 const TIMER_RESPONSE_MODES = ['equal', 'weighted'];
+const TIMER_PRIORITIES = ['high', 'normal', 'low'];
+const MAX_START_DELAY_SECONDS = 86400;
+const MAX_JITTER_SECONDS = 86400;
+const MAX_MINIMUM_CHAT_MESSAGES = 100000;
+const MAX_MINIMUM_VIEWERS = 1000000;
+const MAX_GLOBAL_SPACING_SECONDS = 3600;
+const DEFAULT_GLOBAL_START_DELAY_SECONDS = 0;
+const DEFAULT_GLOBAL_SPACING_SECONDS = 60;
 const SCHEDULER_TICK_MS = 1000;
+const ACTIVITY_CHECKPOINT_MS = 60 * 1000;
 const OWN_RESPONSE_TTL_MS = 15000;
+const RETRY_DELAYS_MS = [10000, 30000, 60000];
+const HISTORY_LIMIT = 10;
 
-function normalizeInput(input = {}) {
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function wholeNumber(value, fallback = 0) {
+  return Math.round(finiteNumber(value, fallback));
+}
+
+function normalizeSettings(input = {}) {
+  const globalStartDelaySeconds = wholeNumber(input.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS);
+  if (globalStartDelaySeconds < 0 || globalStartDelaySeconds > MAX_START_DELAY_SECONDS) {
+    throw new Error(`Global stream-start delay must be between 0 and ${MAX_START_DELAY_SECONDS} seconds.`);
+  }
+
+  const minimumSpacingSeconds = wholeNumber(input.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS);
+  if (minimumSpacingSeconds < 0 || minimumSpacingSeconds > MAX_GLOBAL_SPACING_SECONDS) {
+    throw new Error(`Minimum timer spacing must be between 0 and ${MAX_GLOBAL_SPACING_SECONDS} seconds.`);
+  }
+
+  return { globalStartDelaySeconds, minimumSpacingSeconds };
+}
+
+function normalizeInput(input = {}, settings = {}) {
   const name = String(input.name || '').trim();
   if (!name) throw new Error('Timer Name is required.');
   if (name.length > MAX_TIMER_NAME_LENGTH) throw new Error(`Timer Name can contain at most ${MAX_TIMER_NAME_LENGTH} characters.`);
 
-  const intervalSeconds = Number(input.intervalSeconds);
+  const intervalSeconds = finiteNumber(input.intervalSeconds, NaN);
   if (!Number.isFinite(intervalSeconds) || intervalSeconds < MIN_TIMER_INTERVAL_SECONDS || intervalSeconds > MAX_TIMER_INTERVAL_SECONDS) {
     throw new Error(`Interval must be between ${MIN_TIMER_INTERVAL_SECONDS} and ${MAX_TIMER_INTERVAL_SECONDS} seconds.`);
   }
+
+  let startDelaySeconds = null;
+  const rawStartDelay = input.startDelaySeconds;
+  if (rawStartDelay !== null && rawStartDelay !== undefined && String(rawStartDelay).trim() !== '') {
+    startDelaySeconds = wholeNumber(rawStartDelay, NaN);
+    if (!Number.isFinite(startDelaySeconds) || startDelaySeconds < 0 || startDelaySeconds > MAX_START_DELAY_SECONDS) {
+      throw new Error(`Per-timer stream-start delay must be between 0 and ${MAX_START_DELAY_SECONDS} seconds.`);
+    }
+    const globalDelay = wholeNumber(settings.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS);
+    if (startDelaySeconds < globalDelay) {
+      throw new Error(`Per-timer stream-start delay cannot be lower than the global delay (${globalDelay} seconds). Leave it blank to use the global delay.`);
+    }
+  }
+
+  const minimumChatMessages = wholeNumber(input.minimumChatMessages, 0);
+  if (minimumChatMessages < 0 || minimumChatMessages > MAX_MINIMUM_CHAT_MESSAGES) {
+    throw new Error(`Minimum chat messages must be between 0 and ${MAX_MINIMUM_CHAT_MESSAGES}.`);
+  }
+
+  const minimumViewers = wholeNumber(input.minimumViewers, 0);
+  if (minimumViewers < 0 || minimumViewers > MAX_MINIMUM_VIEWERS) {
+    throw new Error(`Minimum viewers must be between 0 and ${MAX_MINIMUM_VIEWERS}.`);
+  }
+
+  const jitterSeconds = wholeNumber(input.jitterSeconds, 0);
+  if (jitterSeconds < 0 || jitterSeconds > MAX_JITTER_SECONDS) {
+    throw new Error(`Random timing variation must be between 0 and ${MAX_JITTER_SECONDS} seconds.`);
+  }
+
+  const priority = TIMER_PRIORITIES.includes(String(input.priority || '').toLowerCase())
+    ? String(input.priority).toLowerCase()
+    : 'normal';
 
   const responses = Array.isArray(input.responses)
     ? input.responses.map((value) => String(value || '').trim()).filter(Boolean)
@@ -43,6 +110,11 @@ function normalizeInput(input = {}) {
   return {
     name,
     intervalSeconds: Math.round(intervalSeconds * 1000) / 1000,
+    startDelaySeconds,
+    minimumChatMessages,
+    minimumViewers,
+    jitterSeconds,
+    priority,
     responses,
     responseMode,
     responseWeights,
@@ -50,18 +122,36 @@ function normalizeInput(input = {}) {
   };
 }
 
-function toClient(timer) {
-  return {
-    id: String(timer._id),
-    name: String(timer.name || 'Timer'),
-    intervalSeconds: Number(timer.intervalSeconds || MIN_TIMER_INTERVAL_SECONDS),
-    responses: Array.isArray(timer.responses) ? timer.responses : [],
-    responseMode: TIMER_RESPONSE_MODES.includes(timer.responseMode) ? timer.responseMode : 'equal',
-    responseWeights: Array.isArray(timer.responseWeights) ? timer.responseWeights : [],
-    enabled: timer.enabled !== false,
-    createdAt: timer.createdAt || null,
-    updatedAt: timer.updatedAt || null
-  };
+function priorityRank(priority) {
+  if (priority === 'high') return 0;
+  if (priority === 'low') return 2;
+  return 1;
+}
+
+function dateMs(value) {
+  if (!value) return 0;
+  const ms = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function effectiveStartDelay(timer, settings) {
+  const globalDelay = Math.max(0, wholeNumber(settings?.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS));
+  const timerDelay = timer?.startDelaySeconds === null || timer?.startDelaySeconds === undefined
+    ? globalDelay
+    : Math.max(0, wholeNumber(timer.startDelaySeconds, globalDelay));
+  return Math.max(globalDelay, timerDelay);
+}
+
+function randomJitterMs(timer) {
+  const jitterSeconds = Math.max(0, wholeNumber(timer?.jitterSeconds, 0));
+  if (!jitterSeconds) return 0;
+  const span = jitterSeconds * 2 + 1;
+  return (Math.floor(Math.random() * span) - jitterSeconds) * 1000;
+}
+
+function calculateNextDueAt(timer, now = Date.now()) {
+  const intervalMs = Math.max(MIN_TIMER_INTERVAL_SECONDS, finiteNumber(timer?.intervalSeconds, MIN_TIMER_INTERVAL_SECONDS)) * 1000;
+  return now + Math.max(MIN_TIMER_INTERVAL_SECONDS * 1000, intervalMs + randomJitterMs(timer));
 }
 
 function chooseResponse(timer) {
@@ -119,14 +209,30 @@ async function renderTimerResponse(template, getRandomChatters) {
   return Array.from(output).slice(0, MAX_TIMER_RESPONSE_LENGTH).join('').trim();
 }
 
-function createChatTimerManager({ channelName, sendMessage, getStreamLive = null, getRandomChatters = null }) {
+function createChatTimerManager({ channelName, sendMessage, getStreamStatus = null, getRandomChatters = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
+  let settings = {
+    globalStartDelaySeconds: DEFAULT_GLOBAL_START_DELAY_SECONDS,
+    minimumSpacingSeconds: DEFAULT_GLOBAL_SPACING_SECONDS,
+    lastTimerMessageAt: null
+  };
   let scheduler = null;
-  let wasLive = false;
+  let checkpointTimer = null;
   let tickBusy = false;
-  const nextDueAt = new Map();
+  let lastSeenStreamId = '';
+  let activityDirty = false;
   const ownResponses = [];
+
+  function streamStatus() {
+    const status = typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {};
+    return {
+      live: status.streamLive !== undefined ? Boolean(status.streamLive) : Boolean(status.live),
+      streamId: String(status.currentStreamId || status.streamId || '').trim(),
+      startedAt: Number(status.twitchStreamStartedAt || status.startedAt || 0) || 0,
+      viewerCount: Math.max(0, wholeNumber(status.currentViewerCount ?? status.viewerCount, 0))
+    };
+  }
 
   function cleanupOwnResponses() {
     const cutoff = Date.now() - OWN_RESPONSE_TTL_MS;
@@ -147,62 +253,205 @@ function createChatTimerManager({ channelName, sendMessage, getStreamLive = null
     return true;
   }
 
-  function resetScheduleFor(timer, now = Date.now()) {
-    const id = String(timer._id);
-    if (timer.enabled === false) {
-      nextDueAt.delete(id);
-      return;
+  async function loadSettings() {
+    const stored = await TimerConfig.findOne({ channelName: normalizedChannel }).lean();
+    if (!stored) {
+      const created = await TimerConfig.findOneAndUpdate(
+        { channelName: normalizedChannel },
+        { $setOnInsert: { channelName: normalizedChannel, ...normalizeSettings({}) } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      ).lean();
+      settings = { ...settings, ...created };
+    } else {
+      settings = { ...settings, ...stored };
     }
-    nextDueAt.set(id, now + Math.max(MIN_TIMER_INTERVAL_SECONDS, Number(timer.intervalSeconds || MIN_TIMER_INTERVAL_SECONDS)) * 1000);
+    return settings;
   }
 
-  function resetAllSchedules(now = Date.now()) {
-    nextDueAt.clear();
-    for (const timer of cache) resetScheduleFor(timer, now);
+  function scheduleForNewStream(timer, status, now = Date.now()) {
+    const streamStartedAt = status.startedAt || now;
+    const notBefore = streamStartedAt + effectiveStartDelay(timer, settings) * 1000;
+    const normalFirstDue = streamStartedAt + Math.max(MIN_TIMER_INTERVAL_SECONDS, finiteNumber(timer.intervalSeconds, MIN_TIMER_INTERVAL_SECONDS)) * 1000 + randomJitterMs(timer);
+    return Math.max(now, notBefore, normalFirstDue);
   }
 
-  async function refreshCache({ preserveSchedules = true } = {}) {
-    const oldSchedule = new Map(nextDueAt);
+  async function persistSchedulePatch(timerId, patch) {
+    await ChatTimer.updateOne({ _id: timerId, channelName: normalizedChannel }, { $set: patch });
+  }
+
+  async function ensureScheduleForCurrentStream(timer, status, now = Date.now()) {
+    if (!status.live || !status.streamId || timer.enabled === false) return timer;
+    const sameStream = String(timer.scheduleStreamId || '') === status.streamId;
+    const persistedDue = dateMs(timer.nextDueAt);
+    if (sameStream && persistedDue > 0) return timer;
+
+    const nextDueAt = new Date(scheduleForNewStream(timer, status, now));
+    const patch = {
+      scheduleStreamId: status.streamId,
+      nextDueAt,
+      messagesSinceLastFire: 0,
+      retryCount: 0,
+      nextRetryAt: null
+    };
+    Object.assign(timer, patch);
+    await persistSchedulePatch(timer._id, patch);
+    return timer;
+  }
+
+  async function refreshCache() {
     cache = await ChatTimer.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
-    if (!preserveSchedules) {
-      resetAllSchedules();
-      return cache;
-    }
-    nextDueAt.clear();
-    for (const timer of cache) {
-      const id = String(timer._id);
-      if (timer.enabled === false) continue;
-      if (oldSchedule.has(id)) nextDueAt.set(id, oldSchedule.get(id));
-      else resetScheduleFor(timer);
+    const status = streamStatus();
+    if (status.live && status.streamId) {
+      for (const timer of cache) await ensureScheduleForCurrentStream(timer, status);
     }
     return cache;
   }
 
-  async function runTimer(timer) {
-    const id = String(timer._id);
-    const selection = chooseResponse(timer);
-    if (!selection.template) {
-      console.warn(`[Timers] ${timer.name} has no selectable response; skipping this interval.`);
-      resetScheduleFor(timer);
+  function toClient(timer) {
+    const status = streamStatus();
+    const now = Date.now();
+    const dueAt = dateMs(timer.nextRetryAt) || dateMs(timer.nextDueAt);
+    const effectiveDelay = effectiveStartDelay(timer, settings);
+    const missingMessages = Math.max(0, wholeNumber(timer.minimumChatMessages, 0) - wholeNumber(timer.messagesSinceLastFire, 0));
+    const missingViewers = Math.max(0, wholeNumber(timer.minimumViewers, 0) - status.viewerCount);
+    const globalSpacingMs = Math.max(0, wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS)) * 1000;
+    const lastTimerMessageMs = dateMs(settings.lastTimerMessageAt);
+    const spacingRemainingMs = lastTimerMessageMs ? Math.max(0, lastTimerMessageMs + globalSpacingMs - now) : 0;
+    const startNotBefore = status.startedAt ? status.startedAt + effectiveDelay * 1000 : 0;
+    const startDelayRemainingMs = status.live && startNotBefore ? Math.max(0, startNotBefore - now) : 0;
+
+    let waitingFor = '';
+    if (!status.live) waitingFor = 'Stream offline';
+    else if (startDelayRemainingMs > 0) waitingFor = 'Stream-start delay';
+    else if (dueAt > now) waitingFor = timer.nextRetryAt ? 'Retry delay' : 'Interval';
+    else if (missingMessages > 0) waitingFor = `${missingMessages} more chat message${missingMessages === 1 ? '' : 's'}`;
+    else if (missingViewers > 0) waitingFor = `${missingViewers} more viewer${missingViewers === 1 ? '' : 's'}`;
+    else if (spacingRemainingMs > 0) waitingFor = 'Global timer spacing';
+
+    return {
+      id: String(timer._id),
+      name: String(timer.name || 'Timer'),
+      intervalSeconds: Number(timer.intervalSeconds || MIN_TIMER_INTERVAL_SECONDS),
+      startDelaySeconds: timer.startDelaySeconds === null || timer.startDelaySeconds === undefined ? null : Number(timer.startDelaySeconds),
+      effectiveStartDelaySeconds: effectiveDelay,
+      minimumChatMessages: wholeNumber(timer.minimumChatMessages, 0),
+      minimumViewers: wholeNumber(timer.minimumViewers, 0),
+      priority: TIMER_PRIORITIES.includes(timer.priority) ? timer.priority : 'normal',
+      jitterSeconds: wholeNumber(timer.jitterSeconds, 0),
+      responses: Array.isArray(timer.responses) ? timer.responses : [],
+      responseMode: TIMER_RESPONSE_MODES.includes(timer.responseMode) ? timer.responseMode : 'equal',
+      responseWeights: Array.isArray(timer.responseWeights) ? timer.responseWeights : [],
+      enabled: timer.enabled !== false,
+      scheduleStreamId: String(timer.scheduleStreamId || ''),
+      lastFiredAt: timer.lastFiredAt || null,
+      nextDueAt: timer.nextDueAt || null,
+      nextRetryAt: timer.nextRetryAt || null,
+      timesFired: wholeNumber(timer.timesFired, 0),
+      lastResponse: String(timer.lastResponse || ''),
+      lastResponseIndex: wholeNumber(timer.lastResponseIndex, -1),
+      messagesSinceLastFire: wholeNumber(timer.messagesSinceLastFire, 0),
+      retryCount: wholeNumber(timer.retryCount, 0),
+      history: Array.isArray(timer.history) ? timer.history.slice(-HISTORY_LIMIT) : [],
+      waitingFor,
+      spacingRemainingMs,
+      startDelayRemainingMs,
+      currentViewerCount: status.viewerCount,
+      createdAt: timer.createdAt || null,
+      updatedAt: timer.updatedAt || null
+    };
+  }
+
+  function isDue(timer, now) {
+    const retryAt = dateMs(timer.nextRetryAt);
+    if (retryAt) return now >= retryAt;
+    const dueAt = dateMs(timer.nextDueAt);
+    return dueAt > 0 && now >= dueAt;
+  }
+
+  function meetsEligibility(timer, status, now) {
+    const streamStartedAt = status.startedAt || now;
+    const startNotBefore = streamStartedAt + effectiveStartDelay(timer, settings) * 1000;
+    if (now < startNotBefore) return false;
+    if (wholeNumber(timer.messagesSinceLastFire, 0) < wholeNumber(timer.minimumChatMessages, 0)) return false;
+    if (status.viewerCount < wholeNumber(timer.minimumViewers, 0)) return false;
+    const spacingMs = Math.max(0, wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS)) * 1000;
+    const lastMessageAt = dateMs(settings.lastTimerMessageAt);
+    if (lastMessageAt && now < lastMessageAt + spacingMs) return false;
+    return true;
+  }
+
+  async function updateSuccessfulFire(timer, selection, rendered, reason = 'scheduled') {
+    const now = new Date();
+    const nextDueAt = new Date(calculateNextDueAt(timer, now.getTime()));
+    const historyEntry = { firedAt: now, responseIndex: selection.index, response: rendered, reason };
+    const currentHistory = Array.isArray(timer.history) ? timer.history : [];
+    const nextHistory = [...currentHistory, historyEntry].slice(-HISTORY_LIMIT);
+    const patch = {
+      lastFiredAt: now,
+      nextDueAt,
+      nextRetryAt: null,
+      retryCount: 0,
+      timesFired: wholeNumber(timer.timesFired, 0) + 1,
+      lastResponse: rendered,
+      lastResponseIndex: selection.index,
+      messagesSinceLastFire: 0,
+      history: nextHistory
+    };
+    Object.assign(timer, patch);
+    settings.lastTimerMessageAt = now;
+    await Promise.all([
+      persistSchedulePatch(timer._id, patch),
+      TimerConfig.updateOne({ channelName: normalizedChannel }, { $set: { lastTimerMessageAt: now } }, { upsert: true })
+    ]);
+    activityDirty = false;
+    console.log(`[Timers] Sent ${timer.name} -> response ${selection.index + 1}/${timer.responses.length} (${selection.mode}); next eligibility ${nextDueAt.toISOString()}.`);
+  }
+
+  async function scheduleFailure(timer, err) {
+    const currentRetryCount = wholeNumber(timer.retryCount, 0);
+    const attemptAt = new Date();
+    if (currentRetryCount < RETRY_DELAYS_MS.length) {
+      const delayMs = RETRY_DELAYS_MS[currentRetryCount];
+      const patch = {
+        lastAttemptAt: attemptAt,
+        retryCount: currentRetryCount + 1,
+        nextRetryAt: new Date(Date.now() + delayMs)
+      };
+      Object.assign(timer, patch);
+      await persistSchedulePatch(timer._id, patch);
+      console.warn(`[Timers] ${timer.name} send failed; retry ${currentRetryCount + 1}/${RETRY_DELAYS_MS.length} in ${Math.round(delayMs / 1000)}s: ${err?.message || err}`);
       return;
     }
 
+    const nextDueAt = new Date(calculateNextDueAt(timer));
+    const patch = {
+      lastAttemptAt: attemptAt,
+      retryCount: 0,
+      nextRetryAt: null,
+      nextDueAt
+    };
+    Object.assign(timer, patch);
+    await persistSchedulePatch(timer._id, patch);
+    console.error(`[Timers] ${timer.name} failed after ${RETRY_DELAYS_MS.length} retries; this occurrence was abandoned. Next regular occurrence is ${nextDueAt.toISOString()}:`, err?.message || err);
+  }
+
+  async function sendSelected(timer, { reason = 'scheduled', affectSchedule = true } = {}) {
+    const selection = chooseResponse(timer);
+    if (!selection.template) throw new Error(`${timer.name} has no selectable response.`);
+    const rendered = await renderTimerResponse(selection.template, getRandomChatters);
+    if (!rendered) throw new Error(`${timer.name} rendered an empty response.`);
+    noteOwnResponse(rendered);
+    await sendMessage(normalizedChannel, rendered);
+    if (affectSchedule) await updateSuccessfulFire(timer, selection, rendered, reason);
+    return { rendered, responseIndex: selection.index, responseMode: selection.mode };
+  }
+
+  async function runScheduledTimer(timer) {
     try {
-      const rendered = await renderTimerResponse(selection.template, getRandomChatters);
-      if (!rendered) {
-        console.warn(`[Timers] ${timer.name} rendered an empty response; skipping this interval.`);
-        resetScheduleFor(timer);
-        return;
-      }
-      noteOwnResponse(rendered);
-      await sendMessage(normalizedChannel, rendered);
-      console.log(`[Timers] Sent ${timer.name} -> response ${selection.index + 1}/${timer.responses.length} (${selection.mode}).`);
+      await persistSchedulePatch(timer._id, { lastAttemptAt: new Date() });
+      await sendSelected(timer, { reason: 'scheduled', affectSchedule: true });
     } catch (err) {
-      console.error(`[Timers] Failed to send ${timer.name}:`, err?.message || err);
-    } finally {
-      const current = cache.find((item) => String(item._id) === id);
-      if (current && current.enabled !== false) resetScheduleFor(current);
-      else nextDueAt.delete(id);
+      await scheduleFailure(timer, err);
     }
   }
 
@@ -210,53 +459,115 @@ function createChatTimerManager({ channelName, sendMessage, getStreamLive = null
     if (tickBusy) return;
     tickBusy = true;
     try {
-      const live = typeof getStreamLive === 'function' ? Boolean(getStreamLive()) : true;
-      if (!live) {
-        if (wasLive) nextDueAt.clear();
-        wasLive = false;
+      const status = streamStatus();
+      if (!status.live || !status.streamId) {
+        lastSeenStreamId = '';
         return;
+      }
+
+      if (status.streamId !== lastSeenStreamId) {
+        lastSeenStreamId = status.streamId;
+        await refreshCache();
       }
 
       const now = Date.now();
-      if (!wasLive) {
-        wasLive = true;
-        resetAllSchedules(now);
-        return;
-      }
+      const candidates = cache
+        .filter((timer) => timer.enabled !== false && isDue(timer, now) && meetsEligibility(timer, status, now))
+        .sort((a, b) => {
+          const p = priorityRank(a.priority) - priorityRank(b.priority);
+          if (p !== 0) return p;
+          const aDue = dateMs(a.nextRetryAt) || dateMs(a.nextDueAt);
+          const bDue = dateMs(b.nextRetryAt) || dateMs(b.nextDueAt);
+          if (aDue !== bDue) return aDue - bDue;
+          return dateMs(a.createdAt) - dateMs(b.createdAt);
+        });
 
-      for (const timer of cache) {
-        if (timer.enabled === false) continue;
-        const id = String(timer._id);
-        const due = nextDueAt.get(id);
-        if (!due) {
-          resetScheduleFor(timer, now);
-          continue;
-        }
-        if (now >= due) {
-          // Move the deadline forward immediately so overlapping scheduler ticks
-          // can never send the same timer twice.
-          nextDueAt.set(id, Number.POSITIVE_INFINITY);
-          await runTimer(timer);
-        }
-      }
+      if (candidates.length) await runScheduledTimer(candidates[0]);
     } finally {
       tickBusy = false;
     }
   }
 
+  async function checkpointActivity() {
+    if (!activityDirty || !cache.length) return;
+    activityDirty = false;
+    try {
+      const operations = cache
+        .filter((timer) => timer.enabled !== false)
+        .map((timer) => ({
+          updateOne: {
+            filter: { _id: timer._id, channelName: normalizedChannel },
+            update: { $set: { messagesSinceLastFire: wholeNumber(timer.messagesSinceLastFire, 0) } }
+          }
+        }));
+      if (operations.length) await ChatTimer.bulkWrite(operations, { ordered: false });
+    } catch (err) {
+      activityDirty = true;
+      console.error('[Timers] Could not checkpoint chat-activity counters:', err?.message || err);
+    }
+  }
+
+  function recordViewerActivity() {
+    const status = streamStatus();
+    if (!status.live || !status.streamId) return;
+    for (const timer of cache) {
+      if (timer.enabled === false || wholeNumber(timer.minimumChatMessages, 0) <= 0) continue;
+      timer.messagesSinceLastFire = wholeNumber(timer.messagesSinceLastFire, 0) + 1;
+    }
+    activityDirty = true;
+  }
+
   async function initialize() {
-    await refreshCache({ preserveSchedules: false });
+    await loadSettings();
+    await refreshCache();
     if (!scheduler) scheduler = setInterval(() => { void tick(); }, SCHEDULER_TICK_MS);
-    console.log(`[Timers] Loaded ${cache.length} timer(s) from MongoDB.`);
+    if (!checkpointTimer) checkpointTimer = setInterval(() => { void checkpointActivity(); }, ACTIVITY_CHECKPOINT_MS);
+    console.log(`[Timers] Loaded ${cache.length} timer(s) from MongoDB. Global start delay ${settings.globalStartDelaySeconds}s; minimum spacing ${settings.minimumSpacingSeconds}s.`);
   }
 
   async function listTimers() {
+    await loadSettings();
     await refreshCache();
     return cache.map(toClient);
   }
 
+  async function getSettings() {
+    await loadSettings();
+    return {
+      globalStartDelaySeconds: wholeNumber(settings.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS),
+      minimumSpacingSeconds: wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS),
+      lastTimerMessageAt: settings.lastTimerMessageAt || null
+    };
+  }
+
+  async function saveSettings(input = {}) {
+    const normalized = normalizeSettings(input);
+    const saved = await TimerConfig.findOneAndUpdate(
+      { channelName: normalizedChannel },
+      { $set: normalized, $setOnInsert: { channelName: normalizedChannel } },
+      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+    ).lean();
+    if (normalized.globalStartDelaySeconds > 0) {
+      const adjusted = await ChatTimer.updateMany(
+        {
+          channelName: normalizedChannel,
+          startDelaySeconds: { $ne: null, $lt: normalized.globalStartDelaySeconds }
+        },
+        { $set: { startDelaySeconds: normalized.globalStartDelaySeconds } }
+      );
+      if (adjusted?.modifiedCount) {
+        console.log(`[Timers] Raised ${adjusted.modifiedCount} per-timer start-delay override(s) to match the new global minimum.`);
+      }
+    }
+    settings = { ...settings, ...saved };
+    await refreshCache();
+    console.log(`[Timers] Updated global settings: start delay ${normalized.globalStartDelaySeconds}s; spacing ${normalized.minimumSpacingSeconds}s.`);
+    return getSettings();
+  }
+
   async function saveTimer(input = {}) {
-    const normalized = normalizeInput(input);
+    await loadSettings();
+    const normalized = normalizeInput(input, settings);
     const id = String(input.id || '').trim();
     let saved;
     if (id) {
@@ -269,17 +580,23 @@ function createChatTimerManager({ channelName, sendMessage, getStreamLive = null
     } else {
       saved = await ChatTimer.create({ channelName: normalizedChannel, ...normalized });
     }
+
     await refreshCache();
     const cached = cache.find((item) => String(item._id) === String(saved._id));
-    if (cached) resetScheduleFor(cached);
+    const status = streamStatus();
+    if (cached && status.live && status.streamId) {
+      const nextDueAt = new Date(scheduleForNewStream(cached, status));
+      const patch = { scheduleStreamId: status.streamId, nextDueAt, retryCount: 0, nextRetryAt: null, messagesSinceLastFire: 0 };
+      Object.assign(cached, patch);
+      await persistSchedulePatch(cached._id, patch);
+    }
     console.log(`[Timers] ${id ? 'Updated' : 'Created'} timer ${normalized.name}.`);
-    return toClient(saved);
+    return toClient(cached || saved.toObject());
   }
 
   async function deleteTimer(id) {
     const deleted = await ChatTimer.findOneAndDelete({ _id: id, channelName: normalizedChannel });
     if (!deleted) throw new Error('Timer was not found.');
-    nextDueAt.delete(String(id));
     await refreshCache();
     console.log(`[Timers] Deleted timer ${deleted.name}.`);
   }
@@ -287,23 +604,72 @@ function createChatTimerManager({ channelName, sendMessage, getStreamLive = null
   async function setEnabled(id, enabled) {
     const saved = await ChatTimer.findOneAndUpdate(
       { _id: id, channelName: normalizedChannel },
-      { $set: { enabled: Boolean(enabled) } },
+      { $set: { enabled: Boolean(enabled), retryCount: 0, nextRetryAt: null } },
       { new: true, runValidators: true }
     );
     if (!saved) throw new Error('Timer was not found.');
     await refreshCache();
     const cached = cache.find((item) => String(item._id) === String(saved._id));
-    if (cached) resetScheduleFor(cached);
+    const status = streamStatus();
+    if (cached && cached.enabled !== false && status.live && status.streamId) {
+      const nextDueAt = new Date(scheduleForNewStream(cached, status));
+      const patch = { scheduleStreamId: status.streamId, nextDueAt, messagesSinceLastFire: 0 };
+      Object.assign(cached, patch);
+      await persistSchedulePatch(cached._id, patch);
+    }
     console.log(`[Timers] ${saved.enabled ? 'Enabled' : 'Disabled'} timer ${saved.name}.`);
-    return toClient(saved);
+    return toClient(cached || saved.toObject());
+  }
+
+  async function findTimerOrThrow(id) {
+    await refreshCache();
+    const timer = cache.find((item) => String(item._id) === String(id));
+    if (!timer) throw new Error('Timer was not found.');
+    return timer;
+  }
+
+  async function previewTimer(id) {
+    const timer = await findTimerOrThrow(id);
+    const selection = chooseResponse(timer);
+    if (!selection.template) throw new Error('Timer has no selectable response.');
+    const rendered = await renderTimerResponse(selection.template, getRandomChatters);
+    return { rendered, responseIndex: selection.index, responseMode: selection.mode };
+  }
+
+  async function testTimer(id) {
+    const timer = await findTimerOrThrow(id);
+    const result = await sendSelected(timer, { reason: 'scheduled', affectSchedule: false });
+    console.log(`[Timers] Test sent for ${timer.name}; schedule and history were not changed.`);
+    return result;
+  }
+
+  async function fireNow(id) {
+    const timer = await findTimerOrThrow(id);
+    const status = streamStatus();
+    if (!status.live || !status.streamId) throw new Error('Fire Now is only available while Qwert is live. Use Test for an offline send check.');
+    const spacingMs = Math.max(0, wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS)) * 1000;
+    const lastMessageAt = dateMs(settings.lastTimerMessageAt);
+    if (lastMessageAt && Date.now() < lastMessageAt + spacingMs) {
+      const remaining = Math.ceil((lastMessageAt + spacingMs - Date.now()) / 1000);
+      throw new Error(`Global timer spacing is active. Try Fire Now again in ${remaining}s.`);
+    }
+    const result = await sendSelected(timer, { reason: 'manual', affectSchedule: true });
+    console.log(`[Timers] Fire Now sent for ${timer.name} and reset its timer schedule.`);
+    return result;
   }
 
   return {
     initialize,
     listTimers,
+    getSettings,
+    saveSettings,
     saveTimer,
     deleteTimer,
     setEnabled,
+    previewTimer,
+    testTimer,
+    fireNow,
+    recordViewerActivity,
     consumeOwnResponse,
     refreshCache
   };
@@ -315,6 +681,14 @@ module.exports = {
   MAX_TIMER_INTERVAL_SECONDS,
   MAX_TIMER_RESPONSES,
   MAX_TIMER_RESPONSE_LENGTH,
+  MAX_START_DELAY_SECONDS,
+  MAX_JITTER_SECONDS,
+  MAX_MINIMUM_CHAT_MESSAGES,
+  MAX_MINIMUM_VIEWERS,
+  MAX_GLOBAL_SPACING_SECONDS,
+  DEFAULT_GLOBAL_START_DELAY_SECONDS,
+  DEFAULT_GLOBAL_SPACING_SECONDS,
   TIMER_RESPONSE_MODES,
+  TIMER_PRIORITIES,
   createChatTimerManager
 };

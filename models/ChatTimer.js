@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const timerHistorySchema = new mongoose.Schema({
+  firedAt: { type: Date, required: true },
+  responseIndex: { type: Number, default: -1 },
+  response: { type: String, default: '' },
+  reason: { type: String, enum: ['scheduled', 'manual'], default: 'scheduled' }
+}, { _id: false });
+
 const chatTimerSchema = new mongoose.Schema({
   channelName: {
     type: String,
@@ -18,6 +25,35 @@ const chatTimerSchema = new mongoose.Schema({
     type: Number,
     required: true,
     min: 30,
+    max: 86400
+  },
+  startDelaySeconds: {
+    type: Number,
+    default: null,
+    min: 0,
+    max: 86400
+  },
+  minimumChatMessages: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100000
+  },
+  minimumViewers: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 1000000
+  },
+  priority: {
+    type: String,
+    enum: ['high', 'normal', 'low'],
+    default: 'normal'
+  },
+  jitterSeconds: {
+    type: Number,
+    default: 0,
+    min: 0,
     max: 86400
   },
   responses: {
@@ -42,7 +78,18 @@ const chatTimerSchema = new mongoose.Schema({
   enabled: {
     type: Boolean,
     default: true
-  }
+  },
+  scheduleStreamId: { type: String, default: '' },
+  lastFiredAt: { type: Date, default: null },
+  nextDueAt: { type: Date, default: null },
+  timesFired: { type: Number, default: 0, min: 0 },
+  lastResponse: { type: String, default: '' },
+  lastResponseIndex: { type: Number, default: -1 },
+  messagesSinceLastFire: { type: Number, default: 0, min: 0 },
+  lastAttemptAt: { type: Date, default: null },
+  retryCount: { type: Number, default: 0, min: 0 },
+  nextRetryAt: { type: Date, default: null },
+  history: { type: [timerHistorySchema], default: [] }
 }, { timestamps: true });
 
 chatTimerSchema.index({ channelName: 1, name: 1 });

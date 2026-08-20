@@ -1,4 +1,10 @@
-const { getRecentStreamRecaps, saveStreamRecap, clearStreamRecapsByChannel } = require('./streamRecapHistory');
+const {
+  getRecentStreamRecaps,
+  saveStreamRecap,
+  getActiveRecapState,
+  saveActiveRecapState,
+  clearStreamRecapsByChannel
+} = require('./streamRecapHistory');
 const { getStreamLore } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX } = require('./recapGenerator');
 
@@ -8,6 +14,7 @@ const RECAP_FAILURE_RETRY_DELAY = 5 * 60 * 1000;
 const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
+const ACTIVE_STATE_CHECKPOINT_INTERVAL = 30 * 1000;
 
 function formatCountdown(milliseconds) {
   const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
@@ -29,6 +36,7 @@ function createRecapManager({
   let currentStreamTitle = '';
   let currentStreamCategory = '';
   let currentStreamGameId = '';
+  let currentViewerCount = 0;
   let currentStreamId = '';
   let recapMessages = [];
   let messageSequence = 0;
@@ -46,6 +54,10 @@ function createRecapManager({
   let recapTimer = null;
   let streamPollTimer = null;
   let tokenValidationTimer = null;
+  let activeStateCheckpointTimer = null;
+  let activeStateDirty = false;
+  let activeStateSaveInProgress = false;
+  let activeStateSavePromise = null;
   let lastRecapCommandUse = 0;
 
   function addStreamContext({ title = '', category = '', gameId = '' }) {
@@ -67,6 +79,7 @@ function createRecapManager({
 
     contextSequence++;
     streamContexts.push({ id: contextSequence, timestamp: Date.now(), ...item });
+    activeStateDirty = true;
     console.log('[Recap] Stream context recorded:', {
       title: item.title || 'Unknown',
       category: item.category || 'Unknown'
@@ -82,6 +95,7 @@ function createRecapManager({
     const newTitle = String(status?.title || '').trim();
     const newCategory = String(status?.category || '').trim();
     const newGameId = String(status?.gameId || '').trim();
+    currentViewerCount = Math.max(0, Number(status?.viewerCount || 0) || 0);
 
     const changed =
       newTitle !== currentStreamTitle ||
@@ -151,7 +165,8 @@ function createRecapManager({
       startedAt: stream?.started_at || null,
       title: stream?.title || '',
       category: stream?.game_name || '',
-      gameId: stream?.game_id || ''
+      gameId: stream?.game_id || '',
+      viewerCount: Number(stream?.viewer_count || 0) || 0
     };
   }
 
@@ -171,6 +186,96 @@ function createRecapManager({
         return;
       }
       throw err;
+    }
+  }
+
+
+  function buildActiveState() {
+    return {
+      recapMessages,
+      messageSequence,
+      streamContexts,
+      contextSequence,
+      twitchEvents,
+      eventSequence,
+      firstRecapSent,
+      streamSessionStartedAt,
+      twitchStreamStartedAt,
+      nextRecapAt,
+      recapPaused,
+      pausedRemainingMs
+    };
+  }
+
+  async function persistActiveState({ force = false } = {}) {
+    if (!currentStreamId || !streamLive) return;
+    if (!force && !activeStateDirty) return;
+    if (activeStateSaveInProgress) {
+      activeStateDirty = true;
+      return;
+    }
+
+    activeStateSaveInProgress = true;
+    activeStateDirty = false;
+    const streamIdAtSave = currentStreamId;
+    const stateAtSave = buildActiveState();
+    activeStateSavePromise = saveActiveRecapState({
+      streamId: streamIdAtSave,
+      channelName,
+      startedAt: twitchStreamStartedAt || streamSessionStartedAt || null,
+      state: stateAtSave
+    });
+    try {
+      await activeStateSavePromise;
+    } catch (err) {
+      activeStateDirty = true;
+      console.error('[Recap Persistence] Could not checkpoint active recap window:', err.message || err);
+    } finally {
+      activeStateSavePromise = null;
+      activeStateSaveInProgress = false;
+    }
+  }
+
+  function markActiveStateDirty() {
+    if (streamLive && currentStreamId) activeStateDirty = true;
+  }
+
+  async function restoreActiveStateIfAvailable(status) {
+    const streamId = String(status?.streamId || '').trim();
+    if (!streamId) return false;
+    try {
+      const saved = await getActiveRecapState({ streamId });
+      if (!saved) return false;
+
+      recapMessages = Array.isArray(saved.recapMessages) ? saved.recapMessages : [];
+      messageSequence = Math.max(Number(saved.messageSequence || 0), recapMessages.at(-1)?.id || 0);
+      streamContexts = Array.isArray(saved.streamContexts) ? saved.streamContexts : [];
+      contextSequence = Math.max(Number(saved.contextSequence || 0), streamContexts.at(-1)?.id || 0);
+      twitchEvents = Array.isArray(saved.twitchEvents) ? saved.twitchEvents : [];
+      eventSequence = Math.max(Number(saved.eventSequence || 0), twitchEvents.at(-1)?.id || 0);
+      firstRecapSent = Boolean(saved.firstRecapSent);
+      recapInProgress = false;
+      recapPaused = Boolean(saved.recapPaused);
+      pausedRemainingMs = Math.max(0, Number(saved.pausedRemainingMs || 0));
+      streamSessionStartedAt = Number(saved.streamSessionStartedAt || 0) || Date.now();
+      twitchStreamStartedAt = Number(saved.twitchStreamStartedAt || 0) || twitchStreamStartedAt || Date.now();
+      nextRecapAt = Number(saved.nextRecapAt || 0);
+
+      activeStateDirty = false;
+      if (!streamContexts.length) {
+        addStreamContext({ title: currentStreamTitle, category: currentStreamCategory, gameId: currentStreamGameId });
+      }
+
+      if (!recapPaused) {
+        if (!nextRecapAt) nextRecapAt = Date.now() + (firstRecapSent ? RECURRING_RECAP_DELAY : FIRST_RECAP_DELAY);
+        scheduleRecapAt(Math.max(Date.now() + 1000, nextRecapAt));
+      }
+
+      console.log(`[Recap Persistence] Restored active recap window for stream ${streamId}: ${recapMessages.length} message(s), ${twitchEvents.length} event(s), next recap ${recapPaused ? 'paused' : new Date(nextRecapAt).toISOString()}.`);
+      return true;
+    } catch (err) {
+      console.error('[Recap Persistence] Could not restore active recap window; starting fresh:', err.message || err);
+      return false;
     }
   }
 
@@ -194,7 +299,7 @@ function createRecapManager({
     }, delay);
   }
 
-  function startStreamSession(status, alreadyLiveAtStartup = false) {
+  async function startStreamSession(status, alreadyLiveAtStartup = false) {
     clearRecapTimer();
     streamLive = true;
     recapMessages = [];
@@ -212,6 +317,7 @@ function createRecapManager({
     currentStreamTitle = String(status?.title || '').trim();
     currentStreamCategory = String(status?.category || '').trim();
     currentStreamGameId = String(status?.gameId || '').trim();
+    currentViewerCount = Math.max(0, Number(status?.viewerCount || 0) || 0);
 
     if (status?.startedAt) {
       const parsed = Date.parse(status.startedAt);
@@ -230,28 +336,37 @@ function createRecapManager({
       streamSessionStartedAt = Date.now();
     }
 
-    addStreamContext({
-      title: currentStreamTitle,
-      category: currentStreamCategory,
-      gameId: currentStreamGameId
-    });
+    const restored = alreadyLiveAtStartup ? await restoreActiveStateIfAvailable(status) : false;
+    if (!restored) {
+      addStreamContext({
+        title: currentStreamTitle,
+        category: currentStreamCategory,
+        gameId: currentStreamGameId
+      });
 
-    nextRecapAt = streamSessionStartedAt + FIRST_RECAP_DELAY;
-    scheduleRecapAt(nextRecapAt);
+      nextRecapAt = streamSessionStartedAt + FIRST_RECAP_DELAY;
+      scheduleRecapAt(nextRecapAt);
+      markActiveStateDirty();
+      await persistActiveState({ force: true });
+    }
 
-    console.log('[Recap] Qwert is LIVE. Automatic recap session started.');
+    console.log(`[Recap] Qwert is LIVE. Automatic recap session ${restored ? 'restored from MongoDB' : 'started'}.`);
     console.log('[Recap] Current stream title:', currentStreamTitle || 'Unknown');
     console.log('[Recap] Current category:', currentStreamCategory || 'Unknown');
-    console.log('[Recap] First recap will send after 60 minutes.');
+    console.log(restored ? '[Recap Persistence] Existing recap cadence preserved across restart.' : '[Recap] First recap will send after 60 minutes.');
   }
 
-  function endStreamSession() {
+  async function endStreamSession() {
     clearRecapTimer();
+    if (activeStateSavePromise) {
+      try { await activeStateSavePromise; } catch {}
+    }
     streamLive = false;
     currentStreamId = '';
     currentStreamTitle = '';
     currentStreamCategory = '';
     currentStreamGameId = '';
+    currentViewerCount = 0;
     recapMessages = [];
     messageSequence = 0;
     streamContexts = [];
@@ -265,6 +380,7 @@ function createRecapManager({
     streamSessionStartedAt = 0;
     twitchStreamStartedAt = 0;
     nextRecapAt = 0;
+    activeStateDirty = false;
     clearStreamRecapsByChannel(channelName)
       .then((result) => console.log(`[Recap] Cleared ${result?.deletedCount || 0} stored stream recap session(s) from MongoDB.`))
       .catch((err) => console.error('[Recap] Could not clear stored stream recap history after stream end:', err.message || err));
@@ -277,7 +393,7 @@ function createRecapManager({
 
       if (!streamStateInitialized) {
         streamStateInitialized = true;
-        if (status.live) startStreamSession(status, true);
+        if (status.live) await startStreamSession(status, true);
         else {
           streamLive = false;
           clearStreamRecapsByChannel(channelName)
@@ -291,12 +407,12 @@ function createRecapManager({
       }
 
       if (status.live && !streamLive) {
-        startStreamSession(status, false);
+        await startStreamSession(status, false);
         return;
       }
 
       if (!status.live && streamLive) {
-        endStreamSession();
+        await endStreamSession();
         return;
       }
 
@@ -325,6 +441,8 @@ function createRecapManager({
     pausedRemainingMs = nextRecapAt ? Math.max(0, nextRecapAt - Date.now()) : 0;
     recapPaused = true;
     clearRecapTimer();
+    markActiveStateDirty();
+    await persistActiveState({ force: true });
 
     console.log(`[Recap] Paused by ${displayName}.`);
     console.log(`[Recap] ${recapMessages.length} messages preserved.`);
@@ -360,6 +478,8 @@ function createRecapManager({
     });
 
     scheduleRecapAt(nextRecapAt);
+    markActiveStateDirty();
+    await persistActiveState({ force: true });
     console.log(`[Recap] Resumed by ${displayName}. Next recap in ${formatCountdown(resumeDelay)}.`);
 
     if (announce) {
@@ -382,6 +502,7 @@ function createRecapManager({
       text
     });
 
+    markActiveStateDirty();
     console.log(`[Recap] Verified Twitch event recorded: ${text}`);
   }
 
@@ -396,6 +517,7 @@ function createRecapManager({
       timestamp: Date.now(),
       text: `${displayName}: ${text}`
     });
+    markActiveStateDirty();
   }
 
   function recordModeratorAnnouncement({ displayName, rawMessage, color = '' }) {
@@ -414,22 +536,26 @@ function createRecapManager({
       text: `[MODERATOR ANNOUNCEMENT${colorLabel} by ${moderator}]: ${text}`
     });
 
+    markActiveStateDirty();
     console.log(`[Recap] Moderator announcement recorded from ${moderator}: ${text}`);
   }
 
   function discardMessageSnapshot(snapshotMaxId) {
     if (snapshotMaxId === null) return;
     recapMessages = recapMessages.filter((item) => item.id > snapshotMaxId);
+    markActiveStateDirty();
   }
 
   function discardEventSnapshot(snapshotMaxEventId) {
     if (snapshotMaxEventId === null) return;
     twitchEvents = twitchEvents.filter((item) => item.id > snapshotMaxEventId);
+    markActiveStateDirty();
   }
 
   function discardContextSnapshot(snapshotMaxContextId) {
     if (snapshotMaxContextId === null) return;
     streamContexts = streamContexts.filter((item) => item.id > snapshotMaxContextId);
+    markActiveStateDirty();
 
     if (streamContexts.length === 0 && streamLive) {
       addStreamContext({
@@ -526,6 +652,8 @@ function createRecapManager({
       recapInProgress = false;
       nextRecapAt = Date.now() + RECURRING_RECAP_DELAY;
       scheduleRecapAt(nextRecapAt);
+      markActiveStateDirty();
+      await persistActiveState({ force: true });
       console.log('[Recap] Next automatic recap scheduled in 60 minutes.');
     } catch (err) {
       console.error('[Recap] Automatic recap failed:', err);
@@ -546,6 +674,8 @@ function createRecapManager({
 
           nextRecapAt = Date.now() + RECURRING_RECAP_DELAY;
           scheduleRecapAt(nextRecapAt);
+          markActiveStateDirty();
+          await persistActiveState({ force: true });
         }
         return;
       }
@@ -553,6 +683,8 @@ function createRecapManager({
       recapInProgress = false;
       nextRecapAt = Date.now() + RECAP_FAILURE_RETRY_DELAY;
       scheduleRecapAt(nextRecapAt);
+      markActiveStateDirty();
+      await persistActiveState({ force: true });
       console.log('[Recap] Retrying automatic recap in 5 minutes.');
     }
   }
@@ -599,6 +731,7 @@ function createRecapManager({
       currentStreamTitle: currentStreamTitle || null,
       currentStreamCategory: currentStreamCategory || null,
       currentStreamGameId: currentStreamGameId || null,
+      currentViewerCount,
       recapPaused,
       loggingMessages: streamStateInitialized && streamLive && !recapPaused,
       recapInProgress,
@@ -651,6 +784,10 @@ function createRecapManager({
     await checkStreamStatus();
 
     streamPollTimer = setInterval(checkStreamStatus, STREAM_STATUS_POLL_INTERVAL);
+    if (!activeStateCheckpointTimer) {
+      activeStateCheckpointTimer = setInterval(() => { void persistActiveState(); }, ACTIVE_STATE_CHECKPOINT_INTERVAL);
+    }
+
     tokenValidationTimer = setInterval(() => {
       validateStoredToken().catch((err) => {
         console.error('[OAuth Bot] Recap stream-status bot token validation failed:', err.message || err);
@@ -660,6 +797,7 @@ function createRecapManager({
     console.log('[Recap] Automatic stream detection enabled.');
     console.log('[Recap] Twitch stream status/title/category will be checked every 30 seconds.');
     console.log('[Recap] Automatic recap cadence: every 60 minutes.');
+    console.log('[Recap Persistence] Active recap window checkpoints every 30 seconds while changed.');
   }
 
   return {

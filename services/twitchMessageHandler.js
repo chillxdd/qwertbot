@@ -129,6 +129,9 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       return;
     }
 
+    // Count real viewer chat once for timer activity gates. Bot/system messages were filtered above.
+    chatTimerManager?.recordViewerActivity?.();
+
     if (botPersonalityManager) {
       try {
         const personalityResult = await botPersonalityManager.handleTaggedQuestion({ rawMessage, displayName, tags });

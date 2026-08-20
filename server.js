@@ -193,7 +193,7 @@ customCommandManager = createCustomCommandManager({
 chatTimerManager = createChatTimerManager({
   channelName,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
-  getStreamLive: () => Boolean(recapManager?.getStatus?.().streamLive),
+  getStreamStatus: () => recapManager?.getStatus?.() || {},
   getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
 });
 

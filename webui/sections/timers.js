@@ -4,8 +4,14 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const maxIntervalSeconds = Number(config.maxIntervalSeconds || 86400);
   const maxResponses = Number(config.maxResponses || 25);
   const maxResponseLength = Number(config.maxResponseLength || 500);
+  const maxStartDelaySeconds = Number(config.maxStartDelaySeconds || 86400);
+  const maxJitterSeconds = Number(config.maxJitterSeconds || 86400);
+  const maxMinimumChatMessages = Number(config.maxMinimumChatMessages || 100000);
+  const maxMinimumViewers = Number(config.maxMinimumViewers || 1000000);
+  const maxGlobalSpacingSeconds = Number(config.maxGlobalSpacingSeconds || 3600);
 
   let timers = [];
+  let settings = { globalStartDelaySeconds: 0, minimumSpacingSeconds: 60 };
   let editingId = null;
   let loaded = false;
 
@@ -16,34 +22,39 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const editorEl = $('timerEditor');
   const responsesEl = $('timerResponses');
   const msgEl = $('timersMsg');
+  const settingsMsgEl = $('timerSettingsMsg');
   const editorMsgEl = $('timerEditorMsg');
+  const scheduleMsgEl = $('timerScheduleMsg');
+  const activityMsgEl = $('timerActivityMsg');
   const responseMsgEl = $('timerResponseMsg');
 
-  function setMessage(text, isError = false) {
-    msgEl.textContent = text || '';
-    msgEl.classList.toggle('bad', Boolean(isError));
+  function setMessage(el, text, isError = false) {
+    el.textContent = text || '';
+    el.classList.toggle('bad', Boolean(isError));
   }
 
-  function setEditorMessage(text, isError = false) {
-    editorMsgEl.textContent = text || '';
-    editorMsgEl.classList.toggle('bad', Boolean(isError));
-  }
-
-  function setResponseMessage(text, isError = false) {
-    responseMsgEl.textContent = text || '';
-    responseMsgEl.classList.toggle('bad', Boolean(isError));
-  }
+  const setListMessage = (text, isError = false) => setMessage(msgEl, text, isError);
+  const setSettingsMessage = (text, isError = false) => setMessage(settingsMsgEl, text, isError);
+  const setEditorMessage = (text, isError = false) => setMessage(editorMsgEl, text, isError);
+  const setScheduleMessage = (text, isError = false) => setMessage(scheduleMsgEl, text, isError);
+  const setActivityMessage = (text, isError = false) => setMessage(activityMsgEl, text, isError);
+  const setResponseMessage = (text, isError = false) => setMessage(responseMsgEl, text, isError);
 
   function formatInterval(seconds) {
-    const total = Number(seconds || 0);
+    const total = Math.max(0, Number(seconds || 0));
     if (total >= 3600 && total % 3600 === 0) return `${total / 3600}h`;
     if (total >= 60 && total % 60 === 0) return `${total / 60}m`;
     return `${total}s`;
   }
 
-  function modeLabel(mode) {
-    return mode === 'weighted' ? 'Specified Weight' : 'Equal Odds';
+  function formatDate(value) {
+    if (!value) return 'Never';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
   }
+
+  function modeLabel(mode) { return mode === 'weighted' ? 'Specified Weight' : 'Equal Odds'; }
+  function priorityLabel(value) { return value === 'high' ? 'High' : value === 'low' ? 'Low' : 'Normal'; }
 
   function selectedSort() {
     const value = $('timerSort')?.value || 'created_asc';
@@ -69,11 +80,20 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       else if (sort === 'interval_desc') result = Number(b?.intervalSeconds || 0) - Number(a?.intervalSeconds || 0);
       else if (sort === 'created_desc') result = timerCreatedMs(b) - timerCreatedMs(a);
       else result = timerCreatedMs(a) - timerCreatedMs(b);
-
       if (result === 0) result = compareTimerNames(a, b);
       if (result === 0) result = String(a?.id || '').localeCompare(String(b?.id || ''));
       return result;
     });
+  }
+
+  function renderHistory(timer) {
+    const history = Array.isArray(timer.history) ? [...timer.history].reverse() : [];
+    if (!history.length) return '<div class="detail">No successful fires recorded yet.</div>';
+    return history.slice(0, 10).map((entry) => {
+      const responseNumber = Number(entry.responseIndex) >= 0 ? `response #${Number(entry.responseIndex) + 1}` : 'response';
+      const reason = entry.reason === 'manual' ? 'manual Fire Now' : 'scheduled';
+      return `<div class="detail">${esc(formatDate(entry.firedAt))} — ${esc(responseNumber)} · ${esc(reason)}</div>`;
+    }).join('');
   }
 
   function renderList() {
@@ -85,21 +105,41 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
 
     for (const timer of sortedTimers()) {
       const card = document.createElement('div');
-      card.className = 'custom-command-card';
+      card.className = 'custom-command-card timer-card';
       const responseCount = Array.isArray(timer.responses) ? timer.responses.length : 0;
+      const jitter = Number(timer.jitterSeconds || 0) > 0 ? ` · ±${esc(formatInterval(timer.jitterSeconds))} jitter` : '';
+      const activity = [];
+      if (Number(timer.minimumChatMessages || 0) > 0) activity.push(`${timer.messagesSinceLastFire || 0}/${timer.minimumChatMessages} chat messages`);
+      if (Number(timer.minimumViewers || 0) > 0) activity.push(`${timer.currentViewerCount || 0}/${timer.minimumViewers} viewers`);
+      const activityText = activity.length ? activity.join(' · ') : 'No activity minimums';
+      const overrideText = timer.startDelaySeconds === null ? `Global start delay (${formatInterval(timer.effectiveStartDelaySeconds || 0)})` : `Start delay ${formatInterval(timer.startDelaySeconds)}`;
+      const nextLabel = timer.nextRetryAt ? 'Next retry' : 'Next eligible time';
+      const waiting = timer.waitingFor ? ` · Waiting for: ${timer.waitingFor}` : '';
+
       card.innerHTML = `
         <div class="custom-command-card-main">
           <div class="custom-command-title-row">
             <strong class="custom-command-name">${esc(timer.name || 'Timer')}</strong>
             <span class="custom-command-state ${timer.enabled ? 'enabled' : 'disabled'}">${timer.enabled ? 'Enabled' : 'Disabled'}</span>
           </div>
-          <div class="detail">Every ${esc(formatInterval(timer.intervalSeconds))} while live · ${responseCount} response${responseCount === 1 ? '' : 's'} · ${esc(modeLabel(timer.responseMode))}</div>
+          <div class="detail">Every ${esc(formatInterval(timer.intervalSeconds))}${jitter} · ${esc(priorityLabel(timer.priority))} priority · ${responseCount} response${responseCount === 1 ? '' : 's'} · ${esc(modeLabel(timer.responseMode))}</div>
+          <div class="detail">${esc(overrideText)} · ${esc(activityText)}</div>
+          <div class="detail">Last fired: ${esc(formatDate(timer.lastFiredAt))} · ${esc(nextLabel)}: ${esc(formatDate(timer.nextRetryAt || timer.nextDueAt))}${esc(waiting)}</div>
+          <div class="detail">Times fired: ${Number(timer.timesFired || 0)}${timer.lastResponse ? ` · Last response: ${esc(timer.lastResponse)}` : ''}</div>
+          <details class="timer-history"><summary>Recent fire history</summary>${renderHistory(timer)}</details>
         </div>
-        <div class="custom-command-actions">
+        <div class="custom-command-actions timer-card-actions">
+          <button class="secondary timer-preview-btn" type="button">Preview</button>
+          <button class="secondary timer-test-btn" type="button">Test</button>
+          <button class="secondary timer-fire-btn" type="button">Fire Now</button>
           <button class="secondary timer-edit-btn" type="button">Edit</button>
           <button class="secondary timer-toggle-btn" type="button">${timer.enabled ? 'Disable' : 'Enable'}</button>
           <button class="danger timer-delete-btn" type="button">Delete</button>
         </div>`;
+
+      card.querySelector('.timer-preview-btn').onclick = () => previewTimer(timer);
+      card.querySelector('.timer-test-btn').onclick = () => testTimer(timer);
+      card.querySelector('.timer-fire-btn').onclick = () => fireNow(timer);
       card.querySelector('.timer-edit-btn').onclick = () => openEditor(timer);
       card.querySelector('.timer-toggle-btn').onclick = () => toggleTimer(timer);
       card.querySelector('.timer-delete-btn').onclick = () => deleteTimer(timer);
@@ -107,17 +147,50 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     }
   }
 
+  function applySettingsToUi() {
+    $('timerGlobalStartDelay').value = String(Number(settings.globalStartDelaySeconds || 0));
+    $('timerGlobalSpacing').value = String(Number(settings.minimumSpacingSeconds ?? 60));
+    $('timerStartDelay').min = String(Number(settings.globalStartDelaySeconds || 0));
+  }
+
   async function loadTimers() {
-    setMessage('Loading timers...');
+    setListMessage('Loading timers...');
     try {
       const d = await postJson('/timers/list', {});
       if (!d.success) throw new Error(d.error || 'Could not load timers.');
       timers = Array.isArray(d.timers) ? d.timers : [];
+      settings = { ...settings, ...(d.settings || {}) };
       loaded = true;
+      applySettingsToUi();
       renderList();
-      setMessage(`${timers.length} timer${timers.length === 1 ? '' : 's'} loaded.`);
+      setListMessage(`${timers.length} timer${timers.length === 1 ? '' : 's'} loaded.`);
     } catch (err) {
-      setMessage(err.message || 'Could not load timers.', true);
+      setListMessage(err.message || 'Could not load timers.', true);
+    }
+  }
+
+  async function saveSettings() {
+    setSettingsMessage('');
+    const globalStartDelaySeconds = Number($('timerGlobalStartDelay').value);
+    const minimumSpacingSeconds = Number($('timerGlobalSpacing').value);
+    if (!Number.isInteger(globalStartDelaySeconds) || globalStartDelaySeconds < 0 || globalStartDelaySeconds > maxStartDelaySeconds) {
+      return setSettingsMessage(`Global stream-start delay must be a whole number between 0 and ${maxStartDelaySeconds} seconds.`, true);
+    }
+    if (!Number.isInteger(minimumSpacingSeconds) || minimumSpacingSeconds < 0 || minimumSpacingSeconds > maxGlobalSpacingSeconds) {
+      return setSettingsMessage(`Minimum timer spacing must be a whole number between 0 and ${maxGlobalSpacingSeconds} seconds.`, true);
+    }
+    $('saveTimerSettingsBtn').disabled = true;
+    try {
+      const d = await postJson('/timers/settings', { globalStartDelaySeconds, minimumSpacingSeconds });
+      if (!d.success) throw new Error(d.error || 'Could not save timer settings.');
+      settings = { ...settings, ...(d.settings || {}) };
+      applySettingsToUi();
+      setSettingsMessage('Timer settings saved.');
+      await loadTimers();
+    } catch (err) {
+      setSettingsMessage(err.message || 'Could not save timer settings.', true);
+    } finally {
+      $('saveTimerSettingsBtn').disabled = false;
     }
   }
 
@@ -142,10 +215,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     weightInput.value = Number(weight) > 0 ? Number(weight) : 1;
     const updateCount = () => { count.textContent = `${Array.from(input.value).length}/${maxResponseLength}`; };
     input.oninput = updateCount;
-    row.querySelector('.timer-remove-response').onclick = () => {
-      row.remove();
-      syncResponseMode();
-    };
+    row.querySelector('.timer-remove-response').onclick = () => { row.remove(); syncResponseMode(); };
     updateCount();
     responsesEl.appendChild(row);
     syncResponseMode();
@@ -163,14 +233,22 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     editingId = null;
     $('timerEditorTitle').textContent = 'Add Timer';
     $('timerName').value = '';
-    $('timerInterval').value = '300';
+    $('timerInterval').value = '900';
+    $('timerStartDelay').value = '';
+    $('timerJitter').value = '0';
+    $('timerPriority').value = 'normal';
+    $('timerMinimumMessages').value = '0';
+    $('timerMinimumViewers').value = '0';
     $('timerResponseMode').value = 'equal';
     $('timerEnabled').checked = true;
     responsesEl.innerHTML = '';
     makeResponseRow();
     setEditorMessage('');
+    setScheduleMessage('');
+    setActivityMessage('');
     setResponseMessage('');
     syncResponseMode();
+    applySettingsToUi();
   }
 
   function openEditor(timer = null) {
@@ -179,7 +257,12 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       editingId = timer.id;
       $('timerEditorTitle').textContent = 'Edit Timer';
       $('timerName').value = timer.name || '';
-      $('timerInterval').value = String(timer.intervalSeconds || 300);
+      $('timerInterval').value = String(timer.intervalSeconds || 900);
+      $('timerStartDelay').value = timer.startDelaySeconds === null || timer.startDelaySeconds === undefined ? '' : String(timer.startDelaySeconds);
+      $('timerJitter').value = String(timer.jitterSeconds || 0);
+      $('timerPriority').value = ['high', 'normal', 'low'].includes(timer.priority) ? timer.priority : 'normal';
+      $('timerMinimumMessages').value = String(timer.minimumChatMessages || 0);
+      $('timerMinimumViewers').value = String(timer.minimumViewers || 0);
       $('timerResponseMode').value = timer.responseMode === 'weighted' ? 'weighted' : 'equal';
       $('timerEnabled').checked = timer.enabled !== false;
       responsesEl.innerHTML = '';
@@ -205,6 +288,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
 
   async function saveTimer() {
     setEditorMessage('');
+    setScheduleMessage('');
+    setActivityMessage('');
     setResponseMessage('');
 
     const name = $('timerName').value.trim();
@@ -212,8 +297,28 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     if (name.length > maxTimerNameLength) return setEditorMessage(`Timer Name can contain at most ${maxTimerNameLength} characters.`, true);
 
     const intervalSeconds = Number($('timerInterval').value);
+    const startDelayRaw = $('timerStartDelay').value.trim();
+    const startDelaySeconds = startDelayRaw === '' ? null : Number(startDelayRaw);
+    const jitterSeconds = Number($('timerJitter').value);
+    const priority = $('timerPriority').value;
+
     if (!Number.isFinite(intervalSeconds) || intervalSeconds < minIntervalSeconds || intervalSeconds > maxIntervalSeconds) {
-      return setEditorMessage(`Interval must be between ${minIntervalSeconds} and ${maxIntervalSeconds} seconds.`, true);
+      return setScheduleMessage(`Interval must be between ${minIntervalSeconds} and ${maxIntervalSeconds} seconds.`, true);
+    }
+    if (startDelaySeconds !== null && (!Number.isInteger(startDelaySeconds) || startDelaySeconds < Number(settings.globalStartDelaySeconds || 0) || startDelaySeconds > maxStartDelaySeconds)) {
+      return setScheduleMessage(`Per-timer start delay must be blank or a whole number from the global delay (${settings.globalStartDelaySeconds || 0}s) through ${maxStartDelaySeconds}s.`, true);
+    }
+    if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > maxJitterSeconds) {
+      return setScheduleMessage(`Random timing variation must be a whole number between 0 and ${maxJitterSeconds} seconds.`, true);
+    }
+
+    const minimumChatMessages = Number($('timerMinimumMessages').value);
+    const minimumViewers = Number($('timerMinimumViewers').value);
+    if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > maxMinimumChatMessages) {
+      return setActivityMessage(`Minimum chat messages must be a whole number between 0 and ${maxMinimumChatMessages}.`, true);
+    }
+    if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > maxMinimumViewers) {
+      return setActivityMessage(`Minimum viewers must be a whole number between 0 and ${maxMinimumViewers}.`, true);
     }
 
     const rows = collectResponses();
@@ -233,6 +338,11 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
         id: editingId,
         name,
         intervalSeconds,
+        startDelaySeconds,
+        jitterSeconds,
+        priority,
+        minimumChatMessages,
+        minimumViewers,
         responses: nonblank.map((row) => row.response),
         responseMode,
         responseWeights: nonblank.map((row) => responseMode === 'weighted' ? row.weight : 1),
@@ -241,7 +351,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       if (!d.success) throw new Error(d.error || 'Could not save timer.');
       closeEditor();
       await loadTimers();
-      setMessage(`Saved ${d.timer?.name || 'timer'}.`);
+      setListMessage(`Saved ${d.timer?.name || 'timer'}.`);
     } catch (err) {
       setEditorMessage(err.message || 'Could not save timer.', true);
     } finally {
@@ -255,7 +365,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       if (!d.success) throw new Error(d.error || 'Could not update timer.');
       await loadTimers();
     } catch (err) {
-      setMessage(err.message || 'Could not update timer.', true);
+      setListMessage(err.message || 'Could not update timer.', true);
     }
   }
 
@@ -267,7 +377,41 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       if (editingId === timer.id) closeEditor();
       await loadTimers();
     } catch (err) {
-      setMessage(err.message || 'Could not delete timer.', true);
+      setListMessage(err.message || 'Could not delete timer.', true);
+    }
+  }
+
+  async function previewTimer(timer) {
+    try {
+      const d = await postJson('/timers/preview', { id: timer.id });
+      if (!d.success) throw new Error(d.error || 'Could not preview timer.');
+      $('timerPreviewBody').innerHTML = `<div><strong>${esc(timer.name)}</strong></div><div class="detail">Rendered response #${Number(d.preview?.responseIndex ?? 0) + 1}</div><div class="timer-preview-text">${esc(d.preview?.rendered || '')}</div>`;
+      $('timerPreviewDialog').showModal();
+    } catch (err) {
+      setListMessage(err.message || 'Could not preview timer.', true);
+    }
+  }
+
+  async function testTimer(timer) {
+    if (!confirm(`Send one TEST message for "${timer.name}"? This will not change its schedule or fire history.`)) return;
+    try {
+      const d = await postJson('/timers/test', { id: timer.id });
+      if (!d.success) throw new Error(d.error || 'Could not test timer.');
+      setListMessage(`Test sent for ${timer.name}. Schedule and history were unchanged.`);
+    } catch (err) {
+      setListMessage(err.message || 'Could not test timer.', true);
+    }
+  }
+
+  async function fireNow(timer) {
+    if (!confirm(`Fire "${timer.name}" now? This counts as a real firing and resets its schedule/activity counter.`)) return;
+    try {
+      const d = await postJson('/timers/fire-now', { id: timer.id });
+      if (!d.success) throw new Error(d.error || 'Could not fire timer.');
+      await loadTimers();
+      setListMessage(`Fired ${timer.name} and reset its schedule.`);
+    } catch (err) {
+      setListMessage(err.message || 'Could not fire timer.', true);
     }
   }
 
@@ -283,6 +427,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     };
   }
 
+  $('saveTimerSettingsBtn').onclick = saveSettings;
   $('addTimerBtn').onclick = () => openEditor();
   $('refreshTimersBtn').onclick = loadTimers;
   $('addTimerResponseBtn').onclick = () => {
@@ -296,6 +441,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   $('showTimerVariablesBtn').onclick = () => $('timerVariablesDialog').showModal();
   $('closeTimerVariablesBtn').onclick = () => $('timerVariablesDialog').close();
   $('timerVariablesDialog').addEventListener('click', (event) => { if (event.target === $('timerVariablesDialog')) $('timerVariablesDialog').close(); });
+  $('closeTimerPreviewBtn').onclick = () => $('timerPreviewDialog').close();
+  $('timerPreviewDialog').addEventListener('click', (event) => { if (event.target === $('timerPreviewDialog')) $('timerPreviewDialog').close(); });
 
   clearEditor();
   editorEl.classList.remove('open');
@@ -303,7 +450,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   return {
     loadTimers,
     onVisibilityChange(visible) {
-      if (visible && !loaded) void loadTimers();
+      if (visible) void loadTimers();
     }
   };
 }
