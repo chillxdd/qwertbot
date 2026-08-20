@@ -1,0 +1,71 @@
+const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('../services/streamLore');
+
+function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, channelName }) {
+  app.post('/stream-lore/get', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    try {
+      const lore = await getStreamLore(channelName);
+      return res.json({ success: true, text: lore.text, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH });
+    } catch (err) {
+      console.error('[Lore] Could not load stream-specific lore:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not load stream-specific lore.' });
+    }
+  });
+
+  app.post('/stream-lore/save', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    const text = typeof req.body.text === 'string' ? req.body.text : '';
+    if (text.length > MAX_STREAM_LORE_LENGTH) {
+      return res.status(400).json({ success: false, error: `Lore is too long. Maximum is ${MAX_STREAM_LORE_LENGTH} characters.` });
+    }
+    try {
+      const lore = await saveStreamLore(channelName, text);
+      console.log(`[Lore] Stream-specific lore saved to MongoDB (${lore.text.length} characters).`);
+      return res.json({ success: true, text: lore.text, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH });
+    } catch (err) {
+      console.error('[Lore] Could not save stream-specific lore:', err.message || err);
+      return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
+    }
+  });
+
+  app.post('/bot-personality/get', requireModSession, async (req, res) => {
+    const manager = getBotPersonalityManager();
+    if (!getDatabaseConnected() || !manager) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    try {
+      const config = await manager.loadConfig();
+      return res.json({ success: true, ...config });
+    } catch (err) {
+      console.error('[Bot Personality] Could not load settings:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not load bot personality settings.' });
+    }
+  });
+
+  app.post('/bot-personality/save', requireModSession, async (req, res) => {
+    const manager = getBotPersonalityManager();
+    if (!getDatabaseConnected() || !manager) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    try {
+      const config = await manager.saveConfig({
+        personality: req.body?.personality,
+        audience: req.body?.audience,
+        cooldownSeconds: req.body?.cooldownSeconds,
+        modsBypassCooldown: req.body?.modsBypassCooldown,
+        cooldownResponse: req.body?.cooldownResponse
+      });
+      console.log(`[Bot Personality] Settings saved (${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
+      return res.json({ success: true, ...config });
+    } catch (err) {
+      console.error('[Bot Personality] Could not save settings:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not save bot personality settings.' });
+    }
+  });
+}
+
+module.exports = { registerMemoryRoutes };
