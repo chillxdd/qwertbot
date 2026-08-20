@@ -66,3 +66,22 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .custom-command-sort-label select{width:auto;min-width:220px;margin:0;padding:8px 30px 8px 9px;font-size:12px}
 .custom-command-list-controls button{margin:0}
 @media(max-width:700px){.custom-command-header{align-items:flex-start;flex-direction:column}.custom-command-list-controls{width:100%;margin-left:0;align-items:stretch}.custom-command-sort-label{flex:1}.custom-command-sort-label select{min-width:0;flex:1}.custom-command-list-controls button{flex:0 0 auto}}
+
+/* Secondary view switches used by Commands/Timers and Memory Management */
+.subsection-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 18px;padding-bottom:14px;border-bottom:1px solid #2a2a30}
+.subsection-nav button{width:100%;margin:0}
+.subsection-nav button.active{outline:2px solid #bf94ff;background:#772ce8}
+.subsection-view{display:none}
+.subsection-view.open{display:block}
+.subsection-view>.custom-command-header:first-child{margin-top:0}
+.subsection-view>.memory-block:first-child{padding-top:0;border-top:0}
+
+/* Timers */
+.timer-settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
+.timer-settings-grid input,.timer-settings-grid select{margin:5px 0 8px}
+.timer-weight-row{margin:9px 0 0}
+.timer-weight-row[hidden]{display:none}
+.timer-weight-row label{min-width:150px}
+#timerEditorMsg.bad{margin-top:10px;padding:7px 9px;border:1px solid #ff3b3b;border-radius:4px;background:rgba(255,59,59,.08)}
+#timerResponseMsg{margin-top:8px}
+@media(max-width:600px){.subsection-nav{grid-template-columns:1fr}.timer-settings-grid{grid-template-columns:1fr}}

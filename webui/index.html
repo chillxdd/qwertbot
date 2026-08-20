@@ -26,8 +26,8 @@
 
   <div id="protected">
     <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
+      <button id="customCommandsTab" class="secondary" type="button">Commands and Timers</button>
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
-      <button id="customCommandsTab" class="secondary" type="button">Custom Commands</button>
       <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
       <button id="renderLogsTab" class="secondary" type="button">Render Logs</button>
@@ -61,6 +61,13 @@
     </div>
 
     <div id="customCommandsPanel" class="section-panel">
+      <h3>Commands and Timers</h3>
+      <div class="subsection-nav" role="tablist" aria-label="Commands and timers views">
+        <button id="customCommandsViewTab" class="secondary active" type="button" aria-selected="true">Custom Commands</button>
+        <button id="timersViewTab" class="secondary" type="button" aria-selected="false">Timers</button>
+      </div>
+
+      <div id="customCommandsView" class="subsection-view open">
       <div class="custom-command-header">
         <h3>Custom Commands</h3>
         <div class="custom-command-list-controls">
@@ -181,11 +188,93 @@
         </div>
         <div id="customCommandEditorMsg" class="detail"></div>
       </div>
+
+      </div>
+
+      <div id="timersView" class="subsection-view">
+        <div class="custom-command-header">
+          <h3>Timers</h3>
+          <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
+        </div>
+        <div class="detail">Send automated chat messages on a repeating interval while Qwert is live. Timers are stored in MongoDB and become live immediately after saving.</div>
+        <div id="timersMsg" class="detail"></div>
+        <div id="timerList" class="custom-command-list"></div>
+        <div class="custom-command-add-row">
+          <button id="addTimerBtn" type="button">Add Timer</button>
+        </div>
+
+        <div id="timerEditor" class="custom-command-editor">
+          <div class="custom-editor-header">
+            <h3 id="timerEditorTitle">Add Timer</h3>
+            <label class="inline-check custom-enabled-check"><input id="timerEnabled" type="checkbox" checked> Enabled</label>
+          </div>
+
+          <div class="custom-editor-block">
+            <label class="prompt-label" for="timerName">Timer Name</label>
+            <input id="timerName" type="text" maxlength="80" placeholder="Example: Discord Reminder">
+            <div class="detail">A friendly dashboard name for this timer. It is not included in the Twitch message.</div>
+          </div>
+
+          <div class="custom-editor-block">
+            <strong class="custom-block-title">Timer Settings</strong>
+            <div class="timer-settings-grid">
+              <div>
+                <label class="prompt-label" for="timerInterval">Interval (seconds)</label>
+                <input id="timerInterval" type="number" min="30" max="86400" step="1" value="300">
+              </div>
+              <div>
+                <label class="prompt-label" for="timerResponseMode">Response Type</label>
+                <select id="timerResponseMode">
+                  <option value="equal">Equal Odds</option>
+                  <option value="weighted">Specified Weight</option>
+                </select>
+              </div>
+            </div>
+            <div class="detail">Enabled timers count only while the stream is live. When the stream goes live, each timer waits its full interval before its first message. Minimum interval: 30 seconds.</div>
+          </div>
+
+          <div class="custom-editor-block">
+            <div class="custom-response-heading">
+              <strong>Possible Responses</strong>
+              <div class="custom-response-heading-actions">
+                <button id="showTimerVariablesBtn" class="secondary" type="button">Response Variables</button>
+                <button id="addTimerResponseBtn" class="secondary" type="button">Add Response</button>
+              </div>
+            </div>
+            <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+            <div id="timerResponses"></div>
+            <div id="timerResponseMsg" class="detail custom-field-message"></div>
+          </div>
+
+          <dialog id="timerVariablesDialog" class="custom-variables-dialog">
+            <div class="custom-dialog-header">
+              <h3>Available Timer Variables</h3>
+              <button id="closeTimerVariablesBtn" class="secondary" type="button" aria-label="Close timer variables">Close</button>
+            </div>
+            <div class="custom-variable-help-body">
+              <div class="custom-variable-row"><code>$(random MIN MAX)</code><div class="detail">Random whole integer from MIN through MAX, inclusive.</div></div>
+              <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots. Requires bot OAuth scope <code>moderator:read:chatters</code>.</div></div>
+              <div class="custom-variable-note detail">Timer responses do not have a triggering viewer, query, or counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, and <code>$(count)</code> are not available.</div>
+            </div>
+          </dialog>
+
+          <div class="custom-editor-actions">
+            <button id="saveTimerBtn" type="button">Save Timer</button>
+            <button id="cancelTimerBtn" class="secondary" type="button">Cancel</button>
+          </div>
+          <div id="timerEditorMsg" class="detail"></div>
+        </div>
+      </div>
     </div>
 
     <div id="lorePanel" class="section-panel">
       <h3>Memory Management</h3>
+      <div class="subsection-nav" role="tablist" aria-label="Memory management views">
+        <button id="streamLoreViewTab" class="secondary active" type="button" aria-selected="true">Stream-Specific Lore</button>
+        <button id="botPersonalityViewTab" class="secondary" type="button" aria-selected="false">Bot Personality & Tagged Questions</button>
+      </div>
 
+      <div id="streamLoreView" class="subsection-view open">
       <div class="memory-block">
         <h4>Stream Specific Lore</h4>
         <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat. Saved lore stays in MongoDB until you edit it.</div>
@@ -197,7 +286,9 @@
         <div id="loreCount" class="detail">0/12000 characters</div>
         <div id="loreMsg" class="detail"></div>
       </div>
+      </div>
 
+      <div id="botPersonalityView" class="subsection-view">
       <div class="memory-block">
         <h4>Bot Personality & Tagged Questions</h4>
         <div class="detail">When a message starts with <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Leaving the Personality field blank disables tagged AI answers.</div>
@@ -227,6 +318,7 @@
           <button id="undoBotPersonalityBtn" class="secondary" type="button">Undo Changes</button>
         </div>
         <div id="botPersonalityMsg" class="detail"></div>
+      </div>
       </div>
     </div>
 

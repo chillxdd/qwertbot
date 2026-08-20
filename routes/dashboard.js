@@ -8,6 +8,7 @@ const {
   MAX_COOLDOWN_SECONDS
 } = require('../services/customCommands');
 const { MAX_STREAM_LORE_LENGTH } = require('../services/streamLore');
+const { MAX_TIMER_NAME_LENGTH, MIN_TIMER_INTERVAL_SECONDS, MAX_TIMER_INTERVAL_SECONDS, MAX_TIMER_RESPONSES, MAX_TIMER_RESPONSE_LENGTH } = require('../services/chatTimers');
 const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
 const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('../services/renderLogs');
 const { getAuthStatus } = require('../services/twitchAuth');
@@ -43,6 +44,13 @@ function registerDashboardRoutes(app, options) {
       maxBotPersonalityNameLength: MAX_BOT_PERSONALITY_NAME_LENGTH,
       maxBotPersonalityLength: MAX_BOT_PERSONALITY_LENGTH,
       maxBotPersonalityCooldownSeconds: MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
+      timers: {
+        maxTimerNameLength: MAX_TIMER_NAME_LENGTH,
+        minIntervalSeconds: MIN_TIMER_INTERVAL_SECONDS,
+        maxIntervalSeconds: MAX_TIMER_INTERVAL_SECONDS,
+        maxResponses: MAX_TIMER_RESPONSES,
+        maxResponseLength: MAX_TIMER_RESPONSE_LENGTH
+      },
       customCommands: {
         maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,
         maxTriggerLength: MAX_TRIGGER_LENGTH,

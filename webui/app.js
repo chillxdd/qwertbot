@@ -2,6 +2,7 @@ import { $, esc, postJson } from './shared.js';
 import { initMessagingSection } from './sections/messaging.js';
 import { initLoreSection } from './sections/lore.js';
 import { initCustomCommandsSection } from './sections/customCommands.js';
+import { initTimersSection } from './sections/timers.js';
 import { initOauthSection } from './sections/oauth.js';
 import { initRenderLogsSection } from './sections/renderLogs.js';
 
@@ -41,6 +42,7 @@ await loadConfig();
 const messaging = initMessagingSection({ $, postJson });
 const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername });
 const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
+const timers = initTimersSection({ $, esc, postJson, config: config.timers || {} });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
 void messaging;
@@ -149,6 +151,24 @@ async function recapAction(action) {
 $('pauseBtn').onclick = () => recapAction('stop');
 $('resumeBtn').onclick = () => recapAction('start');
 
+
+function selectCommandsView(view = 'commands', { load = true } = {}) {
+  const commandsSelected = view !== 'timers';
+  $('customCommandsView').classList.toggle('open', commandsSelected);
+  $('timersView').classList.toggle('open', !commandsSelected);
+  $('customCommandsViewTab').classList.toggle('active', commandsSelected);
+  $('timersViewTab').classList.toggle('active', !commandsSelected);
+  $('customCommandsViewTab').setAttribute('aria-selected', commandsSelected ? 'true' : 'false');
+  $('timersViewTab').setAttribute('aria-selected', commandsSelected ? 'false' : 'true');
+  if (load) {
+    if (commandsSelected) customCommands.onVisibilityChange(true);
+    else timers.onVisibilityChange(true);
+  }
+}
+$('customCommandsViewTab').onclick = () => selectCommandsView('commands');
+$('timersViewTab').onclick = () => selectCommandsView('timers');
+selectCommandsView('commands', { load: false });
+
 const sectionMap = {
   messagingTab: 'messagingPanel',
   customCommandsTab: 'customCommandsPanel',
@@ -171,7 +191,8 @@ function toggleSection(tabId) {
     $(tabId).classList.add('active');
     $(tabId).setAttribute('aria-expanded', 'true');
     if (targetId === 'renderLogsPanel') renderLogs.onVisibilityChange(true);
-    if (targetId === 'customCommandsPanel') customCommands.onVisibilityChange(true);
+    if (targetId === 'customCommandsPanel') selectCommandsView('commands');
+    if (targetId === 'lorePanel') lore.selectMemoryView('lore');
   }
 }
 Object.keys(sectionMap).forEach((tabId) => {

@@ -8,6 +8,7 @@ const { connectDatabase } = require('./services/database');
 const { createModSessionManager } = require('./middleware/modSession');
 const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
 const { createCustomCommandManager } = require('./services/customCommands');
+const { createChatTimerManager } = require('./services/chatTimers');
 const { getStreamLore } = require('./services/streamLore');
 const { createBotPersonalityManager } = require('./services/botPersonality');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
@@ -30,6 +31,7 @@ const { ensureEventSubSubscriptions } = require('./services/twitchEventSub');
 const { registerAuthRoutes } = require('./routes/auth');
 const { registerChatRoutes } = require('./routes/chat');
 const { registerCustomCommandRoutes } = require('./routes/customCommands');
+const { registerTimerRoutes } = require('./routes/timers');
 const { registerDashboardRoutes } = require('./routes/dashboard');
 const { registerEventSubRoutes } = require('./routes/eventSub');
 const { registerMemoryRoutes } = require('./routes/memory');
@@ -71,6 +73,7 @@ let usingMongoOAuth = false;
 let twitchClient = null;
 let recapManager = null;
 let customCommandManager = null;
+let chatTimerManager = null;
 let botPersonalityManager = null;
 let twitchReconnectInProgress = false;
 let twitchAuthRecoveryInProgress = false;
@@ -187,6 +190,13 @@ customCommandManager = createCustomCommandManager({
   getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
 });
 
+chatTimerManager = createChatTimerManager({
+  channelName,
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  getStreamLive: () => Boolean(recapManager?.getStatus?.().streamLive),
+  getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
+});
+
 botPersonalityManager = createBotPersonalityManager({
   channelName,
   botUsername,
@@ -205,6 +215,7 @@ botPersonalityManager = createBotPersonalityManager({
 const twitchMessageHandler = createTwitchMessageHandler({
   getRecapManager: () => recapManager,
   getCustomCommandManager: () => customCommandManager,
+  getChatTimerManager: () => chatTimerManager,
   getBotPersonalityManager: () => botPersonalityManager,
   botUsername,
   summaryPrefix: SUMMARY_PREFIX
@@ -522,6 +533,12 @@ registerCustomCommandRoutes(app, {
   getCustomCommandManager: () => customCommandManager
 });
 
+registerTimerRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => databaseConnected,
+  getChatTimerManager: () => chatTimerManager
+});
+
 registerChatRoutes(app, {
   requireModSession,
   channelName,
@@ -543,6 +560,14 @@ async function bootstrap() {
       await customCommandManager.initialize();
     } catch (err) {
       console.error('[Custom Commands] Startup load failed:', err.message || err);
+    }
+  }
+
+  if (databaseConnected && chatTimerManager) {
+    try {
+      await chatTimerManager.initialize();
+    } catch (err) {
+      console.error('[Timers] Startup load failed:', err.message || err);
     }
   }
 

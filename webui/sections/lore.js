@@ -12,6 +12,17 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
   $('botPersonalityCooldownResponse').maxLength = 500;
 
+
+  function selectMemoryView(view) {
+    const loreSelected = view !== 'personality';
+    $('streamLoreView').classList.toggle('open', loreSelected);
+    $('botPersonalityView').classList.toggle('open', !loreSelected);
+    $('streamLoreViewTab').classList.toggle('active', loreSelected);
+    $('botPersonalityViewTab').classList.toggle('active', !loreSelected);
+    $('streamLoreViewTab').setAttribute('aria-selected', loreSelected ? 'true' : 'false');
+    $('botPersonalityViewTab').setAttribute('aria-selected', loreSelected ? 'false' : 'true');
+  }
+
   function updateCount() {
     $('loreCount').textContent = `${$('streamLore').value.length}/${maxLength} characters`;
   }
@@ -125,6 +136,8 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     }
   }
 
+  $('streamLoreViewTab').onclick = () => selectMemoryView('lore');
+  $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
   $('streamLore').oninput = updateCount;
   $('saveLoreBtn').onclick = saveLore;
   $('undoLoreBtn').onclick = loadLore;
@@ -135,9 +148,11 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   updateCount();
   updatePersonalityCount();
   syncCooldownResponseVisibility();
+  selectMemoryView('lore');
   return {
     loadLore,
     loadBotPersonality,
+    selectMemoryView,
     async loadMemory() {
       await Promise.all([loadLore(), loadBotPersonality()]);
     }

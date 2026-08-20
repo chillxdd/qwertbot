@@ -19,7 +19,7 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
 }
 
-function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getBotPersonalityManager, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -118,10 +118,12 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     if (isBotHourlyRecap(username, rawMessage)) return;
 
     const customCommandManager = typeof getCustomCommandManager === 'function' ? getCustomCommandManager() : null;
+    const chatTimerManager = typeof getChatTimerManager === 'function' ? getChatTimerManager() : null;
     const botPersonalityManager = typeof getBotPersonalityManager === 'function' ? getBotPersonalityManager() : null;
 
     if (username === botUsername) {
       if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
+      if (chatTimerManager?.consumeOwnResponse(rawMessage)) return;
       if (botPersonalityManager?.consumeOwnResponse(rawMessage)) return;
       recapManager.recordChatMessage({ displayName, rawMessage });
       return;
