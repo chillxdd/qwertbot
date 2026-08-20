@@ -15,6 +15,32 @@ function registerCustomCommandRoutes(app, { requireModSession, getDatabaseConnec
     }
   });
 
+
+
+  app.post('/custom-commands/settings', requireModSession, async (req, res) => {
+    const manager = getCustomCommandManager();
+    if (!getDatabaseConnected() || !manager) return unavailable(res);
+    try {
+      const settings = await manager.getSettings();
+      return res.json({ success: true, settings });
+    } catch (err) {
+      console.error('[Custom Commands] Could not load settings:', err.message || err);
+      return res.status(500).json({ success: false, error: err.message || 'Could not load custom-command settings.' });
+    }
+  });
+
+  app.post('/custom-commands/settings/save', requireModSession, async (req, res) => {
+    const manager = getCustomCommandManager();
+    if (!getDatabaseConnected() || !manager) return unavailable(res);
+    try {
+      const settings = await manager.saveSettings(req.body || {});
+      return res.json({ success: true, settings });
+    } catch (err) {
+      console.error('[Custom Commands] Could not save settings:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not save custom-command settings.' });
+    }
+  });
+
   app.post('/custom-commands/save', requireModSession, async (req, res) => {
     const manager = getCustomCommandManager();
     if (!getDatabaseConnected() || !manager) return unavailable(res);

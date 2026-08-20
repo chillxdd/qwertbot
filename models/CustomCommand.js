@@ -103,7 +103,7 @@ const customCommandSchema = new mongoose.Schema({
     type: Number,
     min: 0,
     max: 86400,
-    default: 0
+    default: 5
   },
   cooldownResponse: {
     type: String,

@@ -5,7 +5,9 @@ const {
   MAX_TRIGGERS,
   MAX_RESPONSES,
   MAX_RESPONSE_LENGTH,
-  MAX_COOLDOWN_SECONDS
+  MAX_COOLDOWN_SECONDS,
+  DEFAULT_COMMAND_COOLDOWN_SECONDS,
+  DEFAULT_GLOBAL_COOLDOWN_SECONDS
 } = require('../services/customCommands');
 const { MAX_STREAM_LORE_LENGTH } = require('../services/streamLore');
 const {
@@ -65,7 +67,9 @@ function registerDashboardRoutes(app, options) {
         maxTriggers: MAX_TRIGGERS,
         maxResponses: MAX_RESPONSES,
         maxResponseLength: MAX_RESPONSE_LENGTH,
-        maxCooldownSeconds: MAX_COOLDOWN_SECONDS
+        maxCooldownSeconds: MAX_COOLDOWN_SECONDS,
+        defaultCommandCooldownSeconds: DEFAULT_COMMAND_COOLDOWN_SECONDS,
+        defaultGlobalCooldownSeconds: DEFAULT_GLOBAL_COOLDOWN_SECONDS
       }
     });
   });

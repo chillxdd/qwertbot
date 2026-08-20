@@ -5,6 +5,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   const maxResponseLength = Number(config.maxResponseLength || 500);
   const maxTriggerLength = Number(config.maxTriggerLength || 120);
   const maxCooldownSeconds = Number(config.maxCooldownSeconds || 86400);
+  const defaultCommandCooldownSeconds = Number(config.defaultCommandCooldownSeconds ?? 5);
+  const defaultGlobalCooldownSeconds = Number(config.defaultGlobalCooldownSeconds ?? 5);
 
   let commands = [];
   let editingId = null;
@@ -21,6 +23,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   const editorMsgEl = $('customCommandEditorMsg');
   const triggerMsgEl = $('customTriggerMsg');
   const responseMsgEl = $('customResponseMsg');
+  const globalCooldownMsgEl = $('customGlobalCooldownMsg');
 
   function setMessage(text, isError = false) {
     msgEl.textContent = text || '';
@@ -40,6 +43,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   function setResponseMessage(text, isError = false) {
     responseMsgEl.textContent = text || '';
     responseMsgEl.classList.toggle('bad', Boolean(isError));
+  }
+
+  function setGlobalCooldownMessage(text, isError = false) {
+    globalCooldownMsgEl.textContent = text || '';
+    globalCooldownMsgEl.classList.toggle('bad', Boolean(isError));
   }
 
   function responseMode() {
@@ -210,7 +218,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     if (!command) $('customCommandName').value = '';
     $('customUserLevel').value = command?.userLevel || 'everyone';
     $('customProbability').value = command?.probability ?? 100;
-    $('customCooldown').value = command?.cooldownSeconds ?? 0;
+    $('customCooldown').value = command?.cooldownSeconds ?? defaultCommandCooldownSeconds;
     $('customCooldownResponse').value = command?.cooldownResponse || '';
     $('customUseCooldownResponse').checked = Boolean(command?.cooldownResponse);
     $('customCooldownResponseWrap').hidden = !$('customUseCooldownResponse').checked;
@@ -320,6 +328,39 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       card.querySelector('.custom-set-counter-btn').onclick = () => setCounter(command);
       card.querySelector('.custom-delete-btn').onclick = () => deleteCommand(command);
     });
+  }
+
+
+  async function loadGlobalCooldown({ quiet = false } = {}) {
+    if (!quiet) setGlobalCooldownMessage('Loading...');
+    const d = await postJson('/custom-commands/settings');
+    if (!d.success) {
+      setGlobalCooldownMessage(d.error || 'Could not load global cooldown.', true);
+      return false;
+    }
+    const value = Number(d.settings?.globalCooldownSeconds ?? defaultGlobalCooldownSeconds);
+    $('customGlobalCooldown').value = Number.isFinite(value) ? value : defaultGlobalCooldownSeconds;
+    setGlobalCooldownMessage(quiet ? '' : 'Loaded.');
+    return true;
+  }
+
+  async function saveGlobalCooldown() {
+    const value = Number($('customGlobalCooldown').value);
+    if (!Number.isFinite(value) || value < 0 || value > maxCooldownSeconds) {
+      setGlobalCooldownMessage(`Enter a value between 0 and ${maxCooldownSeconds} seconds.`, true);
+      return;
+    }
+
+    $('saveCustomGlobalCooldownBtn').disabled = true;
+    setGlobalCooldownMessage('Saving...');
+    const d = await postJson('/custom-commands/settings/save', { globalCooldownSeconds: value });
+    $('saveCustomGlobalCooldownBtn').disabled = false;
+    if (!d.success) {
+      setGlobalCooldownMessage(d.error || 'Could not save global cooldown.', true);
+      return;
+    }
+    $('customGlobalCooldown').value = d.settings?.globalCooldownSeconds ?? value;
+    setGlobalCooldownMessage('Saved. Changes are live immediately.');
   }
 
   async function loadCommands({ quiet = false } = {}) {
@@ -479,12 +520,15 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   }
 
   $('addCustomCommandBtn').onclick = () => openEditor();
-  $('refreshCustomCommandsBtn').onclick = () => loadCommands();
+  $('refreshCustomCommandsBtn').onclick = () => Promise.all([loadCommands(), loadGlobalCooldown()]);
+  $('saveCustomGlobalCooldownBtn').onclick = saveGlobalCooldown;
   $('addCustomTriggerBtn').onclick = () => addTrigger();
   $('addCustomResponseBtn').onclick = () => addResponse('');
   $('customResponseMode').onchange = updateResponseModeUi;
   $('saveCustomCommandBtn').onclick = saveCommand;
   $('cancelCustomCommandBtn').onclick = closeEditor;
+  $('customGlobalCooldown').max = String(maxCooldownSeconds);
+  $('customGlobalCooldown').value = String(defaultGlobalCooldownSeconds);
   $('customCooldown').max = String(maxCooldownSeconds);
   $('customCooldownResponse').maxLength = maxResponseLength;
   $('customCooldownResponse').addEventListener('input', updateCooldownResponseCount);
@@ -493,7 +537,9 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   return {
     async onVisibilityChange(visible) {
-      if (visible && !loaded) await loadCommands();
+      if (visible && !loaded) {
+        await Promise.all([loadCommands(), loadGlobalCooldown()]);
+      }
     },
     loadCommands
   };

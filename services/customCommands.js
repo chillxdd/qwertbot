@@ -1,4 +1,5 @@
 const CustomCommand = require('../models/CustomCommand');
+const CustomCommandSettings = require('../models/CustomCommandSettings');
 
 const MAX_COMMAND_NAME_LENGTH = 80;
 const MAX_TRIGGER_LENGTH = 120;
@@ -6,6 +7,8 @@ const MAX_TRIGGERS = 25;
 const MAX_RESPONSES = 25;
 const MAX_RESPONSE_LENGTH = 500;
 const MAX_COOLDOWN_SECONDS = 86400;
+const DEFAULT_COMMAND_COOLDOWN_SECONDS = 5;
+const DEFAULT_GLOBAL_COOLDOWN_SECONDS = 5;
 const RESERVED_COMMANDS = new Set(['!recap', '!startrecap', '!stoprecap']);
 const OWN_RESPONSE_TTL_MS = 15000;
 const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
@@ -141,7 +144,7 @@ function validateAndNormalizeInput(input = {}) {
     throw new Error('Probability must be between 0 and 100. Decimals are allowed.');
   }
 
-  const cooldownSeconds = Number(input.cooldownSeconds ?? 0);
+  const cooldownSeconds = Number(input.cooldownSeconds ?? DEFAULT_COMMAND_COOLDOWN_SECONDS);
   if (!Number.isFinite(cooldownSeconds) || cooldownSeconds < 0 || cooldownSeconds > MAX_COOLDOWN_SECONDS) {
     throw new Error(`Cooldown must be between 0 and ${MAX_COOLDOWN_SECONDS} seconds.`);
   }
@@ -317,6 +320,9 @@ function meetsUserLevel(tags = {}, required = 'everyone') {
 function createCustomCommandManager({ channelName, sendMessage, getRandomChatters = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
+  let globalCooldownSeconds = DEFAULT_GLOBAL_COOLDOWN_SECONDS;
+  let lastGlobalResponseAt = 0;
+  let globalResponseInFlight = false;
   const lastTriggeredAt = new Map();
   const ownResponses = [];
 
@@ -325,9 +331,54 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     return cache;
   }
 
+  async function refreshSettings() {
+    const settings = await CustomCommandSettings.findOne({ channelName: normalizedChannel }).lean();
+    const value = Number(settings?.globalCooldownSeconds ?? DEFAULT_GLOBAL_COOLDOWN_SECONDS);
+    globalCooldownSeconds = Number.isFinite(value)
+      ? Math.max(0, Math.min(MAX_COOLDOWN_SECONDS, value))
+      : DEFAULT_GLOBAL_COOLDOWN_SECONDS;
+    return { globalCooldownSeconds };
+  }
+
   async function initialize() {
-    await refreshCache();
-    console.log(`[Custom Commands] Loaded ${cache.length} command(s) from MongoDB.`);
+    await Promise.all([refreshCache(), refreshSettings()]);
+    console.log(`[Custom Commands] Loaded ${cache.length} command(s) from MongoDB. Global cooldown: ${globalCooldownSeconds}s.`);
+  }
+
+  async function getSettings() {
+    await refreshSettings();
+    return { globalCooldownSeconds };
+  }
+
+  async function saveSettings(input = {}) {
+    const value = Number(input.globalCooldownSeconds ?? DEFAULT_GLOBAL_COOLDOWN_SECONDS);
+    if (!Number.isFinite(value) || value < 0 || value > MAX_COOLDOWN_SECONDS) {
+      throw new Error(`Global cooldown must be between 0 and ${MAX_COOLDOWN_SECONDS} seconds.`);
+    }
+    const normalized = Math.round(value * 1000) / 1000;
+    await CustomCommandSettings.findOneAndUpdate(
+      { channelName: normalizedChannel },
+      { $set: { globalCooldownSeconds: normalized } },
+      { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    globalCooldownSeconds = normalized;
+    return { globalCooldownSeconds };
+  }
+
+  function isGlobalCoolingDown(now = Date.now()) {
+    const globalCooldownMs = Math.max(0, Number(globalCooldownSeconds || 0) * 1000);
+    return globalResponseInFlight || (globalCooldownMs > 0 && now - lastGlobalResponseAt < globalCooldownMs);
+  }
+
+  function acquireGlobalResponseSlot() {
+    if (isGlobalCoolingDown()) return false;
+    globalResponseInFlight = true;
+    return true;
+  }
+
+  function releaseGlobalResponseSlot({ sent = false } = {}) {
+    if (sent) lastGlobalResponseAt = Date.now();
+    globalResponseInFlight = false;
   }
 
   async function listCommands() {
@@ -483,6 +534,16 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     }
 
     const now = Date.now();
+    if (isGlobalCoolingDown(now)) {
+      return {
+        matched: true,
+        triggerType: matchedTrigger.triggerType,
+        trigger: matchedTrigger.trigger,
+        responded: false,
+        reason: 'global_cooldown'
+      };
+    }
+
     const cooldownMs = Math.max(0, Number(command.cooldownSeconds || 0) * 1000);
     const previous = lastTriggeredAt.get(commandId) || 0;
 
@@ -519,8 +580,19 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
         return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
       }
 
+      if (!acquireGlobalResponseSlot()) {
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
+      }
+
       noteOwnResponse(renderedCooldown);
-      const result = await sendMessage(normalizedChannel, renderedCooldown);
+      let result;
+      let sent = false;
+      try {
+        result = await sendMessage(normalizedChannel, renderedCooldown);
+        sent = true;
+      } finally {
+        releaseGlobalResponseSlot({ sent });
+      }
       return {
         matched: true,
         triggerType: matchedTrigger.triggerType,
@@ -575,13 +647,24 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       }
     }
 
-    const updated = await CustomCommand.findOneAndUpdate(
-      { _id: command._id, channelName: normalizedChannel, enabled: true },
-      { $inc: { counter: 1 } },
-      { new: true }
-    ).lean();
+    if (!acquireGlobalResponseSlot()) {
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
+    }
+
+    let updated;
+    try {
+      updated = await CustomCommand.findOneAndUpdate(
+        { _id: command._id, channelName: normalizedChannel, enabled: true },
+        { $inc: { counter: 1 } },
+        { new: true }
+      ).lean();
+    } catch (err) {
+      releaseGlobalResponseSlot();
+      throw err;
+    }
 
     if (!updated) {
+      releaseGlobalResponseSlot();
       await refreshCache();
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'disabled' };
     }
@@ -594,18 +677,25 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       randomUsers
     });
 
-    if (!rendered) return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'empty_response' };
+    if (!rendered) {
+      releaseGlobalResponseSlot();
+      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'empty_response' };
+    }
 
     noteOwnResponse(rendered);
     let result;
+    let sent = false;
     try {
       result = await sendMessage(normalizedChannel, rendered);
+      sent = true;
     } catch (err) {
       await CustomCommand.updateOne(
         { _id: command._id, channelName: normalizedChannel, counter: { $gt: 0 } },
         { $inc: { counter: -1 } }
       ).catch(() => {});
       throw err;
+    } finally {
+      releaseGlobalResponseSlot({ sent });
     }
     lastTriggeredAt.set(commandId, Date.now());
 
@@ -628,6 +718,8 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
   return {
     initialize,
     listCommands,
+    getSettings,
+    saveSettings,
     saveCommand,
     deleteCommand,
     setEnabled,
@@ -645,6 +737,8 @@ module.exports = {
   MAX_RESPONSES,
   MAX_RESPONSE_LENGTH,
   MAX_COOLDOWN_SECONDS,
+  DEFAULT_COMMAND_COOLDOWN_SECONDS,
+  DEFAULT_GLOBAL_COOLDOWN_SECONDS,
   RESERVED_COMMANDS,
   USER_LEVELS,
   RESPONSE_MODES,
