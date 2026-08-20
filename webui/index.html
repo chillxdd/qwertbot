@@ -71,6 +71,10 @@
       <div class="custom-command-header">
         <h3>Custom Commands</h3>
         <div class="custom-command-list-controls">
+          <label class="list-search-wrap" for="customCommandSearch">
+            <span class="sr-only">Search custom commands</span>
+            <input id="customCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search custom commands">
+          </label>
           <label class="custom-command-sort-label" for="customCommandSort">Sort
             <select id="customCommandSort" aria-label="Sort custom commands">
               <option value="created_asc">Date added — oldest first</option>
@@ -103,6 +107,20 @@
 
       <div id="customCommandsMsg" class="detail"></div>
       <div id="customCommandList" class="custom-command-list"></div>
+      <div id="customCommandPagination" class="list-pagination" aria-label="Custom command pagination">
+        <label class="list-page-size">Show
+          <select id="customCommandPageSize" aria-label="Custom commands per page">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+          </select>
+        </label>
+        <div id="customCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+        <div class="list-page-buttons">
+          <button id="customCommandPrevPage" class="secondary" type="button" aria-label="Previous custom command page">←</button>
+          <button id="customCommandNextPage" class="secondary" type="button" aria-label="Next custom command page">→</button>
+        </div>
+      </div>
       <div class="custom-command-add-row">
         <button id="addCustomCommandBtn" type="button">Add Custom Command</button>
       </div>
@@ -213,6 +231,10 @@
         <div class="custom-command-header">
           <h3>Timers</h3>
           <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="timerSearch">
+              <span class="sr-only">Search timers</span>
+              <input id="timerSearch" class="list-search-input" type="search" placeholder="Search timers..." autocomplete="off" aria-label="Search timers">
+            </label>
             <label class="custom-command-sort-label" for="timerSort">Sort
               <select id="timerSort" aria-label="Sort timers">
                 <option value="created_asc">Date added — oldest first</option>
@@ -250,6 +272,20 @@
 
         <div id="timersMsg" class="detail"></div>
         <div id="timerList" class="custom-command-list"></div>
+        <div id="timerPagination" class="list-pagination" aria-label="Timer pagination">
+          <label class="list-page-size">Show
+            <select id="timerPageSize" aria-label="Timers per page">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <div id="timerPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="timerPrevPage" class="secondary" type="button" aria-label="Previous timer page">←</button>
+            <button id="timerNextPage" class="secondary" type="button" aria-label="Next timer page">→</button>
+          </div>
+        </div>
         <div class="custom-command-add-row">
           <button id="addTimerBtn" type="button">Add Timer</button>
         </div>

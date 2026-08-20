@@ -11,9 +11,12 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   let commands = [];
   let editingId = null;
   let loaded = false;
+  let currentPage = 1;
 
   const SORT_STORAGE_KEY = 'sqwert-custom-command-sort';
   const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'counter_desc', 'counter_asc']);
+  const PAGE_SIZE_STORAGE_KEY = 'sqwert-custom-command-page-size';
+  const VALID_PAGE_SIZES = new Set([10, 25, 50]);
 
   const listEl = $('customCommandList');
   const editorEl = $('customCommandEditor');
@@ -285,13 +288,63 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     });
   }
 
+
+  function selectedPageSize() {
+    const value = Number($('customCommandPageSize')?.value || 10);
+    return VALID_PAGE_SIZES.has(value) ? value : 10;
+  }
+
+  function searchQuery() {
+    return String($('customCommandSearch')?.value || '').trim().toLocaleLowerCase();
+  }
+
+  function matchesSearch(command, query) {
+    if (!query) return true;
+    const triggers = command?.triggers?.length
+      ? command.triggers
+      : [{ triggerType: command?.triggerType, trigger: command?.trigger }];
+    const haystack = [
+      commandLabel(command),
+      command?.userLevel,
+      ...(triggers || []).flatMap((item) => [item?.trigger, item?.triggerType]),
+      ...(Array.isArray(command?.responses) ? command.responses : [])
+    ].filter(Boolean).join(' ').toLocaleLowerCase();
+    return haystack.includes(query);
+  }
+
+  function filteredCommands() {
+    const query = searchQuery();
+    return sortedCommands().filter((command) => matchesSearch(command, query));
+  }
+
+  function updatePagination(totalItems) {
+    const pageSize = selectedPageSize();
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    currentPage = Math.min(Math.max(1, currentPage), totalPages);
+    $('customCommandPageLabel').textContent = `Page ${currentPage} of ${totalPages}`;
+    $('customCommandPrevPage').disabled = currentPage <= 1;
+    $('customCommandNextPage').disabled = currentPage >= totalPages;
+    $('customCommandPagination').hidden = commands.length === 0;
+    return { pageSize, totalPages };
+  }
+
   function renderList() {
     if (!commands.length) {
       listEl.innerHTML = '<div class="coming-soon custom-empty-state">No custom commands yet. Add one to get started.</div>';
+      $('customCommandPagination').hidden = true;
       return;
     }
 
-    const visibleCommands = sortedCommands();
+    const filtered = filteredCommands();
+    const { pageSize } = updatePagination(filtered.length);
+    const start = (currentPage - 1) * pageSize;
+    const visibleCommands = filtered.slice(start, start + pageSize);
+
+    if (!visibleCommands.length) {
+      listEl.innerHTML = '<div class="coming-soon custom-empty-state">No custom commands match your search.</div>';
+      return;
+    }
+
     listEl.innerHTML = visibleCommands.map((command) => {
       const triggers = command?.triggers?.length ? command.triggers : [{ triggerType: command.triggerType, trigger: command.trigger }];
       const responseWord = command.responses.length === 1 ? 'response' : 'responses';
@@ -515,9 +568,28 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     } catch {}
     sortSelect.onchange = () => {
       try { localStorage.setItem(SORT_STORAGE_KEY, selectedSort()); } catch {}
+      currentPage = 1;
       renderList();
     };
   }
+
+  const searchInput = $('customCommandSearch');
+  if (searchInput) searchInput.oninput = () => { currentPage = 1; renderList(); };
+
+  const pageSizeSelect = $('customCommandPageSize');
+  if (pageSizeSelect) {
+    try {
+      const savedPageSize = Number(localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
+      if (VALID_PAGE_SIZES.has(savedPageSize)) pageSizeSelect.value = String(savedPageSize);
+    } catch {}
+    pageSizeSelect.onchange = () => {
+      currentPage = 1;
+      try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(selectedPageSize())); } catch {}
+      renderList();
+    };
+  }
+  $('customCommandPrevPage').onclick = () => { if (currentPage > 1) { currentPage -= 1; renderList(); } };
+  $('customCommandNextPage').onclick = () => { currentPage += 1; renderList(); };
 
   $('addCustomCommandBtn').onclick = () => openEditor();
   $('refreshCustomCommandsBtn').onclick = () => Promise.all([loadCommands(), loadGlobalCooldown()]);

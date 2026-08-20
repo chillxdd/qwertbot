@@ -14,9 +14,12 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   let settings = { globalStartDelaySeconds: 0, minimumSpacingSeconds: 60 };
   let editingId = null;
   let loaded = false;
+  let currentPage = 1;
 
   const SORT_STORAGE_KEY = 'sqwert-timer-sort';
   const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'interval_asc', 'interval_desc']);
+  const PAGE_SIZE_STORAGE_KEY = 'sqwert-timer-page-size';
+  const VALID_PAGE_SIZES = new Set([10, 25, 50]);
 
   const listEl = $('timerList');
   const editorEl = $('timerEditor');
@@ -96,14 +99,64 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     }).join('');
   }
 
+
+  function selectedPageSize() {
+    const value = Number($('timerPageSize')?.value || 10);
+    return VALID_PAGE_SIZES.has(value) ? value : 10;
+  }
+
+  function searchQuery() {
+    return String($('timerSearch')?.value || '').trim().toLocaleLowerCase();
+  }
+
+  function matchesSearch(timer, query) {
+    if (!query) return true;
+    const haystack = [
+      timer?.name,
+      timer?.priority,
+      timer?.responseMode,
+      timer?.lastResponse,
+      timer?.waitingFor,
+      ...(Array.isArray(timer?.responses) ? timer.responses : [])
+    ].filter(Boolean).join(' ').toLocaleLowerCase();
+    return haystack.includes(query);
+  }
+
+  function filteredTimers() {
+    const query = searchQuery();
+    return sortedTimers().filter((timer) => matchesSearch(timer, query));
+  }
+
+  function updatePagination(totalItems) {
+    const pageSize = selectedPageSize();
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    currentPage = Math.min(Math.max(1, currentPage), totalPages);
+    $('timerPageLabel').textContent = `Page ${currentPage} of ${totalPages}`;
+    $('timerPrevPage').disabled = currentPage <= 1;
+    $('timerNextPage').disabled = currentPage >= totalPages;
+    $('timerPagination').hidden = timers.length === 0;
+    return { pageSize, totalPages };
+  }
+
   function renderList() {
     listEl.innerHTML = '';
     if (!timers.length) {
       listEl.innerHTML = '<div class="custom-empty-state detail">No timers yet.</div>';
+      $('timerPagination').hidden = true;
       return;
     }
 
-    for (const timer of sortedTimers()) {
+    const filtered = filteredTimers();
+    const { pageSize } = updatePagination(filtered.length);
+    const start = (currentPage - 1) * pageSize;
+    const visibleTimers = filtered.slice(start, start + pageSize);
+
+    if (!visibleTimers.length) {
+      listEl.innerHTML = '<div class="custom-empty-state detail">No timers match your search.</div>';
+      return;
+    }
+
+    for (const timer of visibleTimers) {
       const card = document.createElement('div');
       card.className = 'custom-command-card timer-card';
       const responseCount = Array.isArray(timer.responses) ? timer.responses.length : 0;
@@ -423,9 +476,28 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     } catch {}
     sortSelect.onchange = () => {
       try { localStorage.setItem(SORT_STORAGE_KEY, selectedSort()); } catch {}
+      currentPage = 1;
       renderList();
     };
   }
+
+  const searchInput = $('timerSearch');
+  if (searchInput) searchInput.oninput = () => { currentPage = 1; renderList(); };
+
+  const pageSizeSelect = $('timerPageSize');
+  if (pageSizeSelect) {
+    try {
+      const savedPageSize = Number(localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
+      if (VALID_PAGE_SIZES.has(savedPageSize)) pageSizeSelect.value = String(savedPageSize);
+    } catch {}
+    pageSizeSelect.onchange = () => {
+      currentPage = 1;
+      try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(selectedPageSize())); } catch {}
+      renderList();
+    };
+  }
+  $('timerPrevPage').onclick = () => { if (currentPage > 1) { currentPage -= 1; renderList(); } };
+  $('timerNextPage').onclick = () => { currentPage += 1; renderList(); };
 
   $('saveTimerSettingsBtn').onclick = saveSettings;
   $('addTimerBtn').onclick = () => openEditor();
