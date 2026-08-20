@@ -856,7 +856,8 @@ app.post('/bot-personality/save', requireModSession, async (req, res) => {
       personality: req.body?.personality,
       audience: req.body?.audience,
       cooldownSeconds: req.body?.cooldownSeconds,
-      modsBypassCooldown: req.body?.modsBypassCooldown
+      modsBypassCooldown: req.body?.modsBypassCooldown,
+      cooldownResponse: req.body?.cooldownResponse
     });
     console.log(`[Bot Personality] Settings saved (${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
     return res.json({ success: true, ...config });

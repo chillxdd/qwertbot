@@ -200,6 +200,12 @@
             <input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5">
             <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
           </div>
+          <label class="inline-check personality-audience-toggle"><input id="botPersonalityUseCooldownResponse" type="checkbox"> Send a custom response while tagged questions are on cooldown</label>
+          <div id="botPersonalityCooldownResponsePanel" class="personality-cooldown-response-panel" hidden>
+            <label class="prompt-label" for="botPersonalityCooldownResponse">Cooldown Response</label>
+            <textarea id="botPersonalityCooldownResponse" maxlength="500" placeholder="$user, try asking again in $time."></textarea>
+            <div class="detail">Optional. <code>$user</code> inserts the viewer name and <code>$time</code> inserts the remaining cooldown, such as <code>14m 51s</code>. Also accepts <code>$(user)</code>, <code>$(time)</code>, and <code>$remaining</code>.</div>
+          </div>
         </div>
         <div class="memory-actions">
           <button id="saveBotPersonalityBtn" type="button">Save Personality Settings</button>

@@ -5,6 +5,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
   $('botPersonality').maxLength = personalityMaxLength;
   $('botPersonalityCooldown').min = 5;
   $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
+  $('botPersonalityCooldownResponse').maxLength = 500;
 
   function updateCount() {
     $('loreCount').textContent = `${$('streamLore').value.length}/${maxLength} characters`;
@@ -12,6 +13,10 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
 
   function updatePersonalityCount() {
     $('botPersonalityCount').textContent = `${$('botPersonality').value.length}/${personalityMaxLength} characters`;
+  }
+
+  function syncCooldownResponseVisibility() {
+    $('botPersonalityCooldownResponsePanel').hidden = !$('botPersonalityUseCooldownResponse').checked;
   }
 
   async function loadLore() {
@@ -61,6 +66,9 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
       $('botPersonalityModsOnly').checked = d.audience === 'mods';
       $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
       $('botPersonalityCooldown').value = d.cooldownSeconds ?? 5;
+      $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
+      $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
+      syncCooldownResponseVisibility();
       updatePersonalityCount();
       $('botPersonalityMsg').textContent = d.updatedAt ? 'Saved personality settings loaded.' : 'No personality saved yet.';
     } catch (_) {
@@ -82,7 +90,8 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
         personality: $('botPersonality').value,
         audience: $('botPersonalityModsOnly').checked ? 'mods' : 'everyone',
         cooldownSeconds,
-        modsBypassCooldown: $('botPersonalityModsBypassCooldown').checked
+        modsBypassCooldown: $('botPersonalityModsBypassCooldown').checked,
+        cooldownResponse: $('botPersonalityUseCooldownResponse').checked ? $('botPersonalityCooldownResponse').value.trim() : ''
       });
       if (!d.success) {
         $('botPersonalityMsg').textContent = d.error || 'Could not save personality settings.';
@@ -92,6 +101,9 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
       $('botPersonalityModsOnly').checked = d.audience === 'mods';
       $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
       $('botPersonalityCooldown').value = d.cooldownSeconds ?? 5;
+      $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
+      $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
+      syncCooldownResponseVisibility();
       updatePersonalityCount();
       const audienceText = d.audience === 'everyone' ? 'Everyone can ask.' : 'Only Mods/Broadcaster can ask.';
       const cooldownText = ` Cooldown: ${d.cooldownSeconds}s${d.modsBypassCooldown ? ' (Mods/Broadcaster bypass).' : '.'}`;
@@ -109,10 +121,12 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityL
   $('saveLoreBtn').onclick = saveLore;
   $('undoLoreBtn').onclick = loadLore;
   $('botPersonality').oninput = updatePersonalityCount;
+  $('botPersonalityUseCooldownResponse').onchange = syncCooldownResponseVisibility;
   $('saveBotPersonalityBtn').onclick = saveBotPersonality;
   $('undoBotPersonalityBtn').onclick = loadBotPersonality;
   updateCount();
   updatePersonalityCount();
+  syncCooldownResponseVisibility();
   return {
     loadLore,
     loadBotPersonality,

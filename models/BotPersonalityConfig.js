@@ -28,6 +28,11 @@ const botPersonalityConfigSchema = new mongoose.Schema({
   modsBypassCooldown: {
     type: Boolean,
     default: true
+  },
+  cooldownResponse: {
+    type: String,
+    default: '',
+    maxlength: 500
   }
 }, {
   timestamps: true
