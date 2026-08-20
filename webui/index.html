@@ -404,6 +404,27 @@
             <div class="detail">Optional. <code>$user</code> inserts the viewer name and <code>$time</code> inserts the remaining cooldown, such as <code>14m 51s</code>. Also accepts <code>$(user)</code>, <code>$(time)</code>, and <code>$remaining</code>.</div>
           </div>
         </div>
+        <div class="ai-retry-panel">
+          <div class="ai-retry-heading">
+            <div>
+              <div class="label">AI Retry &amp; Failure Handling</div>
+              <div class="detail">Retries temporary Gemini errors without starting the normal tagged-question cooldown. If every attempt fails, the bot sends the fallback response below and applies a short 20-second anti-hammer guard to that viewer.</div>
+            </div>
+            <label class="inline-check personality-audience-toggle"><input id="botPersonalityRetryEnabled" type="checkbox" checked> Retry temporary AI failures</label>
+          </div>
+          <div class="ai-retry-grid">
+            <div>
+              <label class="prompt-label" for="botPersonalityRetryCount">Retries after the first attempt</label>
+              <input id="botPersonalityRetryCount" type="number" min="0" max="2" step="1" value="2">
+              <div class="detail">Default 2. Retry attempts are kept inside an approximately 15-second total retry window.</div>
+            </div>
+            <div class="ai-retry-failure-response">
+              <label class="prompt-label" for="botPersonalityFailureResponse">AI Failure Response</label>
+              <textarea id="botPersonalityFailureResponse" maxlength="500">Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.</textarea>
+              <div class="detail"><code>$user</code> inserts the viewer name. This fallback does not start the normal tagged-question cooldown.</div>
+            </div>
+          </div>
+        </div>
         <div class="session-memory-panel">
           <label class="inline-check personality-audience-toggle"><input id="sessionMemoryEnabled" type="checkbox" checked> Session Memory enabled for tagged questions</label>
           <div class="detail">Temporary current-stream memory is built from each completed hourly recap window so tagged questions can answer about earlier moments without relying on the short public recap. It is automatically removed when the stream ends.</div>

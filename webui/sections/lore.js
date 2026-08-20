@@ -13,6 +13,8 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityCooldown').min = 5;
   $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
   $('botPersonalityCooldownResponse').maxLength = 500;
+  $('botPersonalityRetryCount').max = 2;
+  $('botPersonalityFailureResponse').maxLength = 500;
 
   function selectMemoryView(view) {
     const loreSelected = view !== 'personality';
@@ -38,6 +40,25 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
 
   function syncCooldownResponseVisibility() {
     $('botPersonalityCooldownResponsePanel').hidden = !$('botPersonalityUseCooldownResponse').checked;
+  }
+
+  function syncAiRetryControls() {
+    $('botPersonalityRetryCount').disabled = !$('botPersonalityRetryEnabled').checked;
+  }
+
+  function setAiRetrySettings(aiRetry = {}) {
+    $('botPersonalityRetryEnabled').checked = aiRetry.enabled !== false;
+    $('botPersonalityRetryCount').value = aiRetry.maxRetries ?? 2;
+    $('botPersonalityFailureResponse').value = aiRetry.failureResponse ?? 'Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.';
+    syncAiRetryControls();
+  }
+
+  function getAiRetrySettings() {
+    return {
+      enabled: $('botPersonalityRetryEnabled').checked,
+      maxRetries: Number($('botPersonalityRetryCount').value),
+      failureResponse: $('botPersonalityFailureResponse').value.trim()
+    };
   }
 
   function setSessionMemorySettings(memory = {}) {
@@ -157,6 +178,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityCooldown').value = d.cooldownSeconds ?? 5;
       $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
       $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
+      setAiRetrySettings(d.aiRetry || {});
       setSessionMemorySettings(d.sessionMemory || {});
       syncCooldownResponseVisibility();
       updatePersonalityCount();
@@ -174,6 +196,12 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityCooldown').focus();
       return;
     }
+    const retryCount = Number($('botPersonalityRetryCount').value);
+    if (!Number.isFinite(retryCount) || retryCount < 0 || retryCount > 2 || !Number.isInteger(retryCount)) {
+      $('botPersonalityMsg').textContent = 'AI retry count must be a whole number from 0 to 2.';
+      $('botPersonalityRetryCount').focus();
+      return;
+    }
     try {
       $('saveBotPersonalityBtn').disabled = true;
       $('botPersonalityMsg').textContent = 'Saving...';
@@ -184,6 +212,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
         cooldownSeconds,
         modsBypassCooldown: $('botPersonalityModsBypassCooldown').checked,
         cooldownResponse: $('botPersonalityUseCooldownResponse').checked ? $('botPersonalityCooldownResponse').value.trim() : '',
+        aiRetry: getAiRetrySettings(),
         sessionMemory: getSessionMemorySettings()
       });
       if (!d.success) {
@@ -197,15 +226,17 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityCooldown').value = d.cooldownSeconds ?? 5;
       $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
       $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
+      setAiRetrySettings(d.aiRetry || {});
       setSessionMemorySettings(d.sessionMemory || {});
       syncCooldownResponseVisibility();
       updatePersonalityCount();
       const audienceText = d.audience === 'everyone' ? 'Everyone can ask.' : 'Only Mods/Broadcaster can ask.';
       const cooldownText = ` Cooldown: ${d.cooldownSeconds}s${d.modsBypassCooldown ? ' (Mods/Broadcaster bypass).' : '.'}`;
+      const retryText = d.aiRetry?.enabled === false ? ' AI retries: disabled.' : ` AI retries: ${d.aiRetry?.maxRetries ?? 2}.`;
       const memoryText = d.sessionMemory?.enabled === false ? ' Session Memory: disabled.' : ' Session Memory: enabled.';
       $('botPersonalityMsg').textContent = d.personality
-        ? `Saved to MongoDB and live immediately. ${audienceText}${cooldownText}${memoryText}`
-        : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}${memoryText}`;
+        ? `Saved to MongoDB and live immediately. ${audienceText}${cooldownText}${retryText}${memoryText}`
+        : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}${retryText}${memoryText}`;
       await loadSessionMemoryStatus();
     } catch (_) {
       $('botPersonalityMsg').textContent = 'Could not save personality settings.';
@@ -221,6 +252,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('undoLoreBtn').onclick = loadLore;
   $('botPersonality').oninput = updatePersonalityCount;
   $('botPersonalityUseCooldownResponse').onchange = syncCooldownResponseVisibility;
+  $('botPersonalityRetryEnabled').onchange = syncAiRetryControls;
   $('sessionMemoryPromptInstructions').oninput = updateSessionMemoryPromptCount;
   $('sessionMemorySettingsToggle').onclick = () => toggleSessionMemoryAdvanced();
   $('refreshSessionMemoryBtn').onclick = loadSessionMemoryStatus;
@@ -231,6 +263,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   updatePersonalityCount();
   updateSessionMemoryPromptCount();
   syncCooldownResponseVisibility();
+  syncAiRetryControls();
   toggleSessionMemoryAdvanced(false);
   selectMemoryView('lore');
   return {

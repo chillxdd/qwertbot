@@ -40,6 +40,11 @@ const botPersonalityConfigSchema = new mongoose.Schema({
     default: '',
     maxlength: 500
   },
+  aiRetry: {
+    enabled: { type: Boolean, default: true },
+    maxRetries: { type: Number, min: 0, max: 2, default: 2 },
+    failureResponse: { type: String, default: 'Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.', maxlength: 500 }
+  },
   sessionMemory: {
     enabled: { type: Boolean, default: true },
     recentDetailedHours: { type: Number, min: 1, max: 8, default: 2 },

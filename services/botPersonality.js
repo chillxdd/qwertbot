@@ -7,6 +7,11 @@ const TWITCH_MESSAGE_LIMIT = 500;
 const MIN_BOT_PERSONALITY_COOLDOWN_SECONDS = 5;
 const MAX_BOT_PERSONALITY_COOLDOWN_SECONDS = 86400;
 const MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH = 500;
+const MAX_TAGGED_QUESTION_RETRIES = 2;
+const TAGGED_QUESTION_RETRY_WINDOW_MS = 15000;
+const TAGGED_QUESTION_FAILURE_GUARD_MS = 20000;
+const MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH = 500;
+const DEFAULT_TAGGED_QUESTION_FAILURE_RESPONSE = 'Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.';
 
 
 function formatCooldownRemaining(totalSeconds) {
@@ -43,6 +48,34 @@ function normalizeAudience(audience) {
   return String(audience || '').toLowerCase() === 'everyone' ? 'everyone' : 'mods';
 }
 
+function normalizeAiRetryConfig(value = {}) {
+  const maxRetries = Number(value?.maxRetries ?? MAX_TAGGED_QUESTION_RETRIES);
+  return {
+    enabled: value?.enabled !== false,
+    maxRetries: Number.isFinite(maxRetries) ? Math.max(0, Math.min(MAX_TAGGED_QUESTION_RETRIES, Math.round(maxRetries))) : MAX_TAGGED_QUESTION_RETRIES,
+    failureResponse: String(value?.failureResponse ?? DEFAULT_TAGGED_QUESTION_FAILURE_RESPONSE).trim().slice(0, MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH)
+  };
+}
+
+function renderFailureResponse(template, displayName) {
+  const user = String(displayName || 'viewer').replace(/^@+/, '').trim() || 'viewer';
+  return String(template || '')
+    .replace(/\$\(user\)|\$user\b/gi, user)
+    .trim();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableGeminiError(err) {
+  if (err?.retryable === true) return true;
+  const status = Number(err?.status || 0);
+  if ([408, 429, 500, 502, 503, 504].includes(status)) return true;
+  const message = String(err?.message || '').toLowerCase();
+  return /high demand|temporar|rate limit|too many requests|timeout|timed out|service unavailable|network|fetch failed|connection reset|econnreset|eai_again/.test(message);
+}
+
 function isModOrBroadcaster(tags = {}) {
   const badges = tags.badges || {};
   return badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || badges.moderator === '1';
@@ -68,36 +101,86 @@ function extractGeminiText(data) {
   return String(text || '').trim();
 }
 
-async function callGemini(prompt) {
+async function callGemini(prompt, timeoutMs = 8000) {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
-  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify({
-      model: 'gemini-3.5-flash-lite',
-      input: prompt
-    })
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 8000));
+  let response;
+  try {
+    response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash-lite',
+        input: prompt
+      }),
+      signal: controller.signal
+    });
+  } catch (err) {
+    const wrapped = new Error(controller.signal.aborted ? 'Gemini request timed out.' : (err?.message || 'Gemini request failed.'));
+    wrapped.retryable = true;
+    throw wrapped;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   let data;
   try {
     data = await response.json();
   } catch (_) {
-    throw new Error(`Gemini returned invalid JSON. HTTP ${response.status}`);
+    const err = new Error(`Gemini returned invalid JSON. HTTP ${response.status}`);
+    err.status = response.status;
+    err.retryable = response.status >= 500;
+    throw err;
   }
 
   if (!response.ok) {
-    throw new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
+    const err = new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
+    err.status = response.status;
+    err.retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+    throw err;
   }
 
   const text = extractGeminiText(data);
-  if (!text) throw new Error('Gemini returned no readable text.');
+  if (!text) {
+    const err = new Error('Gemini returned no readable text.');
+    err.retryable = true;
+    throw err;
+  }
   return text;
+}
+
+async function callGeminiWithRetries(prompt, retryConfig, onRetry) {
+  const retry = normalizeAiRetryConfig(retryConfig);
+  const deadline = Date.now() + TAGGED_QUESTION_RETRY_WINDOW_MS;
+  const maxAttempts = 1 + (retry.enabled ? retry.maxRetries : 0);
+  const retryDelaysMs = [4000, 5000];
+  let lastError;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (attempt > 0) {
+      const delayMs = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)];
+      if (Date.now() + delayMs >= deadline) break;
+      if (typeof onRetry === 'function') onRetry({ attempt, maxRetries: maxAttempts - 1, delayMs, error: lastError });
+      await sleep(delayMs);
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 1000) break;
+    try {
+      return await callGemini(prompt, Math.min(8000, remainingMs));
+    } catch (err) {
+      lastError = err;
+      if (!retry.enabled || !isRetryableGeminiError(err)) break;
+    }
+  }
+
+  throw lastError || new Error('Gemini retry window expired before another attempt could run.');
 }
 
 
@@ -121,9 +204,10 @@ function clipTwitchMessage(text, prefix = '') {
 function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore, getStreamContext, getSessionMemoryContext }) {
   const normalizedChannel = normalizeChannelName(channelName);
   const normalizedBotUsername = String(botUsername || '').toLowerCase().trim();
-  let config = { name: '', personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, cooldownResponse: '', sessionMemory: normalizeSessionMemoryConfig(), updatedAt: null };
+  let config = { name: '', personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, cooldownResponse: '', aiRetry: normalizeAiRetryConfig(), sessionMemory: normalizeSessionMemoryConfig(), updatedAt: null };
   let lastPublicResponseAt = 0;
   const ownResponses = [];
+  const failureGuards = new Map();
   const OWN_RESPONSE_TTL_MS = 15000;
 
   function cleanupOwnResponses() {
@@ -154,6 +238,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       cooldownSeconds: Math.max(MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))),
       modsBypassCooldown: doc?.modsBypassCooldown !== false,
       cooldownResponse: String(doc?.cooldownResponse || ''),
+      aiRetry: normalizeAiRetryConfig(doc?.aiRetry || {}),
       sessionMemory: normalizeSessionMemoryConfig(doc?.sessionMemory || {}),
       updatedAt: doc?.updatedAt || null
     };
@@ -165,7 +250,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     console.log(`[Tagged Questions] Loaded personality settings (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
   }
 
-  async function saveConfig({ name, personality, audience, cooldownSeconds, modsBypassCooldown, cooldownResponse, sessionMemory }) {
+  async function saveConfig({ name, personality, audience, cooldownSeconds, modsBypassCooldown, cooldownResponse, aiRetry, sessionMemory }) {
     const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
     if (normalizedName.length > MAX_BOT_PERSONALITY_NAME_LENGTH) {
       throw new Error(`Tagged-question name cannot exceed ${MAX_BOT_PERSONALITY_NAME_LENGTH} characters.`);
@@ -187,10 +272,14 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     if (normalizedCooldownResponse.length > MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH) {
       throw new Error(`Tagged-question cooldown response cannot exceed ${MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH} characters.`);
     }
+    const normalizedAiRetry = normalizeAiRetryConfig(aiRetry || config.aiRetry || {});
+    if (String(aiRetry?.failureResponse ?? normalizedAiRetry.failureResponse).trim().length > MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH) {
+      throw new Error(`Tagged-question AI failure response cannot exceed ${MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH} characters.`);
+    }
     const normalizedSessionMemory = normalizeSessionMemoryConfig(sessionMemory || config.sessionMemory || {});
     const doc = await BotPersonalityConfig.findOneAndUpdate(
       { channelName: normalizedChannel },
-      { $set: { name: normalizedName, personality: normalizedPersonality, audience: normalizedAudience, cooldownSeconds: roundedCooldown, modsBypassCooldown: normalizedBypass, cooldownResponse: normalizedCooldownResponse, sessionMemory: normalizedSessionMemory } },
+      { $set: { name: normalizedName, personality: normalizedPersonality, audience: normalizedAudience, cooldownSeconds: roundedCooldown, modsBypassCooldown: normalizedBypass, cooldownResponse: normalizedCooldownResponse, aiRetry: normalizedAiRetry, sessionMemory: normalizedSessionMemory } },
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     ).lean();
 
@@ -201,6 +290,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       cooldownSeconds: Math.max(MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))),
       modsBypassCooldown: doc?.modsBypassCooldown !== false,
       cooldownResponse: String(doc?.cooldownResponse || ''),
+      aiRetry: normalizeAiRetryConfig(doc?.aiRetry || {}),
       sessionMemory: normalizeSessionMemoryConfig(doc?.sessionMemory || {}),
       updatedAt: doc?.updatedAt || null
     };
@@ -263,6 +353,13 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
         sendMethod: result?.method || 'unknown'
       };
     }
+
+    const failureGuardKey = String(tags?.['user-id'] || displayName || 'viewer').toLowerCase().trim();
+    const failureGuardUntil = Number(failureGuards.get(failureGuardKey) || 0);
+    if (failureGuardUntil > Date.now()) {
+      return { matched: true, responded: false, reason: 'failure_guard', remainingSeconds: Math.ceil((failureGuardUntil - Date.now()) / 1000) };
+    }
+    if (failureGuardUntil) failureGuards.delete(failureGuardKey);
 
     let streamLore = '';
     if (typeof getStreamLore === 'function') {
@@ -350,7 +447,29 @@ RULES:
 
 Output only the answer.`;
 
-    const answer = await callGemini(prompt);
+    let answer;
+    try {
+      answer = await callGeminiWithRetries(prompt, config.aiRetry, ({ attempt, maxRetries, delayMs, error }) => {
+        console.warn(`[Tagged Questions] Temporary Gemini failure for ${displayName || 'viewer'}; retry ${attempt}/${maxRetries} in ${(delayMs / 1000).toFixed(0)}s: ${error?.message || error}`);
+      });
+    } catch (err) {
+      failureGuards.set(failureGuardKey, Date.now() + TAGGED_QUESTION_FAILURE_GUARD_MS);
+      console.error(`[Tagged Questions] Gemini failed for ${displayName || 'viewer'} after retry handling:`, err?.message || err);
+      const failureText = clipTwitchMessage(renderFailureResponse(config.aiRetry?.failureResponse, displayName));
+      if (!failureText) {
+        return { matched: true, responded: false, reason: 'ai_failure', error: err?.message || String(err) };
+      }
+      noteOwnResponse(failureText);
+      const failureResult = await sendMessage(normalizedChannel, failureText);
+      return {
+        matched: true,
+        responded: true,
+        reason: 'ai_failure',
+        failureResponse: true,
+        message: failureText,
+        sendMethod: failureResult?.method || 'unknown'
+      };
+    }
     const personaPrefix = config.name ? `(${toUnicodeBoldSans(`as ${config.name}`)}): ` : '';
     const rendered = clipTwitchMessage(answer, personaPrefix);
     if (!rendered) return { matched: true, responded: false, reason: 'empty_response' };
@@ -365,7 +484,7 @@ Output only the answer.`;
     initialize,
     loadConfig,
     saveConfig,
-    getConfig: () => ({ ...config, sessionMemory: { ...config.sessionMemory } }),
+    getConfig: () => ({ ...config, aiRetry: { ...config.aiRetry }, sessionMemory: { ...config.sessionMemory } }),
     handleTaggedQuestion,
     consumeOwnResponse
   };
@@ -377,5 +496,7 @@ module.exports = {
   MIN_BOT_PERSONALITY_COOLDOWN_SECONDS,
   MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
   MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH,
+  MAX_TAGGED_QUESTION_RETRIES,
+  MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH,
   createBotPersonalityManager
 };
