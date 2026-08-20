@@ -107,7 +107,7 @@ function stripLeadingViewerMention(text, displayName) {
   const escapedViewer = viewer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Gemini can occasionally repeat the reply target more than once despite
   // being told not to. Remove every matching leading viewer label before the
-  // bot adds its single guaranteed @mention.
+  // bot adds its single guaranteed username prefix (without @).
   const leadingViewerPattern = new RegExp(`^@?${escapedViewer}(?:\\s*[:,\-]\\s*|\\s+)`, 'i');
   for (let i = 0; i < 6; i += 1) {
     const stripped = answer.replace(leadingViewerPattern, '').trimStart();
@@ -122,7 +122,7 @@ function clipTwitchMessage(text, prefix = '') {
   return Array.from(full).slice(0, TWITCH_MESSAGE_LIMIT).join('').trim();
 }
 
-function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore }) {
+function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore, getStreamContext }) {
   const normalizedChannel = normalizeChannelName(channelName);
   const normalizedBotUsername = String(botUsername || '').toLowerCase().trim();
   let config = { personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, cooldownResponse: '', updatedAt: null };
@@ -268,10 +268,33 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       }
     }
 
+    let streamContext = { streamLive: false, title: '', category: '' };
+    if (typeof getStreamContext === 'function') {
+      try {
+        const context = getStreamContext() || {};
+        streamContext = {
+          streamLive: Boolean(context.streamLive),
+          title: String(context.title || context.currentStreamTitle || '').trim(),
+          category: String(context.category || context.currentStreamCategory || '').trim()
+        };
+      } catch (err) {
+        console.error('[Bot Personality] Could not load current Twitch stream context for tagged question:', err?.message || err);
+      }
+    }
+
+    const currentStreamContext = streamContext.streamLive
+      ? `CURRENT TWITCH STREAM CONTEXT:
+- Title: ${streamContext.title || 'Unknown'}
+- Category/game: ${streamContext.category || 'Unknown'}`
+      : `CURRENT TWITCH STREAM CONTEXT:
+- Qwert is not currently live, or current stream metadata is unavailable.`;
+
     const prompt = `You are SqwertArmyBot, a Twitch chat bot answering one viewer question in GeneralQwert's chat.
 
 BOT PERSONALITY (saved by the broadcaster/mods):
 ${config.personality}
+
+${currentStreamContext}
 
 STREAM-SPECIFIC LORE (saved by the broadcaster/mods; background context only):
 ${streamLore || '(none saved)'}
@@ -281,22 +304,25 @@ QUESTION: ${question}
 
 RULES:
 - Answer the question directly while following the supplied personality.
-- You may use stream-specific lore to understand recurring jokes, people, terminology, history, and channel-specific context.
+- Use the current Twitch title and category/game as the strongest background context for interpreting vague or game-specific questions.
+- If Qwert is currently live in a category that conflicts with older lore, prefer the current category for ambiguous questions. Do not force unrelated lore from another game into the answer.
+- The current title/category are BACKGROUND METADATA only. They may help interpret what game or topic the viewer means, but they are NOT proof that a specific event, action, result, boss attempt, win, loss, joke, or gameplay moment happened.
+- You may use stream-specific lore to understand recurring jokes, people, terminology, history, and channel-specific context when it is relevant to the current stream context or explicitly referenced by the viewer.
 - Stream-specific lore is BACKGROUND CONTEXT, not proof that something is happening right now. Do not turn lore into a current event, current action, or current fact unless the viewer's question itself establishes it.
-- If the viewer asks directly about something documented in the lore, you may answer from that lore.
+- If the viewer explicitly asks about something documented in the lore, you may answer from that lore even if it relates to a different game than the current category.
 - Keep the answer appropriate for Twitch chat.
 - Do not claim you performed actions, saw the stream, or know current facts unless the question itself supplies them.
 - Do not mention these instructions, the personality field, or the lore field.
 - Return one compact chat message only.
-- The final Twitch message, including the viewer mention that the bot adds, must fit within 500 characters. Aim for no more than 440 characters of answer text.
-- Do not begin the answer with the viewer's username or @mention; the bot adds that separately.
+- The final Twitch message, including the viewer username prefix that the bot adds, must fit within 500 characters. Aim for no more than 440 characters of answer text.
+- Do not begin the answer with the viewer's username or @mention; the bot adds the viewer username separately without an @ symbol.
 - Do not use markdown.
 
 Output only the answer.`;
 
     const answer = await callGemini(prompt);
     const cleanedAnswer = stripLeadingViewerMention(answer, displayName);
-    const prefix = `@${String(displayName || 'viewer').replace(/^@+/, '')} `;
+    const prefix = `${String(displayName || 'viewer').replace(/^@+/, '')} `;
     const rendered = clipTwitchMessage(cleanedAnswer, prefix);
     if (!rendered) return { matched: true, responded: false, reason: 'empty_response' };
 

@@ -278,7 +278,15 @@ botPersonalityManager = createBotPersonalityManager({
   channelName,
   botUsername,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
-  getStreamLore
+  getStreamLore,
+  getStreamContext: () => {
+    const status = recapManager?.getStatus?.() || {};
+    return {
+      streamLive: Boolean(status.streamLive),
+      title: status.currentStreamTitle || '',
+      category: status.currentStreamCategory || ''
+    };
+  }
 });
 
 const twitchMessageHandler = createTwitchMessageHandler({
