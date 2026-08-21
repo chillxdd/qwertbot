@@ -284,7 +284,7 @@ function renderReadOnlyCustomCommands() {
         const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
         return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
       }).join('');
-      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="native-command-badge">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
+      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="user-level-badge user-level-everyone">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
     }).join('');
   }
   msg.textContent = query ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyCustomCommands.length} command${readOnlyCustomCommands.length === 1 ? '' : 's'} available.`;
@@ -311,7 +311,7 @@ function renderReadOnlyNativeCommands() {
   });
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
   list.innerHTML = visible.length
-    ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code><span class="native-command-badge">Everyone</span></div><div class="detail">${esc(command.description)}</div></div><span class="native-command-status enabled">Built-in</span></div>`).join('')
+    ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code><span class="user-level-badge user-level-everyone">Everyone</span></div><div class="detail">${esc(command.description)}</div></div><span class="native-command-status enabled">Built-in</span></div>`).join('')
     : '<div class="coming-soon custom-empty-state">No commands match your search.</div>';
   msg.textContent = query ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyNativeCommands.length} command${readOnlyNativeCommands.length === 1 ? '' : 's'} available.`;
 }

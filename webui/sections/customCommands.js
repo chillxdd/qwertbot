@@ -368,8 +368,9 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       const triggers = command?.triggers?.length ? command.triggers : [{ triggerType: command.triggerType, trigger: command.trigger }];
       const responseWord = command.responses.length === 1 ? 'response' : 'responses';
       const triggerWord = triggers.length === 1 ? 'trigger' : 'triggers';
-      const userLevelLabels = { everyone: 'Everyone', subscriber: 'Subscriber', twitch_vip: 'Twitch VIP', moderator: 'Moderator', owner: 'Broadcaster / Owner' };
-      const userLevel = userLevelLabels[command.userLevel] || 'Everyone';
+      const userLevelLabels = { everyone: 'Everyone', subscriber: 'Subscriber', twitch_vip: 'VIP', moderator: 'Moderator', owner: 'Broadcaster' };
+      const userLevelKey = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'].includes(command.userLevel) ? command.userLevel : 'everyone';
+      const userLevel = userLevelLabels[userLevelKey];
       const triggerChips = triggers.map((trigger) => {
         const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
         return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
@@ -380,9 +381,10 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
             <div class="custom-command-title-row">
               <strong class="custom-command-name">${esc(commandLabel(command))}</strong>
               ${statusBadge(command)}
+              <span class="user-level-badge user-level-${userLevelKey}">${esc(userLevel)}</span>
             </div>
             <div class="custom-trigger-chip-list">${triggerChips}</div>
-            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : command.sendAs === 'reply' ? 'Reply to Trigger' : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
+            <div class="detail">${triggers.length} ${triggerWord} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : command.sendAs === 'reply' ? 'Reply to Trigger' : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary custom-edit-btn" type="button">Edit</button>
