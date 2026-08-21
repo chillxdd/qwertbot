@@ -1,4 +1,6 @@
-const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap']);
+const { setViewerProfileOptOut } = require('./viewerProfiles');
+
+const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
 
@@ -19,7 +21,7 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
 }
 
-function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, sendMessage, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -149,6 +151,30 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     }
 
     if (isKnownBotCommand(rawMessage)) {
+      if (lowerMsg === '!optout' || lowerMsg === '!optin') {
+        const optingOut = lowerMsg === '!optout';
+        try {
+          await setViewerProfileOptOut(channel, {
+            username,
+            displayName,
+            twitchUserId: tags['user-id'] || '',
+            optedOut: optingOut
+          });
+          if (typeof sendMessage === 'function') {
+            const text = optingOut
+              ? `@${displayName}, you've opted out of Viewer Profiles. I won't learn from or use your profile in AI responses.`
+              : `@${displayName}, you've opted back into Viewer Profiles. Automatic learning and profile use are available again.`;
+            await sendMessage(channel, text);
+          }
+        } catch (err) {
+          console.error(`[Viewer Profiles] Failed to process ${lowerMsg} for ${displayName}:`, err?.message || err);
+          if (typeof sendMessage === 'function') {
+            await sendMessage(channel, `@${displayName}, I couldn't update your Viewer Profile preference right now. Please try again later.`);
+          }
+        }
+        return;
+      }
+
       if (lowerMsg === '!stoprecap') {
         if (!isModOrBroadcaster(tags)) return;
         await recapManager.stopRecap({ channel, displayName });

@@ -49,6 +49,9 @@ function serializeProfile(doc) {
     id: String(value._id || ''),
     username: String(value.username || ''),
     displayName: String(value.displayName || value.username || ''),
+    twitchUserId: String(value.twitchUserId || ''),
+    optedOut: value.optedOut === true,
+    optedOutAt: value.optedOutAt || null,
     aliases: Array.isArray(value.aliases) ? value.aliases : [],
     pinnedNotes: String(value.pinnedNotes || ''),
     enabled: value.enabled !== false,
@@ -121,18 +124,56 @@ async function saveViewerProfile(channelName, value = {}) {
   const pinnedNotes = String(value.pinnedNotes || '').trim();
   if (pinnedNotes.length > MAX_PINNED_NOTES) throw new Error(`Pinned notes cannot exceed ${MAX_PINNED_NOTES} characters.`);
 
+  const existing = await ViewerProfile.findOne({ channelName: channel, username });
+  const viewerOptedOut = existing?.optedOut === true;
   const doc = await ViewerProfile.findOneAndUpdate(
     { channelName: channel, username },
     { $set: {
       displayName,
-      aliases,
-      pinnedNotes,
-      enabled: value.enabled !== false,
-      learningEnabled: value.learningEnabled !== false
+      aliases: viewerOptedOut ? [] : aliases,
+      pinnedNotes: viewerOptedOut ? '' : pinnedNotes,
+      enabled: viewerOptedOut ? false : value.enabled !== false,
+      learningEnabled: viewerOptedOut ? false : value.learningEnabled !== false
     }, $setOnInsert: { firstSeenAt: new Date(), lastSeenAt: new Date() } },
     { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
   );
   return serializeProfile(doc);
+}
+
+async function setViewerProfileOptOut(channelName, { username, displayName, twitchUserId, optedOut }) {
+  const channel = normalizeChannelName(channelName);
+  const normalizedUsername = normalizeUsername(username);
+  const normalizedDisplayName = normalizeDisplayName(displayName) || normalizedUsername;
+  const normalizedUserId = String(twitchUserId || '').trim();
+  if (!channel || !normalizedUsername) throw new Error('A valid channel and Twitch username are required.');
+
+  const identityQuery = normalizedUserId
+    ? { channelName: channel, $or: [{ twitchUserId: normalizedUserId }, { username: normalizedUsername }] }
+    : { channelName: channel, username: normalizedUsername };
+  let profile = await ViewerProfile.findOne(identityQuery);
+  if (!profile) profile = new ViewerProfile({ channelName: channel, username: normalizedUsername, firstSeenAt: new Date() });
+
+  profile.username = normalizedUsername;
+  profile.displayName = normalizedDisplayName;
+  if (normalizedUserId) profile.twitchUserId = normalizedUserId;
+  profile.lastSeenAt = new Date();
+  profile.optedOut = Boolean(optedOut);
+  profile.optedOutAt = optedOut ? new Date() : null;
+
+  if (optedOut) {
+    // Keep only the minimum identity needed to remember the viewer's privacy choice.
+    profile.enabled = false;
+    profile.learningEnabled = false;
+    profile.aliases = [];
+    profile.pinnedNotes = '';
+    profile.facts = [];
+  } else {
+    profile.enabled = true;
+    profile.learningEnabled = true;
+  }
+
+  await profile.save();
+  return serializeProfile(profile);
 }
 
 async function setFactEnabled(channelName, profileId, factId, enabled) {
@@ -148,6 +189,10 @@ async function setFactEnabled(channelName, profileId, factId, enabled) {
 
 async function deleteViewerProfile(channelName, profileId) {
   const channel = normalizeChannelName(channelName);
+  const existing = await ViewerProfile.findOne({ channelName: channel, _id: profileId }).lean();
+  if (existing?.optedOut === true) {
+    throw new Error('This viewer opted out. Their opt-out record must remain until they use !optin.');
+  }
   const result = await ViewerProfile.deleteOne({ channelName: channel, _id: profileId });
   return { deleted: result.deletedCount > 0 };
 }
@@ -191,7 +236,7 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
     if (!username || excludedUsers.has(username) || !counts.has(username)) { skipped++; continue; }
     const existing = await ViewerProfile.findOne({ channelName: channel, username });
     if (!existing && (counts.get(username) || 0) < 2) { skipped++; continue; }
-    if (existing?.learningEnabled === false) { skipped++; continue; }
+    if (existing?.optedOut === true || existing?.learningEnabled === false) { skipped++; continue; }
 
     const profile = existing || new ViewerProfile({
       channelName: channel,
@@ -239,7 +284,7 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4) {
   const settings = await getViewerProfileSettings(channelName);
   if (!settings.useInTaggedQuestions) return [];
   const channel = normalizeChannelName(channelName);
-  const docs = await ViewerProfile.find({ channelName: channel, enabled: { $ne: false } }).lean();
+  const docs = await ViewerProfile.find({ channelName: channel, enabled: { $ne: false }, optedOut: { $ne: true } }).lean();
   return docs.filter((profile) => profileMatchesQuestion(profile, question)).slice(0, Math.max(1, Math.min(8, Number(limit) || 4))).map(serializeProfile);
 }
 
@@ -268,6 +313,7 @@ module.exports = {
   saveViewerProfile,
   setFactEnabled,
   deleteViewerProfile,
+  setViewerProfileOptOut,
   applyViewerProfileUpdates,
   getRelevantViewerProfiles,
   formatViewerProfilesForPrompt

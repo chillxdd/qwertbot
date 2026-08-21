@@ -3,6 +3,30 @@ function registerCustomCommandRoutes(app, { requireModSession, getDatabaseConnec
     return res.status(503).json({ success: false, error: 'Custom commands require MongoDB to be connected.' });
   }
 
+
+  app.get('/public-commands', async (req, res) => {
+    const manager = getCustomCommandManager();
+    if (!getDatabaseConnected() || !manager) return res.json({ success: true, commands: [] });
+    try {
+      const commands = await manager.listCommands();
+      const publicCommands = commands
+        .filter((command) => command.enabled !== false && command.userLevel === 'everyone' && Number(command.probability) === 100)
+        .map((command) => ({
+          id: command.id,
+          name: command.name,
+          triggers: Array.isArray(command.triggers) ? command.triggers : [],
+          userLevel: 'everyone',
+          probability: 100,
+          cooldownSeconds: Number(command.cooldownSeconds || 0),
+          responseDelaySeconds: Number(command.responseDelaySeconds || 0)
+        }));
+      return res.json({ success: true, commands: publicCommands });
+    } catch (err) {
+      console.error('[Custom Commands] Could not list public commands:', err.message || err);
+      return res.status(500).json({ success: false, error: 'Could not load public commands.' });
+    }
+  });
+
   app.post('/custom-commands/list', requireModSession, async (req, res) => {
     const manager = getCustomCommandManager();
     if (!getDatabaseConnected() || !manager) return unavailable(res);

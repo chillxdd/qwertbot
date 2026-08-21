@@ -78,7 +78,11 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
         const activeFacts = (profile.facts || []).filter((fact) => fact.enabled !== false).length;
         const aliases = profile.aliases?.length ? ` · ${profile.aliases.map((alias) => esc(alias)).join(', ')}` : '';
         const disabled = profile.enabled === false ? '<span class="custom-command-state disabled">AI context off</span>' : '<span class="custom-command-state enabled">AI context on</span>';
-        const learning = profile.learningEnabled === false ? '<span class="custom-command-state disabled">Learning off</span>' : '<span class="custom-command-state enabled">Learning on</span>';
+        const learning = profile.optedOut === true
+          ? '<span class="custom-command-state disabled">Opted out</span>'
+          : profile.learningEnabled === false
+            ? '<span class="custom-command-state disabled">Learning off</span>'
+            : '<span class="custom-command-state enabled">Learning on</span>';
         return `<div class="custom-command-card viewer-profile-card" data-profile-id="${esc(profile.id)}">
           <div class="custom-command-card-main">
             <div class="custom-command-title-row"><strong class="custom-command-name">${esc(profile.displayName || profile.username)}</strong><span class="detail">@${esc(profile.username)}</span>${disabled}${learning}</div>
@@ -142,6 +146,11 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     $('viewerProfilePinnedNotes').value = '';
     $('viewerProfileEnabled').checked = true;
     $('viewerProfileLearningForUser').checked = true;
+    $('viewerProfileEnabled').disabled = false;
+    $('viewerProfileLearningForUser').disabled = false;
+    $('viewerProfileAliases').disabled = false;
+    $('viewerProfilePinnedNotes').disabled = false;
+    $('saveViewerProfileBtn').disabled = false;
     $('deleteViewerProfileBtn').hidden = true;
     setDialogMessage('');
     renderFacts({ facts: [] });
@@ -162,7 +171,9 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     if (profile) {
       editingId = profile.id;
       $('viewerProfileDialogTitle').textContent = profile.displayName || profile.username;
-      $('viewerProfileDialogMeta').textContent = `@${profile.username} · persistent across streams`;
+      $('viewerProfileDialogMeta').textContent = profile.optedOut === true
+        ? `@${profile.username} · Opted out via !optout`
+        : `@${profile.username} · persistent across streams`;
       $('viewerProfileUsername').disabled = true;
       $('viewerProfileUsername').value = profile.username || '';
       $('viewerProfileDisplayName').value = profile.displayName || '';
@@ -170,7 +181,12 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
       $('viewerProfilePinnedNotes').value = profile.pinnedNotes || '';
       $('viewerProfileEnabled').checked = profile.enabled !== false;
       $('viewerProfileLearningForUser').checked = profile.learningEnabled !== false;
-      $('deleteViewerProfileBtn').hidden = false;
+      $('viewerProfileEnabled').disabled = profile.optedOut === true;
+      $('viewerProfileLearningForUser').disabled = profile.optedOut === true;
+      $('viewerProfileAliases').disabled = profile.optedOut === true;
+      $('viewerProfilePinnedNotes').disabled = profile.optedOut === true;
+      $('saveViewerProfileBtn').disabled = profile.optedOut === true;
+      $('deleteViewerProfileBtn').hidden = profile.optedOut === true;
       renderFacts(profile);
     }
     showDialog();

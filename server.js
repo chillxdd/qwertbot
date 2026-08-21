@@ -240,6 +240,7 @@ const twitchMessageHandler = createTwitchMessageHandler({
   getCustomCommandManager: () => customCommandManager,
   getChatTimerManager: () => chatTimerManager,
   getBotPersonalityManager: () => botPersonalityManager,
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
   botUsername,
   summaryPrefix: SUMMARY_PREFIX
 });

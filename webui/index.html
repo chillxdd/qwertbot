@@ -601,7 +601,7 @@
         <div class="native-command-list">
           <div class="native-command-card">
             <div class="native-command-main">
-              <div class="native-command-title"><code>!recap</code><span class="native-command-badge">Viewer</span></div>
+              <div class="native-command-title"><code>!recap</code><span class="native-command-badge">Everyone</span></div>
               <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
             </div>
             <span class="native-command-status enabled">Built-in</span>
@@ -609,7 +609,7 @@
 
           <div class="native-command-card">
             <div class="native-command-main">
-              <div class="native-command-title"><code>!startrecap</code><span class="native-command-badge">Mod / Qwert</span></div>
+              <div class="native-command-title"><code>!startrecap</code><span class="native-command-badge">Moderator</span></div>
               <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
             </div>
             <span class="native-command-status enabled">Built-in</span>
@@ -617,8 +617,24 @@
 
           <div class="native-command-card">
             <div class="native-command-main">
-              <div class="native-command-title"><code>!stoprecap</code><span class="native-command-badge">Mod / Qwert</span></div>
+              <div class="native-command-title"><code>!stoprecap</code><span class="native-command-badge">Moderator</span></div>
               <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
+            </div>
+            <span class="native-command-status enabled">Built-in</span>
+          </div>
+
+          <div class="native-command-card">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!optout</code><span class="native-command-badge">Everyone</span></div>
+              <div class="detail">Opts the viewer out of Viewer Profiles, removes stored profile content, and prevents future profile learning or AI use until they opt back in.</div>
+            </div>
+            <span class="native-command-status enabled">Built-in</span>
+          </div>
+
+          <div class="native-command-card">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!optin</code><span class="native-command-badge">Everyone</span></div>
+              <div class="detail">Opts the viewer back into Viewer Profiles so future profile learning and AI use can resume when those features are enabled.</div>
             </div>
             <span class="native-command-status enabled">Built-in</span>
           </div>
@@ -851,6 +867,27 @@
       </div>
       <div id="renderLogsMsg" class="detail">Open this section to load recent service logs.</div>
       <div id="renderLogConsole" class="render-log-console" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div id="readonlyCommandsPanel" class="readonly-commands-panel" hidden>
+    <h3>Commands &amp; Automation</h3>
+    <div class="subsection-nav readonly-command-tabs" role="tablist" aria-label="Public commands">
+      <button id="readonlyCustomCommandsTab" class="secondary active" type="button" aria-selected="true">Custom Commands</button>
+      <button id="readonlyNativeCommandsTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
+    </div>
+    <div id="readonlyCustomCommandsView" class="subsection-view open">
+      <div class="detail readonly-command-help">Public commands available to Everyone with a 100% trigger probability.</div>
+      <div id="readonlyCustomCommandList" class="custom-command-list"></div>
+      <div id="readonlyCustomCommandsMsg" class="detail"></div>
+    </div>
+    <div id="readonlyNativeCommandsView" class="subsection-view">
+      <div class="detail readonly-command-help">Built-in commands available to Everyone.</div>
+      <div class="native-command-list">
+        <div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>!recap</code><span class="native-command-badge">Everyone</span></div><div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div></div><span class="native-command-status enabled">Built-in</span></div>
+        <div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>!optout</code><span class="native-command-badge">Everyone</span></div><div class="detail">Opts you out of Viewer Profiles and removes stored profile content.</div></div><span class="native-command-status enabled">Built-in</span></div>
+        <div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>!optin</code><span class="native-command-badge">Everyone</span></div><div class="detail">Opts you back into Viewer Profiles.</div></div><span class="native-command-status enabled">Built-in</span></div>
+      </div>
     </div>
   </div>
 </div>

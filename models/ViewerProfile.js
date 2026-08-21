@@ -13,6 +13,9 @@ const viewerProfileSchema = new mongoose.Schema({
   channelName: { type: String, required: true, lowercase: true, trim: true, index: true },
   username: { type: String, required: true, lowercase: true, trim: true },
   displayName: { type: String, default: '', trim: true, maxlength: 80 },
+  twitchUserId: { type: String, default: undefined, trim: true },
+  optedOut: { type: Boolean, default: false },
+  optedOutAt: { type: Date, default: null },
   aliases: { type: [String], default: [] },
   pinnedNotes: { type: String, default: '', maxlength: 4000 },
   facts: { type: [viewerFactSchema], default: [] },
@@ -23,5 +26,6 @@ const viewerProfileSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 viewerProfileSchema.index({ channelName: 1, username: 1 }, { unique: true });
+viewerProfileSchema.index({ channelName: 1, twitchUserId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.models.ViewerProfile || mongoose.model('ViewerProfile', viewerProfileSchema);

@@ -103,10 +103,53 @@ async function status() {
   }
 }
 
+function selectReadOnlyCommandsView(view = 'commands') {
+  const commandsSelected = view === 'commands';
+  $('readonlyCustomCommandsView').classList.toggle('open', commandsSelected);
+  $('readonlyNativeCommandsView').classList.toggle('open', !commandsSelected);
+  $('readonlyCustomCommandsTab').classList.toggle('active', commandsSelected);
+  $('readonlyNativeCommandsTab').classList.toggle('active', !commandsSelected);
+  $('readonlyCustomCommandsTab').setAttribute('aria-selected', commandsSelected ? 'true' : 'false');
+  $('readonlyNativeCommandsTab').setAttribute('aria-selected', commandsSelected ? 'false' : 'true');
+}
+
+async function loadReadOnlyCommands() {
+  const list = $('readonlyCustomCommandList');
+  const msg = $('readonlyCustomCommandsMsg');
+  msg.textContent = 'Loading public commands...';
+  try {
+    const response = await fetch('/public-commands', { cache: 'no-store' });
+    const d = await response.json();
+    if (!d.success) throw new Error(d.error || 'Could not load public commands.');
+    const commands = Array.isArray(d.commands) ? d.commands : [];
+    if (!commands.length) {
+      list.innerHTML = '<div class="coming-soon custom-empty-state">No public custom commands are available right now.</div>';
+    } else {
+      list.innerHTML = commands.map((command) => {
+        const triggers = Array.isArray(command.triggers) ? command.triggers : [];
+        const chips = triggers.map((trigger) => {
+          const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
+          return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
+        }).join('');
+        return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="native-command-badge">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">100% chance · ${esc(command.cooldownSeconds || 0)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay</div></div></div>`;
+      }).join('');
+    }
+    msg.textContent = `${commands.length} public custom command${commands.length === 1 ? '' : 's'}.`;
+  } catch (err) {
+    list.innerHTML = '';
+    msg.textContent = err?.message || 'Could not load public commands.';
+  }
+}
+
+$('readonlyCustomCommandsTab').onclick = () => selectReadOnlyCommandsView('commands');
+$('readonlyNativeCommandsTab').onclick = () => selectReadOnlyCommandsView('native');
+selectReadOnlyCommandsView('commands');
+
 async function showAuthenticatedUi({ loadLore = true } = {}) {
   loggedIn = true;
   $('login').style.display = 'none';
   $('protected').style.display = 'block';
+  $('readonlyCommandsPanel').hidden = true;
   $('openLoginBtn').hidden = true;
   $('readonlyBadge').hidden = true;
   $('password').value = '';
@@ -123,18 +166,21 @@ function enterReadOnlyMode() {
   loggedIn = false;
   renderLogs.onVisibilityChange(false);
   $('protected').style.display = 'none';
+  $('readonlyCommandsPanel').hidden = false;
   $('login').style.display = 'none';
   $('openLoginBtn').hidden = false;
   $('readonlyBadge').hidden = false;
   $('password').value = '';
   $('loginMsg').textContent = '';
   void status();
+  void loadReadOnlyCommands();
 }
 
 function showLogin(message = '') {
   loggedIn = false;
   renderLogs.onVisibilityChange(false);
   $('protected').style.display = 'none';
+  $('readonlyCommandsPanel').hidden = true;
   $('openLoginBtn').hidden = true;
   $('readonlyBadge').hidden = false;
   $('login').style.display = 'block';
