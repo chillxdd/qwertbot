@@ -454,6 +454,7 @@ select{padding-right:30px}
 /* AI Recap control surface + public read-only login flow */
 .dashboard-session-actions{display:flex;align-items:center;gap:8px}
 .readonly-badge{display:inline-flex;align-items:center;min-height:28px;padding:0 9px;border:1px solid var(--nb-border-strong);border-radius:999px;background:var(--nb-surface-2);color:var(--nb-muted);font-size:10px;font-weight:750;letter-spacing:.075em;text-transform:uppercase}
+.readonly-badge[hidden]{display:none!important}
 .mod-login{width:min(360px,calc(100vw - 56px));padding:18px}
 .mod-login-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .mod-login-header h3{margin:0;color:var(--nb-text)}
