@@ -14,6 +14,8 @@ const { createAutomationSpacingManager } = require('./services/automationSpacing
 const { getEventReactionHoldStatus } = require('./services/eventReactionHold');
 const { getStreamLore } = require('./services/streamLore');
 const { createBotPersonalityManager } = require('./services/botPersonality');
+const { getRenderedNativeResponse } = require('./services/nativeCommandResponses');
+const { purgeExpiredOptedOutProfiles } = require('./services/viewerProfiles');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
 const {
   getAccessToken,
@@ -41,6 +43,7 @@ const { registerEventSubReactionRoutes } = require('./routes/eventSubReactions')
 const { registerAutomationRoutes } = require('./routes/automation');
 const { registerMemoryRoutes } = require('./routes/memory');
 const { registerRecapRoutes } = require('./routes/recap');
+const { registerNativeCommandRoutes } = require('./routes/nativeCommands');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -240,6 +243,7 @@ const twitchMessageHandler = createTwitchMessageHandler({
   getCustomCommandManager: () => customCommandManager,
   getChatTimerManager: () => chatTimerManager,
   getBotPersonalityManager: () => botPersonalityManager,
+  getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables),
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
   botUsername,
   summaryPrefix: SUMMARY_PREFIX
@@ -577,6 +581,13 @@ registerEventSubReactionRoutes(app, {
   getEventSubReactionManager: () => eventSubReactionManager
 });
 
+
+registerNativeCommandRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => databaseConnected,
+  channelName
+});
+
 registerChatRoutes(app, {
   requireModSession,
   channelName,
@@ -591,6 +602,15 @@ async function bootstrap() {
     databaseConnected = false;
     console.error('[Database] Startup failed:', err.message || err);
     console.error('[Database] The web dashboard will still start, but MongoDB OAuth cannot work until the connection is fixed.');
+  }
+
+  if (databaseConnected) {
+    try {
+      const result = await purgeExpiredOptedOutProfiles(channelName);
+      if (result.purged > 0) console.log(`[Viewer Profiles] Purged ${result.purged} expired opted-out profile(s).`);
+    } catch (err) {
+      console.error('[Viewer Profiles] Startup retention cleanup failed:', err.message || err);
+    }
   }
 
   if (databaseConnected && automationSpacingManager) {
@@ -642,7 +662,8 @@ async function bootstrap() {
     getSessionMemoryConfig: () => botPersonalityManager?.getConfig?.()?.sessionMemory || {},
     getEventReactionHoldStatus,
     getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
-    tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: true })
+    tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: true }),
+    getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables)
   });
 
   const accessToken = await resolveStartupToken();
@@ -708,6 +729,17 @@ app.listen(PORT, () => {
   console.log('[OAuth] Twitch OAuth tokens are stored in MongoDB and are never logged.');
   console.log('[OAuth] Bot and broadcaster sessions validate automatically every 50 minutes and refresh on 401.');
 });
+
+
+setInterval(async () => {
+  if (!databaseConnected) return;
+  try {
+    const result = await purgeExpiredOptedOutProfiles(channelName);
+    if (result.purged > 0) console.log(`[Viewer Profiles] Purged ${result.purged} expired opted-out profile(s).`);
+  } catch (err) {
+    console.error('[Viewer Profiles] Retention cleanup failed:', err.message || err);
+  }
+}, 6 * 60 * 60 * 1000);
 
 bootstrap().catch((err) => {
   console.error('[Startup] Fatal bootstrap error:', err);

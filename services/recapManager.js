@@ -49,7 +49,8 @@ function createRecapManager({
   getSessionMemoryConfig,
   getEventReactionHoldStatus = null,
   getAutomationSpacingStatus = null,
-  tryReserveAutomationSlot = null
+  tryReserveAutomationSlot = null,
+  getNativeCommandResponse = null
 }) {
   let twitchClientId = (process.env.TWITCH_CLIENT_ID || '').trim();
   let streamStateInitialized = false;
@@ -78,6 +79,18 @@ function createRecapManager({
   let activeStateCheckpointTimer = null;
   let activeStateDirty = false;
   let activeStateSaveInProgress = false;
+
+  async function nativeResponse(command, variant, variables, fallback) {
+    if (typeof getNativeCommandResponse === 'function') {
+      try {
+        const rendered = await getNativeCommandResponse(command, variant, variables || {});
+        if (rendered) return rendered;
+      } catch (err) {
+        console.error(`[Native Commands] Could not render ${command}.${variant}:`, err?.message || err);
+      }
+    }
+    return fallback;
+  }
   let activeStateSavePromise = null;
   let lastRecapCommandUse = 0;
 
@@ -511,17 +524,17 @@ function createRecapManager({
 
   async function stopRecap({ channel, displayName = 'MOD', announce = true }) {
     if (!streamLive) {
-      if (announce) await client.say(channel, `@${displayName}, Qwert is offline, so the recap system is already inactive.`);
+      if (announce) await client.say(channel, await nativeResponse('stoprecap', 'offline', { user: displayName }, `@${displayName}, Qwert is offline, so the recap system is already inactive.`));
       return { success: false, message: 'Qwert is offline.' };
     }
 
     if (recapPaused) {
-      if (announce) await client.say(channel, `@${displayName}, automatic hourly recaps are already paused.`);
+      if (announce) await client.say(channel, await nativeResponse('stoprecap', 'alreadyPaused', { user: displayName }, `@${displayName}, automatic hourly recaps are already paused.`));
       return { success: false, message: 'Automatic hourly recaps are already paused.' };
     }
 
     if (recapInProgress) {
-      if (announce) await client.say(channel, `@${displayName}, an hourly recap is already being generated, so it can't be paused right now.`);
+      if (announce) await client.say(channel, await nativeResponse('stoprecap', 'generating', { user: displayName }, `@${displayName}, an hourly recap is already being generated, so it can't be paused right now.`));
       return { success: false, message: 'An hourly recap is currently being generated.' };
     }
 
@@ -536,7 +549,7 @@ function createRecapManager({
     console.log(`[Recap] ${formatCountdown(pausedRemainingMs)} remaining on timer.`);
 
     if (announce) {
-      await client.say(channel, `@${displayName}, automatic hourly recaps are paused. ${recapMessages.length} messages are preserved and the timer is frozen with ${formatCountdown(pausedRemainingMs)} remaining.`);
+      await client.say(channel, await nativeResponse('stoprecap', 'success', { user: displayName, messages: recapMessages.length, remaining: formatCountdown(pausedRemainingMs) }, `@${displayName}, automatic hourly recaps are paused. ${recapMessages.length} messages are preserved and the timer is frozen with ${formatCountdown(pausedRemainingMs)} remaining.`));
     }
 
     return { success: true, message: `Automatic hourly recaps paused with ${formatCountdown(pausedRemainingMs)} remaining.` };
@@ -544,12 +557,12 @@ function createRecapManager({
 
   async function startRecap({ channel, displayName = 'MOD', announce = true }) {
     if (!streamLive) {
-      if (announce) await client.say(channel, `@${displayName}, Qwert is offline. Hourly recaps will start fresh when the next stream begins.`);
+      if (announce) await client.say(channel, await nativeResponse('startrecap', 'offline', { user: displayName }, `@${displayName}, Qwert is offline. Hourly recaps will start fresh when the next stream begins.`));
       return { success: false, message: 'Qwert is offline.' };
     }
 
     if (!recapPaused) {
-      if (announce) await client.say(channel, `@${displayName}, automatic hourly recaps are already running.`);
+      if (announce) await client.say(channel, await nativeResponse('startrecap', 'alreadyRunning', { user: displayName }, `@${displayName}, automatic hourly recaps are already running.`));
       return { success: false, message: 'Automatic hourly recaps are already running.' };
     }
 
@@ -570,7 +583,7 @@ function createRecapManager({
     console.log(`[Recap] Resumed by ${displayName}. Next recap in ${formatCountdown(resumeDelay)}.`);
 
     if (announce) {
-      await client.say(channel, `@${displayName}, automatic hourly recaps resumed where they left off. Next recap in ${formatCountdown(resumeDelay)}.`);
+      await client.say(channel, await nativeResponse('startrecap', 'success', { user: displayName, remaining: formatCountdown(resumeDelay) }, `@${displayName}, automatic hourly recaps resumed where they left off. Next recap in ${formatCountdown(resumeDelay)}.`));
     }
 
     return { success: true, message: `Automatic hourly recaps resumed. Next recap in ${formatCountdown(resumeDelay)}.` };
@@ -846,7 +859,7 @@ function createRecapManager({
     const elapsed = now - lastRecapCommandUse;
 
     if (lastRecapCommandUse > 0 && elapsed < RECAP_COMMAND_COOLDOWN) {
-      await client.say(channel, `@${displayName}, !recap is on cooldown! Try again in ${formatCountdown(RECAP_COMMAND_COOLDOWN - elapsed)}.`);
+      await client.say(channel, await nativeResponse('recap', 'cooldown', { user: displayName, remaining: formatCountdown(RECAP_COMMAND_COOLDOWN - elapsed) }, `@${displayName}, !recap is on cooldown! Try again in ${formatCountdown(RECAP_COMMAND_COOLDOWN - elapsed)}.`));
       return;
     }
 
@@ -854,22 +867,22 @@ function createRecapManager({
 
     try {
       if (!streamLive) {
-        await client.say(channel, `@${displayName}, hourly recaps will start when Qwert goes live.`);
+        await client.say(channel, await nativeResponse('recap', 'offline', { user: displayName }, `@${displayName}, hourly recaps will start when Qwert goes live.`));
         return;
       }
 
       if (recapPaused) {
-        await client.say(channel, `@${displayName}, automatic hourly recaps are currently paused by a moderator.`);
+        await client.say(channel, await nativeResponse('recap', 'paused', { user: displayName }, `@${displayName}, automatic hourly recaps are currently paused by a moderator.`));
         return;
       }
 
       if (recapInProgress) {
-        await client.say(channel, `@${displayName}, the next hourly recap is being generated now.`);
+        await client.say(channel, await nativeResponse('recap', 'generating', { user: displayName }, `@${displayName}, the next hourly recap is being generated now.`));
         return;
       }
 
       const remaining = nextRecapAt ? formatCountdown(nextRecapAt - Date.now()) : 'a moment';
-      await client.say(channel, `@${displayName}, the next hourly recap will be sent in ${remaining}.`);
+      await client.say(channel, await nativeResponse('recap', 'eta', { user: displayName, remaining }, `@${displayName}, the next hourly recap will be sent in ${remaining}.`));
     } catch (err) {
       console.error('[Recap] Failed to answer !recap:', err);
     }

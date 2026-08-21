@@ -5,6 +5,8 @@ const MAX_ALIASES = 12;
 const MAX_PINNED_NOTES = 4000;
 const MAX_FACTS = 60;
 const MAX_FACT_LENGTH = 400;
+const OPT_OUT_RETENTION_DAYS = 30;
+const OPT_OUT_RETENTION_MS = OPT_OUT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 function normalizeChannelName(value) {
   return String(value || '').replace(/^#/, '').toLowerCase().trim();
@@ -52,6 +54,9 @@ function serializeProfile(doc) {
     twitchUserId: String(value.twitchUserId || ''),
     optedOut: value.optedOut === true,
     optedOutAt: value.optedOutAt || null,
+    profileDataPurgedAt: value.profileDataPurgedAt || null,
+    profileRetainedOnOptOut: value.profileRetainedOnOptOut === true,
+    profileRetentionExpiresAt: value.optedOut === true && value.optedOutAt && !value.profileDataPurgedAt ? new Date(new Date(value.optedOutAt).getTime() + OPT_OUT_RETENTION_MS) : null,
     aliases: Array.isArray(value.aliases) ? value.aliases : [],
     pinnedNotes: String(value.pinnedNotes || ''),
     enabled: value.enabled !== false,
@@ -100,14 +105,27 @@ async function saveViewerProfileSettings(channelName, value = {}) {
   };
 }
 
+async function purgeExpiredOptedOutProfiles(channelName, now = new Date()) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) return { purged: 0 };
+  const cutoff = new Date(new Date(now).getTime() - OPT_OUT_RETENTION_MS);
+  const result = await ViewerProfile.updateMany(
+    { channelName: channel, optedOut: true, optedOutAt: { $ne: null, $lte: cutoff }, profileDataPurgedAt: null },
+    { $set: { aliases: [], pinnedNotes: '', facts: [], profileDataPurgedAt: new Date(now), profileRetainedOnOptOut: false } }
+  );
+  return { purged: Number(result.modifiedCount || 0) };
+}
+
 async function listViewerProfiles(channelName) {
   const channel = normalizeChannelName(channelName);
+  await purgeExpiredOptedOutProfiles(channel);
   const docs = await ViewerProfile.find({ channelName: channel }).sort({ updatedAt: -1 }).lean();
   return docs.map(serializeProfile);
 }
 
 async function getViewerProfile(channelName, idOrUsername) {
   const channel = normalizeChannelName(channelName);
+  await purgeExpiredOptedOutProfiles(channel);
   const raw = String(idOrUsername || '').trim();
   let doc = null;
   if (/^[a-f0-9]{24}$/i.test(raw)) doc = await ViewerProfile.findOne({ channelName: channel, _id: raw }).lean();
@@ -126,14 +144,15 @@ async function saveViewerProfile(channelName, value = {}) {
 
   const existing = await ViewerProfile.findOne({ channelName: channel, username });
   const viewerOptedOut = existing?.optedOut === true;
+  if (viewerOptedOut) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
   const doc = await ViewerProfile.findOneAndUpdate(
     { channelName: channel, username },
     { $set: {
       displayName,
-      aliases: viewerOptedOut ? [] : aliases,
-      pinnedNotes: viewerOptedOut ? '' : pinnedNotes,
-      enabled: viewerOptedOut ? false : value.enabled !== false,
-      learningEnabled: viewerOptedOut ? false : value.learningEnabled !== false
+      aliases,
+      pinnedNotes,
+      enabled: value.enabled !== false,
+      learningEnabled: value.learningEnabled !== false
     }, $setOnInsert: { firstSeenAt: new Date(), lastSeenAt: new Date() } },
     { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
   );
@@ -147,39 +166,53 @@ async function setViewerProfileOptOut(channelName, { username, displayName, twit
   const normalizedUserId = String(twitchUserId || '').trim();
   if (!channel || !normalizedUsername) throw new Error('A valid channel and Twitch username are required.');
 
+  await purgeExpiredOptedOutProfiles(channel);
   const identityQuery = normalizedUserId
     ? { channelName: channel, $or: [{ twitchUserId: normalizedUserId }, { username: normalizedUsername }] }
     : { channelName: channel, username: normalizedUsername };
   let profile = await ViewerProfile.findOne(identityQuery);
+  const existedBefore = Boolean(profile);
   if (!profile) profile = new ViewerProfile({ channelName: channel, username: normalizedUsername, firstSeenAt: new Date() });
+
+  const now = new Date();
+  const previousOptedOutAt = profile.optedOutAt ? new Date(profile.optedOutAt) : null;
+  const withinRetention = Boolean(profile.optedOut === true && previousOptedOutAt && !profile.profileDataPurgedAt && (now.getTime() - previousOptedOutAt.getTime()) < OPT_OUT_RETENTION_MS);
+  const canReactivate = Boolean(withinRetention && profile.profileRetainedOnOptOut === true);
 
   profile.username = normalizedUsername;
   profile.displayName = normalizedDisplayName;
   if (normalizedUserId) profile.twitchUserId = normalizedUserId;
-  profile.lastSeenAt = new Date();
-  profile.optedOut = Boolean(optedOut);
-  profile.optedOutAt = optedOut ? new Date() : null;
+  profile.lastSeenAt = now;
 
   if (optedOut) {
-    // Keep only the minimum identity needed to remember the viewer's privacy choice.
+    if (profile.optedOut !== true) {
+      profile.preOptOutEnabled = profile.enabled !== false;
+      profile.preOptOutLearningEnabled = profile.learningEnabled !== false;
+      profile.profileRetainedOnOptOut = existedBefore;
+      profile.optedOutAt = now;
+      profile.profileDataPurgedAt = null;
+    }
+    profile.optedOut = true;
     profile.enabled = false;
     profile.learningEnabled = false;
-    profile.aliases = [];
-    profile.pinnedNotes = '';
-    profile.facts = [];
   } else {
-    profile.enabled = true;
-    profile.learningEnabled = true;
+    profile.optedOut = false;
+    profile.optedOutAt = null;
+    profile.profileDataPurgedAt = null;
+    profile.enabled = canReactivate ? profile.preOptOutEnabled !== false : true;
+    profile.learningEnabled = canReactivate ? profile.preOptOutLearningEnabled !== false : true;
+    profile.profileRetainedOnOptOut = false;
   }
 
   await profile.save();
-  return serializeProfile(profile);
+  return { profile: serializeProfile(profile), reactivated: !optedOut && canReactivate };
 }
 
 async function setFactEnabled(channelName, profileId, factId, enabled) {
   const channel = normalizeChannelName(channelName);
   const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
   if (!doc) throw new Error('Viewer profile not found.');
+  if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
   const fact = doc.facts.id(factId);
   if (!fact) throw new Error('Viewer fact not found.');
   fact.enabled = Boolean(enabled);
@@ -226,6 +259,7 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
   const settings = await getViewerProfileSettings(channelName);
   if (!settings.automaticLearningEnabled) return { applied: 0, skipped: 0 };
   const channel = normalizeChannelName(channelName);
+  await purgeExpiredOptedOutProfiles(channel);
   const excludedUsers = new Set([channel, 'sqwertarmybot', 'nightbot', 'streamelements', 'pokemoncommunitygame']);
   const { counts, displayNames } = buildParticipantCounts(chatLogs);
   let applied = 0;
@@ -281,6 +315,7 @@ function profileMatchesQuestion(profile, question) {
 }
 
 async function getRelevantViewerProfiles(channelName, question, limit = 4) {
+  await purgeExpiredOptedOutProfiles(channelName);
   const settings = await getViewerProfileSettings(channelName);
   if (!settings.useInTaggedQuestions) return [];
   const channel = normalizeChannelName(channelName);
@@ -306,6 +341,8 @@ module.exports = {
   MAX_ALIASES,
   MAX_PINNED_NOTES,
   MAX_FACTS,
+  OPT_OUT_RETENTION_DAYS,
+  OPT_OUT_RETENTION_MS,
   getViewerProfileSettings,
   saveViewerProfileSettings,
   listViewerProfiles,
@@ -314,6 +351,7 @@ module.exports = {
   setFactEnabled,
   deleteViewerProfile,
   setViewerProfileOptOut,
+  purgeExpiredOptedOutProfiles,
   applyViewerProfileUpdates,
   getRelevantViewerProfiles,
   formatViewerProfilesForPrompt

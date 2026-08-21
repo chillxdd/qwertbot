@@ -554,3 +554,7 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 .readonly-command-tabs{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:14px}
 .readonly-command-help{margin:0 0 12px}
 .readonly-command-card{cursor:default}
+
+.native-response-dialog{width:min(760px,calc(100vw - 32px))}
+.native-response-fields{display:grid;gap:14px;margin:14px 0}
+.native-response-field textarea{min-height:84px;resize:vertical}

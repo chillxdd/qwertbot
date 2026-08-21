@@ -21,7 +21,7 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
 }
 
-function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, sendMessage, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, getNativeCommandResponse = null, sendMessage, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -154,22 +154,32 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       if (lowerMsg === '!optout' || lowerMsg === '!optin') {
         const optingOut = lowerMsg === '!optout';
         try {
-          await setViewerProfileOptOut(channel, {
+          const result = await setViewerProfileOptOut(channel, {
             username,
             displayName,
             twitchUserId: tags['user-id'] || '',
             optedOut: optingOut
           });
           if (typeof sendMessage === 'function') {
-            const text = optingOut
-              ? `@${displayName}, you've opted out of Viewer Profiles. I won't learn from or use your profile in AI responses.`
-              : `@${displayName}, you've opted back into Viewer Profiles. Automatic learning and profile use are available again.`;
+            const command = optingOut ? 'optout' : 'optin';
+            const variant = optingOut ? 'success' : (result?.reactivated ? 'reactivated' : 'fresh');
+            const text = typeof getNativeCommandResponse === 'function'
+              ? await getNativeCommandResponse(command, variant, { user: displayName, retentionDays: 30 })
+              : (optingOut
+                ? `@${displayName}, you've opted out of Viewer Profiles. Learning and profile use stop immediately. Your existing profile will be deleted after 30 days unless you opt back in.`
+                : result?.reactivated
+                  ? `@${displayName}, you've opted back into Viewer Profiles. Your existing profile has been reactivated.`
+                  : `@${displayName}, you've opted back into Viewer Profiles. A new profile can now be learned over time.`);
             await sendMessage(channel, text);
           }
         } catch (err) {
           console.error(`[Viewer Profiles] Failed to process ${lowerMsg} for ${displayName}:`, err?.message || err);
           if (typeof sendMessage === 'function') {
-            await sendMessage(channel, `@${displayName}, I couldn't update your Viewer Profile preference right now. Please try again later.`);
+            const command = optingOut ? 'optout' : 'optin';
+            const text = typeof getNativeCommandResponse === 'function'
+              ? await getNativeCommandResponse(command, 'error', { user: displayName, retentionDays: 30 })
+              : `@${displayName}, I couldn't update your Viewer Profile preference right now. Please try again later.`;
+            await sendMessage(channel, text);
           }
         }
         return;

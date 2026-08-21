@@ -87,6 +87,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
           <div class="custom-command-card-main">
             <div class="custom-command-title-row"><strong class="custom-command-name">${esc(profile.displayName || profile.username)}</strong><span class="detail">@${esc(profile.username)}</span>${disabled}${learning}</div>
             <div class="detail">${activeFacts} active learned fact${activeFacts === 1 ? '' : 's'}${aliases}</div>
+            ${profile.optedOut === true ? `<div class="detail">${profile.profileDataPurgedAt ? 'Stored profile content deleted after opt-out retention.' : profile.profileRetentionExpiresAt ? `Stored profile retained until ${esc(new Date(profile.profileRetentionExpiresAt).toLocaleDateString())}.` : 'Profile learning and use are paused.'}</div>` : ''}
             <div class="detail">Last updated: ${profile.updatedAt ? esc(new Date(profile.updatedAt).toLocaleString()) : 'Unknown'}</div>
           </div>
           <div class="custom-command-actions"><button class="secondary viewer-profile-view-btn" type="button">View / Edit</button></div>
@@ -109,7 +110,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     $('viewerProfileFactCount').textContent = `${facts.length} fact${facts.length === 1 ? '' : 's'}`;
     $('viewerProfileFacts').innerHTML = facts.length ? facts.map((fact) => `
       <div class="viewer-profile-fact ${fact.enabled === false ? 'disabled' : ''}" data-fact-id="${esc(fact.id)}">
-        <label class="inline-check"><input class="viewer-profile-fact-toggle" type="checkbox" ${fact.enabled === false ? '' : 'checked'}> Use</label>
+        <label class="inline-check"><input class="viewer-profile-fact-toggle" type="checkbox" ${fact.enabled === false ? '' : 'checked'} ${profile?.optedOut === true ? 'disabled' : ''}> Use</label>
         <div class="viewer-profile-fact-copy">
           <div>${esc(fact.text)}</div>
           <div class="detail">${esc(fact.confidence || 'medium')} confidence · observed ${Number(fact.evidenceCount || 1)}x${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
@@ -171,9 +172,17 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     if (profile) {
       editingId = profile.id;
       $('viewerProfileDialogTitle').textContent = profile.displayName || profile.username;
-      $('viewerProfileDialogMeta').textContent = profile.optedOut === true
-        ? `@${profile.username} · Opted out via !optout`
-        : `@${profile.username} · persistent across streams`;
+      if (profile.optedOut === true) {
+        if (profile.profileDataPurgedAt) {
+          $('viewerProfileDialogMeta').textContent = `@${profile.username} · Opted out · stored profile content deleted`;
+        } else if (profile.profileRetentionExpiresAt) {
+          $('viewerProfileDialogMeta').textContent = `@${profile.username} · Opted out · retained until ${new Date(profile.profileRetentionExpiresAt).toLocaleDateString()}`;
+        } else {
+          $('viewerProfileDialogMeta').textContent = `@${profile.username} · Opted out`;
+        }
+      } else {
+        $('viewerProfileDialogMeta').textContent = `@${profile.username} · persistent across streams`;
+      }
       $('viewerProfileUsername').disabled = true;
       $('viewerProfileUsername').value = profile.username || '';
       $('viewerProfileDisplayName').value = profile.displayName || '';

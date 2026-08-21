@@ -595,51 +595,68 @@
         <div class="custom-command-header">
           <div>
             <h3>Native Commands</h3>
-            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they perform bot actions instead of sending a configurable response.</div>
+            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they perform bot actions; their user-facing responses can be customized here.</div>
           </div>
         </div>
 
         <div class="native-command-list">
-          <div class="native-command-card">
+          <div class="native-command-card" data-native-command="recap">
             <div class="native-command-main">
               <div class="native-command-title"><code>!recap</code><span class="native-command-badge">Everyone</span></div>
               <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
             </div>
-            <span class="native-command-status enabled">Built-in</span>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card">
+          <div class="native-command-card" data-native-command="startrecap">
             <div class="native-command-main">
               <div class="native-command-title"><code>!startrecap</code><span class="native-command-badge">Moderator</span></div>
               <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
             </div>
-            <span class="native-command-status enabled">Built-in</span>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card">
+          <div class="native-command-card" data-native-command="stoprecap">
             <div class="native-command-main">
               <div class="native-command-title"><code>!stoprecap</code><span class="native-command-badge">Moderator</span></div>
               <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
             </div>
-            <span class="native-command-status enabled">Built-in</span>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card">
+          <div class="native-command-card" data-native-command="optout">
             <div class="native-command-main">
               <div class="native-command-title"><code>!optout</code><span class="native-command-badge">Everyone</span></div>
-              <div class="detail">Opts the viewer out of Viewer Profiles, removes stored profile content, and prevents future profile learning or AI use until they opt back in.</div>
+              <div class="detail">Opts the viewer out of Viewer Profiles immediately. Learning and AI use stop at once; the existing profile is retained for 30 days in case they opt back in, then its stored profile content is deleted.</div>
             </div>
-            <span class="native-command-status enabled">Built-in</span>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card">
+          <div class="native-command-card" data-native-command="optin">
             <div class="native-command-main">
               <div class="native-command-title"><code>!optin</code><span class="native-command-badge">Everyone</span></div>
-              <div class="detail">Opts the viewer back into Viewer Profiles so future profile learning and AI use can resume when those features are enabled.</div>
+              <div class="detail">Opts the viewer back into Viewer Profiles. If they return within 30 days, their retained profile is reactivated; after that, a new profile starts fresh.</div>
             </div>
-            <span class="native-command-status enabled">Built-in</span>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
         </div>
+
+        <dialog id="nativeResponseDialog" class="custom-variables-dialog native-response-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3 id="nativeResponseDialogTitle">Native Command Responses</h3>
+              <div class="detail">Customize user-facing chat responses without changing what the command actually does.</div>
+            </div>
+            <button id="closeNativeResponseDialogBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div id="nativeResponseFields" class="native-response-fields"></div>
+          <div class="detail">Variables: <code>$(user)</code> is available everywhere. Some responses also support <code>$(remaining)</code> or <code>$(messages)</code>.</div>
+          <div class="custom-editor-actions">
+            <button id="saveNativeResponseBtn" type="button">Save Responses</button>
+            <button id="resetNativeResponseBtn" class="secondary" type="button">Reset Command to Defaults</button>
+          </div>
+          <div id="nativeResponseMsg" class="detail"></div>
+        </dialog>
 
         <div class="native-command-note detail">Native Commands is intentionally for stateful or privileged bot actions. Ordinary text responses, counters, random replies, and inline triggers should stay in Custom Commands.</div>
       </div>

@@ -118,9 +118,101 @@ let readOnlyNativePage = 1;
 
 const readOnlyNativeCommands = [
   { name: '!recap', description: 'Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.' },
-  { name: '!optout', description: 'Opts you out of Viewer Profiles and removes stored profile content.' },
-  { name: '!optin', description: 'Opts you back into Viewer Profiles.' }
+  { name: '!optout', description: 'Opts you out of Viewer Profiles immediately. Learning and AI use stop at once; your existing profile is retained for 30 days in case you opt back in, then its stored profile content is deleted.' },
+  { name: '!optin', description: 'Opts you back into Viewer Profiles. If you return within 30 days, your retained profile is reactivated; after that, a new profile starts fresh.' }
+
 ];
+
+const NATIVE_RESPONSE_FIELDS = {
+  recap: [
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
+    ['offline', 'Offline', 'Variable: $(user)'],
+    ['paused', 'Paused', 'Variable: $(user)'],
+    ['generating', 'Generating', 'Variable: $(user)'],
+    ['eta', 'Next Recap ETA', 'Variables: $(user), $(remaining)']
+  ],
+  startrecap: [
+    ['offline', 'Offline', 'Variable: $(user)'],
+    ['alreadyRunning', 'Already Running', 'Variable: $(user)'],
+    ['success', 'Resumed', 'Variables: $(user), $(remaining)']
+  ],
+  stoprecap: [
+    ['offline', 'Offline', 'Variable: $(user)'],
+    ['alreadyPaused', 'Already Paused', 'Variable: $(user)'],
+    ['generating', 'Generating', 'Variable: $(user)'],
+    ['success', 'Paused', 'Variables: $(user), $(messages), $(remaining)']
+  ],
+  optout: [
+    ['success', 'Opted Out', 'Variable: $(user)'],
+    ['error', 'Error', 'Variable: $(user)']
+  ],
+  optin: [
+    ['reactivated', 'Profile Reactivated', 'Variable: $(user)'],
+    ['fresh', 'Fresh Profile', 'Variable: $(user)'],
+    ['error', 'Error', 'Variable: $(user)']
+  ]
+};
+let nativeResponses = null;
+let nativeResponseDefaults = null;
+let editingNativeCommand = null;
+let nativeResponseMaxLength = 450;
+
+async function loadNativeResponses() {
+  const d = await postJson('/native-commands/responses/get', {});
+  if (!d.success) throw new Error(d.error || 'Could not load native command responses.');
+  nativeResponses = d.responses || {};
+  nativeResponseDefaults = d.defaults || {};
+  nativeResponseMaxLength = Number(d.maxLength || 450);
+}
+
+function renderNativeResponseFields(command) {
+  const fields = NATIVE_RESPONSE_FIELDS[command] || [];
+  $('nativeResponseFields').innerHTML = fields.map(([key, label, help]) => {
+    const value = nativeResponses?.[command]?.[key] || '';
+    return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><textarea data-native-response-key="${esc(key)}" maxlength="${nativeResponseMaxLength}">${esc(value)}</textarea><div class="detail">${esc(help)}</div></div>`;
+  }).join('');
+}
+
+async function openNativeResponseDialog(command) {
+  editingNativeCommand = command;
+  $('nativeResponseMsg').textContent = 'Loading...';
+  if (!nativeResponses) {
+    try { await loadNativeResponses(); }
+    catch (err) { $('nativeResponseMsg').textContent = err.message; return; }
+  }
+  $('nativeResponseDialogTitle').textContent = `!${command} Responses`;
+  renderNativeResponseFields(command);
+  $('nativeResponseMsg').textContent = '';
+  const dialog = $('nativeResponseDialog');
+  if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
+}
+
+function closeNativeResponseDialog() {
+  const dialog = $('nativeResponseDialog');
+  if (typeof dialog.close === 'function') dialog.close(); else dialog.removeAttribute('open');
+}
+
+async function saveNativeResponseDialog() {
+  if (!editingNativeCommand) return;
+  const commandResponses = { ...(nativeResponses?.[editingNativeCommand] || {}) };
+  $('nativeResponseFields').querySelectorAll('[data-native-response-key]').forEach((field) => {
+    commandResponses[field.dataset.nativeResponseKey] = field.value.trim();
+  });
+  nativeResponses = { ...(nativeResponses || {}), [editingNativeCommand]: commandResponses };
+  $('nativeResponseMsg').textContent = 'Saving...';
+  const d = await postJson('/native-commands/responses/save', { responses: nativeResponses });
+  if (!d.success) { $('nativeResponseMsg').textContent = d.error || 'Could not save responses.'; return; }
+  nativeResponses = d.responses || nativeResponses;
+  renderNativeResponseFields(editingNativeCommand);
+  $('nativeResponseMsg').textContent = 'Saved. Changes are live immediately.';
+}
+
+function resetNativeResponseDialog() {
+  if (!editingNativeCommand || !nativeResponseDefaults?.[editingNativeCommand]) return;
+  nativeResponses = { ...(nativeResponses || {}), [editingNativeCommand]: JSON.parse(JSON.stringify(nativeResponseDefaults[editingNativeCommand])) };
+  renderNativeResponseFields(editingNativeCommand);
+  $('nativeResponseMsg').textContent = 'Defaults loaded. Save to apply them.';
+}
 
 function selectReadOnlyCommandsView(view = 'commands') {
   const commandsSelected = view === 'commands';
@@ -384,6 +476,13 @@ $('customCommandsViewTab').onclick = () => selectCommandsView('commands');
 $('timersViewTab').onclick = () => selectCommandsView('timers');
 $('eventReactionsViewTab').onclick = () => selectCommandsView('reactions');
 $('nativeCommandsViewTab').onclick = () => selectCommandsView('native');
+document.querySelectorAll('.native-response-edit-btn').forEach((button) => {
+  button.onclick = () => openNativeResponseDialog(button.closest('[data-native-command]')?.dataset.nativeCommand || '');
+});
+$('closeNativeResponseDialogBtn').onclick = closeNativeResponseDialog;
+$('saveNativeResponseBtn').onclick = saveNativeResponseDialog;
+$('resetNativeResponseBtn').onclick = resetNativeResponseDialog;
+$('nativeResponseDialog').addEventListener('click', (event) => { if (event.target === $('nativeResponseDialog')) closeNativeResponseDialog(); });
 selectCommandsView('commands', { load: false });
 
 const sectionMap = {
