@@ -117,9 +117,9 @@ let readOnlyCustomPage = 1;
 let readOnlyNativePage = 1;
 
 const readOnlyNativeCommands = [
-  { name: '!recap', description: 'Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.' },
-  { name: '!optout', description: 'Opts you out of Viewer Profiles immediately. Learning and AI use stop at once; your existing profile is retained for 30 days in case you opt back in, then its stored profile content is deleted.' },
-  { name: '!optin', description: 'Opts you back into Viewer Profiles. If you return within 30 days, your retained profile is reactivated; after that, a new profile starts fresh.' }
+  { name: '!recap', userLevel: 'everyone', description: 'Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.' },
+  { name: '!optout', userLevel: 'everyone', description: 'Opts you out of Viewer Profiles immediately. Learning and AI use stop at once; your existing profile is retained for 30 days in case you opt back in, then its stored profile content is deleted.' },
+  { name: '!optin', userLevel: 'everyone', description: 'Opts you back into Viewer Profiles. If you return within 30 days, your retained profile is reactivated; after that, a new profile starts fresh.' }
 
 ];
 
@@ -241,12 +241,23 @@ function updateReadOnlyPagination({ totalItems, page, setPage, pageSizeId, label
   return { page: safePage, pageSize };
 }
 
+const USER_LEVEL_LABELS = { everyone: 'Everyone', subscriber: 'Subscriber', twitch_vip: 'VIP', moderator: 'Moderator', owner: 'Broadcaster' };
+function normalizedUserLevel(value) {
+  return Object.prototype.hasOwnProperty.call(USER_LEVEL_LABELS, value) ? value : 'everyone';
+}
+function userLevelBadgeHtml(value) {
+  const level = normalizedUserLevel(value);
+  return `<span class="user-level-badge user-level-${level}">${esc(USER_LEVEL_LABELS[level])}</span>`;
+}
+
 function renderReadOnlyCustomCommands() {
   const list = $('readonlyCustomCommandList');
   const msg = $('readonlyCustomCommandsMsg');
   const query = String($('readonlyCustomCommandSearch')?.value || '').trim().toLocaleLowerCase();
   const sort = $('readonlyCustomCommandSort')?.value || 'name_asc';
+  const userLevelFilter = $('readonlyCustomCommandUserLevelFilter')?.value || 'all';
   const filtered = readOnlyCustomCommands.filter((command) => {
+    if (userLevelFilter !== 'all' && normalizedUserLevel(command.userLevel) !== userLevelFilter) return false;
     if (!query) return true;
     const triggers = Array.isArray(command.triggers) ? command.triggers : [];
     const haystack = [command.name, ...triggers.flatMap((trigger) => [trigger?.trigger, trigger?.triggerType])]
@@ -276,7 +287,7 @@ function renderReadOnlyCustomCommands() {
   if (!readOnlyCustomCommands.length) {
     list.innerHTML = '<div class="coming-soon custom-empty-state">No commands are available right now.</div>';
   } else if (!visible.length) {
-    list.innerHTML = '<div class="coming-soon custom-empty-state">No commands match your search.</div>';
+    list.innerHTML = '<div class="coming-soon custom-empty-state">No commands match the current filters.</div>';
   } else {
     list.innerHTML = visible.map((command) => {
       const triggers = Array.isArray(command.triggers) ? command.triggers : [];
@@ -284,10 +295,11 @@ function renderReadOnlyCustomCommands() {
         const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
         return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
       }).join('');
-      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="user-level-badge user-level-everyone">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
+      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong>${userLevelBadgeHtml(command.userLevel)}</div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
     }).join('');
   }
-  msg.textContent = query ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyCustomCommands.length} command${readOnlyCustomCommands.length === 1 ? '' : 's'} available.`;
+  const filteredView = Boolean(query || userLevelFilter !== 'all');
+  msg.textContent = filteredView ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyCustomCommands.length} command${readOnlyCustomCommands.length === 1 ? '' : 's'} available.`;
 }
 
 function renderReadOnlyNativeCommands() {
@@ -295,7 +307,8 @@ function renderReadOnlyNativeCommands() {
   const msg = $('readonlyNativeCommandsMsg');
   const query = String($('readonlyNativeCommandSearch')?.value || '').trim().toLocaleLowerCase();
   const sort = $('readonlyNativeCommandSort')?.value || 'name_asc';
-  const filtered = readOnlyNativeCommands.filter((command) => !query || `${command.name} ${command.description}`.toLocaleLowerCase().includes(query))
+  const userLevelFilter = $('readonlyNativeCommandUserLevelFilter')?.value || 'all';
+  const filtered = readOnlyNativeCommands.filter((command) => (userLevelFilter === 'all' || normalizedUserLevel(command.userLevel) === userLevelFilter) && (!query || `${command.name} ${command.description}`.toLocaleLowerCase().includes(query)))
     .sort((a, b) => sort === 'name_desc'
       ? b.name.localeCompare(a.name, undefined, { sensitivity: 'base', numeric: true })
       : a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
@@ -311,9 +324,10 @@ function renderReadOnlyNativeCommands() {
   });
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
   list.innerHTML = visible.length
-    ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code><span class="user-level-badge user-level-everyone">Everyone</span></div><div class="detail">${esc(command.description)}</div></div><span class="native-command-status enabled">Built-in</span></div>`).join('')
-    : '<div class="coming-soon custom-empty-state">No commands match your search.</div>';
-  msg.textContent = query ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyNativeCommands.length} command${readOnlyNativeCommands.length === 1 ? '' : 's'} available.`;
+    ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code>${userLevelBadgeHtml(command.userLevel)}</div><div class="detail">${esc(command.description)}</div></div><span class="native-command-status enabled">Built-in</span></div>`).join('')
+    : '<div class="coming-soon custom-empty-state">No commands match the current filters.</div>';
+  const filteredView = Boolean(query || userLevelFilter !== 'all');
+  msg.textContent = filteredView ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyNativeCommands.length} command${readOnlyNativeCommands.length === 1 ? '' : 's'} available.`;
 }
 
 async function loadReadOnlyCommands() {
@@ -341,11 +355,13 @@ $('readonlyNativeCommandsTab').onclick = () => selectReadOnlyCommandsView('nativ
 selectReadOnlyCommandsView('commands');
 $('readonlyCustomCommandSearch').oninput = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
 $('readonlyCustomCommandSort').onchange = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
+$('readonlyCustomCommandUserLevelFilter').onchange = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
 $('readonlyCustomCommandPageSize').onchange = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
 $('readonlyCustomCommandPrevPage').onclick = () => { if (readOnlyCustomPage > 1) { readOnlyCustomPage -= 1; renderReadOnlyCustomCommands(); } };
 $('readonlyCustomCommandNextPage').onclick = () => { readOnlyCustomPage += 1; renderReadOnlyCustomCommands(); };
 $('readonlyNativeCommandSearch').oninput = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
 $('readonlyNativeCommandSort').onchange = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
+$('readonlyNativeCommandUserLevelFilter').onchange = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
 $('readonlyNativeCommandPageSize').onchange = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
 $('readonlyNativeCommandPrevPage').onclick = () => { if (readOnlyNativePage > 1) { readOnlyNativePage -= 1; renderReadOnlyNativeCommands(); } };
 $('readonlyNativeCommandNextPage').onclick = () => { readOnlyNativePage += 1; renderReadOnlyNativeCommands(); };
@@ -476,6 +492,15 @@ $('customCommandsViewTab').onclick = () => selectCommandsView('commands');
 $('timersViewTab').onclick = () => selectCommandsView('timers');
 $('eventReactionsViewTab').onclick = () => selectCommandsView('reactions');
 $('nativeCommandsViewTab').onclick = () => selectCommandsView('native');
+const nativeCommandUserLevelFilter = $('nativeCommandUserLevelFilter');
+function applyNativeCommandUserLevelFilter() {
+  const level = nativeCommandUserLevelFilter?.value || 'all';
+  document.querySelectorAll('#nativeCommandList [data-native-command]').forEach((card) => {
+    card.hidden = level !== 'all' && normalizedUserLevel(card.dataset.userLevel) !== level;
+  });
+}
+if (nativeCommandUserLevelFilter) nativeCommandUserLevelFilter.onchange = applyNativeCommandUserLevelFilter;
+applyNativeCommandUserLevelFilter();
 document.querySelectorAll('.native-response-edit-btn').forEach((button) => {
   button.onclick = () => openNativeResponseDialog(button.closest('[data-native-command]')?.dataset.nativeCommand || '');
 });

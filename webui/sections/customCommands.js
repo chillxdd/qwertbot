@@ -17,6 +17,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   const SORT_STORAGE_KEY = 'sqwert-custom-command-sort';
   const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'counter_desc', 'counter_asc']);
   const PAGE_SIZE_STORAGE_KEY = 'sqwert-custom-command-page-size';
+  const USER_LEVEL_FILTER_STORAGE_KEY = 'sqwert-custom-command-user-level-filter';
+  const VALID_USER_LEVEL_FILTERS = new Set(['all', 'everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner']);
   const VALID_PAGE_SIZES = new Set([10, 25, 50]);
 
   const listEl = $('customCommandList');
@@ -317,6 +319,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     return String($('customCommandSearch')?.value || '').trim().toLocaleLowerCase();
   }
 
+  function selectedUserLevelFilter() {
+    const value = $('customCommandUserLevelFilter')?.value || 'all';
+    return VALID_USER_LEVEL_FILTERS.has(value) ? value : 'all';
+  }
+
   function matchesSearch(command, query) {
     if (!query) return true;
     const triggers = command?.triggers?.length
@@ -333,7 +340,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   function filteredCommands() {
     const query = searchQuery();
-    return sortedCommands().filter((command) => matchesSearch(command, query));
+    const userLevelFilter = selectedUserLevelFilter();
+    return sortedCommands().filter((command) => {
+      const userLevel = VALID_USER_LEVEL_FILTERS.has(command?.userLevel) ? command.userLevel : 'everyone';
+      return (userLevelFilter === 'all' || userLevel === userLevelFilter) && matchesSearch(command, query);
+    });
   }
 
   function updatePagination(totalItems) {
@@ -360,7 +371,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const visibleCommands = filtered.slice(start, start + pageSize);
 
     if (!visibleCommands.length) {
-      listEl.innerHTML = '<div class="coming-soon custom-empty-state">No custom commands match your search.</div>';
+      listEl.innerHTML = '<div class="coming-soon custom-empty-state">No custom commands match the current filters.</div>';
       return;
     }
 
@@ -657,6 +668,19 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   const searchInput = $('customCommandSearch');
   if (searchInput) searchInput.oninput = () => { currentPage = 1; renderList(); };
+
+  const userLevelFilter = $('customCommandUserLevelFilter');
+  if (userLevelFilter) {
+    try {
+      const savedUserLevelFilter = localStorage.getItem(USER_LEVEL_FILTER_STORAGE_KEY);
+      if (VALID_USER_LEVEL_FILTERS.has(savedUserLevelFilter)) userLevelFilter.value = savedUserLevelFilter;
+    } catch {}
+    userLevelFilter.onchange = () => {
+      currentPage = 1;
+      try { localStorage.setItem(USER_LEVEL_FILTER_STORAGE_KEY, selectedUserLevelFilter()); } catch {}
+      renderList();
+    };
+  }
 
   const pageSizeSelect = $('customCommandPageSize');
   if (pageSizeSelect) {

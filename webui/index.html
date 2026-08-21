@@ -133,6 +133,16 @@
             <span class="sr-only">Search custom commands</span>
             <input id="customCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search custom commands">
           </label>
+          <label class="custom-command-sort-label" for="customCommandUserLevelFilter">User Level
+            <select id="customCommandUserLevelFilter" aria-label="Filter custom commands by user level">
+              <option value="all">All Levels</option>
+              <option value="everyone">Everyone</option>
+              <option value="subscriber">Subscriber</option>
+              <option value="twitch_vip">VIP</option>
+              <option value="moderator">Moderator</option>
+              <option value="owner">Broadcaster</option>
+            </select>
+          </label>
           <label class="custom-command-sort-label" for="customCommandSort">Sort
             <select id="customCommandSort" aria-label="Sort custom commands">
               <option value="created_asc">Date added — oldest first</option>
@@ -619,10 +629,22 @@
             <h3>Native Commands</h3>
             <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they perform bot actions; their user-facing responses can be customized here.</div>
           </div>
+          <div class="custom-command-list-controls">
+            <label class="custom-command-sort-label" for="nativeCommandUserLevelFilter">User Level
+              <select id="nativeCommandUserLevelFilter" aria-label="Filter native commands by user level">
+                <option value="all">All Levels</option>
+                <option value="everyone">Everyone</option>
+                <option value="subscriber">Subscriber</option>
+                <option value="twitch_vip">VIP</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Broadcaster</option>
+              </select>
+            </label>
+          </div>
         </div>
 
-        <div class="native-command-list">
-          <div class="native-command-card" data-native-command="recap">
+        <div id="nativeCommandList" class="native-command-list">
+          <div class="native-command-card" data-native-command="recap" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!recap</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
@@ -630,7 +652,7 @@
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card" data-native-command="startrecap">
+          <div class="native-command-card" data-native-command="startrecap" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!startrecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
@@ -638,7 +660,7 @@
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card" data-native-command="stoprecap">
+          <div class="native-command-card" data-native-command="stoprecap" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!stoprecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
@@ -646,7 +668,7 @@
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card" data-native-command="optout">
+          <div class="native-command-card" data-native-command="optout" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!optout</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Opts the viewer out of Viewer Profiles immediately. Learning and AI use stop at once; the existing profile is retained for 30 days in case they opt back in, then its stored profile content is deleted.</div>
@@ -654,7 +676,7 @@
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
-          <div class="native-command-card" data-native-command="optin">
+          <div class="native-command-card" data-native-command="optin" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!optin</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Opts the viewer back into Viewer Profiles. If they return within 30 days, their retained profile is reactivated; after that, a new profile starts fresh.</div>
@@ -918,11 +940,19 @@
     </div>
     <div id="readonlyCustomCommandsView" class="subsection-view open">
       <div class="custom-command-header readonly-list-header">
-        <div class="detail readonly-command-help">Chat commands available to everyone.</div>
+        <div class="detail readonly-command-help">Viewer-facing chat commands. Subscriber and VIP requirements are shown on each command.</div>
         <div class="custom-command-list-controls">
           <label class="list-search-wrap" for="readonlyCustomCommandSearch">
             <span class="sr-only">Search public custom commands</span>
             <input id="readonlyCustomCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search public custom commands">
+          </label>
+          <label class="custom-command-sort-label" for="readonlyCustomCommandUserLevelFilter">User Level
+            <select id="readonlyCustomCommandUserLevelFilter" aria-label="Filter public custom commands by user level">
+              <option value="all">All Levels</option>
+              <option value="everyone">Everyone</option>
+              <option value="subscriber">Subscriber</option>
+              <option value="twitch_vip">VIP</option>
+            </select>
           </label>
           <label class="custom-command-sort-label" for="readonlyCustomCommandSort">Sort
             <select id="readonlyCustomCommandSort" aria-label="Sort public custom commands">
@@ -951,11 +981,19 @@
     </div>
     <div id="readonlyNativeCommandsView" class="subsection-view">
       <div class="custom-command-header readonly-list-header">
-        <div class="detail readonly-command-help">Built-in commands available to everyone.</div>
+        <div class="detail readonly-command-help">Viewer-facing built-in commands. User Level shows who can use each command.</div>
         <div class="custom-command-list-controls">
           <label class="list-search-wrap" for="readonlyNativeCommandSearch">
             <span class="sr-only">Search public native commands</span>
             <input id="readonlyNativeCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search public native commands">
+          </label>
+          <label class="custom-command-sort-label" for="readonlyNativeCommandUserLevelFilter">User Level
+            <select id="readonlyNativeCommandUserLevelFilter" aria-label="Filter public native commands by user level">
+              <option value="all">All Levels</option>
+              <option value="everyone">Everyone</option>
+              <option value="subscriber">Subscriber</option>
+              <option value="twitch_vip">VIP</option>
+            </select>
           </label>
           <label class="custom-command-sort-label" for="readonlyNativeCommandSort">Sort
             <select id="readonlyNativeCommandSort" aria-label="Sort public native commands">

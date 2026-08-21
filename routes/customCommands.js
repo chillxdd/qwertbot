@@ -10,12 +10,13 @@ function registerCustomCommandRoutes(app, { requireModSession, getDatabaseConnec
     try {
       const commands = await manager.listCommands();
       const publicCommands = commands
-        .filter((command) => command.enabled !== false && command.userLevel === 'everyone' && Number(command.probability) === 100)
+        .filter((command) => command.enabled !== false && ['everyone', 'subscriber', 'twitch_vip'].includes(command.userLevel || 'everyone') && Number(command.probability) === 100)
         .map((command) => ({
           id: command.id,
           name: command.name,
           triggers: Array.isArray(command.triggers) ? command.triggers : [],
-          cooldownSeconds: Number(command.cooldownSeconds || 0)
+          cooldownSeconds: Number(command.cooldownSeconds || 0),
+          userLevel: ['everyone', 'subscriber', 'twitch_vip'].includes(command.userLevel) ? command.userLevel : 'everyone'
         }));
       return res.json({ success: true, commands: publicCommands });
     } catch (err) {
