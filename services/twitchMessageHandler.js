@@ -136,7 +136,12 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
     if (botPersonalityManager) {
       try {
-        const personalityResult = await botPersonalityManager.handleTaggedQuestion({ rawMessage, displayName, tags });
+        const personalityResult = await botPersonalityManager.handleTaggedQuestion({
+          rawMessage,
+          displayName,
+          tags,
+          replyParentMessageId: tags.id || tags['message-id'] || ''
+        });
         if (personalityResult?.matched) {
           // A tagged AI question is still organic viewer chat, even when the
           // current audience setting prevents the bot from answering it.

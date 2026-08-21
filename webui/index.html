@@ -255,6 +255,7 @@
               <label class="prompt-label" for="customSendAs">Send As</label>
               <select id="customSendAs">
                 <option value="chat">Chat Message</option>
+                <option value="reply">Reply to Trigger</option>
                 <option value="announcement">Announcement</option>
               </select>
             </div>
@@ -708,7 +709,7 @@
       <div id="botPersonalityView" class="subsection-view">
       <div class="memory-block">
         <h4>Bot Personality & Tagged Questions</h4>
-        <div class="detail">When a message starts with <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Leaving the Personality field blank disables tagged AI answers.</div>
+        <div class="detail">When a message starts with <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Tagged AI answers reply directly to the triggering Twitch message when possible. Leaving the Personality field blank disables tagged AI answers.</div>
         <label class="prompt-label" for="botPersonalityName">Name</label>
         <input id="botPersonalityName" type="text" maxlength="80" placeholder="Example: OakBot">
         <div class="detail">Optional. Tagged AI replies will begin with a bold-styled Unicode prefix such as <code>(𝗮𝘀 𝗢𝗮𝗸𝗕𝗼𝘁):</code>. This affects tagged questions only; hourly recaps and other bot messages are unchanged.</div>

@@ -16,7 +16,7 @@ const RESERVED_COMMANDS = new Set(['!recap', '!startrecap', '!stoprecap', '!opto
 const OWN_RESPONSE_TTL_MS = 15000;
 const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
 const RESPONSE_MODES = ['equal', 'weighted', 'ifelse'];
-const SEND_AS_MODES = ['chat', 'announcement'];
+const SEND_AS_MODES = ['chat', 'reply', 'announcement'];
 const ANNOUNCEMENT_COLORS = ['primary', 'blue', 'green', 'orange', 'purple'];
 
 function normalizeTrigger(triggerType, value) {
@@ -692,7 +692,14 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
       let result;
       let sent = false;
       try {
-        result = await sendMessage(normalizedChannel, renderedCooldown);
+        const cooldownSendAs = SEND_AS_MODES.includes(command.sendAs) ? command.sendAs : 'chat';
+        const replyParentMessageId = String(tags?.id || tags?.['message-id'] || '').trim();
+        const sendOptions = cooldownSendAs === 'reply' && replyParentMessageId
+          ? { replyParentMessageId }
+          : {};
+        // Cooldown notices stay conversational. Announcement commands never
+        // broadcast cooldown messages as announcements.
+        result = await sendMessage(normalizedChannel, renderedCooldown, sendOptions);
         sent = true;
       } finally {
         releaseGlobalResponseSlot({ sent });
@@ -840,6 +847,15 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
       if (sendAs === 'announcement') {
         if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
         result = await sendAnnouncement(rendered, { color: updated.announcementColor || 'primary' });
+      } else if (sendAs === 'reply') {
+        const replyParentMessageId = String(tags?.id || tags?.['message-id'] || '').trim();
+        // EventSub/system invocations have no originating chat message, so a
+        // reply-mode command gracefully falls back to a normal chat message.
+        result = await sendMessage(
+          normalizedChannel,
+          rendered,
+          replyParentMessageId ? { replyParentMessageId } : {}
+        );
       } else {
         result = await sendMessage(normalizedChannel, rendered);
       }

@@ -155,7 +155,7 @@ const chatClientProxy = {
         throw new Error('MongoDB is not connected, so Twitch Chat API authorization cannot be verified.');
       }
 
-      const result = await sendChatMessageViaApi(message);
+      const result = await sendChatMessageViaApi(message, { replyParentMessageId: options?.replyParentMessageId || null });
 
       console.log('[Chat] Message sent through Twitch Chat API.');
 
@@ -199,7 +199,7 @@ automationSpacingManager = createAutomationSpacingManager({ channelName });
 
 customCommandManager = createCustomCommandManager({
   channelName,
-  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  sendMessage: (channel, message, options = {}) => chatClientProxy.say(channel, message, options),
   sendAnnouncement: (message, options) => sendChatAnnouncement(message, options),
   getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
 });
@@ -227,7 +227,7 @@ eventSubReactionManager = createEventSubReactionManager({
 botPersonalityManager = createBotPersonalityManager({
   channelName,
   botUsername,
-  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  sendMessage: (channel, message, options) => chatClientProxy.say(channel, message, options),
   getStreamLore,
   getStreamContext: () => {
     const status = recapManager?.getStatus?.() || {};

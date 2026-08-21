@@ -170,7 +170,7 @@ async function twitchApiFetch(url, options = {}, { retry401 = true } = {}) {
   return response;
 }
 
-async function sendChatMessageViaApi(message) {
+async function sendChatMessageViaApi(message, { replyParentMessageId = null } = {}) {
   const text = String(message || '').trim();
 
   if (!text) {
@@ -196,7 +196,8 @@ async function sendChatMessageViaApi(message) {
       broadcaster_id: readiness.broadcasterUserId,
       sender_id: readiness.botUserId,
       message: text,
-      for_source_only: true
+      for_source_only: true,
+      ...(replyParentMessageId ? { reply_parent_message_id: String(replyParentMessageId) } : {})
     })
   });
 

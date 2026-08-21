@@ -62,8 +62,10 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const sendAs = $('customSendAs').value || 'chat';
     $('customAnnouncementColorWrap').hidden = sendAs !== 'announcement';
     $('customSendAsHelp').textContent = sendAs === 'announcement'
-      ? 'Announcement sends the selected response using Twitch's highlighted announcement banner. The bot account must be a moderator and authorized for announcements.'
-      : 'Chat Message sends a normal bot message.';
+      ? "Announcement sends the selected response using Twitch's highlighted announcement banner. The bot account must be a moderator and authorized for announcements."
+      : sendAs === 'reply'
+        ? 'Reply to Trigger sends the response as a Twitch reply to the viewer message that triggered the command. If no source message is available, it falls back to normal chat.'
+        : 'Chat Message sends a normal bot message.';
   }
 
   function updateResponseModeUi() {
@@ -380,7 +382,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
               ${statusBadge(command)}
             </div>
             <div class="custom-trigger-chip-list">${triggerChips}</div>
-            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
+            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : command.sendAs === 'reply' ? 'Reply to Trigger' : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary custom-edit-btn" type="button">Edit</button>

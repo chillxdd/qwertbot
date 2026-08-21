@@ -314,9 +314,16 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     return question;
   }
 
-  async function handleTaggedQuestion({ rawMessage, displayName, tags = {} }) {
+  async function handleTaggedQuestion({ rawMessage, displayName, tags = {}, replyParentMessageId = '' }) {
     const question = parseTaggedQuestion(rawMessage);
     if (!question) return { matched: false };
+
+    const replyTarget = String(replyParentMessageId || '').trim();
+    const sendTaggedResponse = (text) => sendMessage(
+      normalizedChannel,
+      text,
+      replyTarget ? { replyParentMessageId: replyTarget } : {}
+    );
 
     if (!config.personality) {
       return { matched: true, responded: false, reason: 'personality_empty' };
@@ -343,7 +350,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       }
 
       noteOwnResponse(renderedCooldown);
-      const result = await sendMessage(normalizedChannel, renderedCooldown);
+      const result = await sendTaggedResponse(renderedCooldown);
       return {
         matched: true,
         responded: true,
@@ -474,7 +481,7 @@ Output only the answer.`;
         return { matched: true, responded: false, reason: 'ai_failure', error: err?.message || String(err) };
       }
       noteOwnResponse(failureText);
-      const failureResult = await sendMessage(normalizedChannel, failureText);
+      const failureResult = await sendTaggedResponse(failureText);
       return {
         matched: true,
         responded: true,
@@ -489,7 +496,7 @@ Output only the answer.`;
     if (!rendered) return { matched: true, responded: false, reason: 'empty_response' };
 
     noteOwnResponse(rendered);
-    const result = await sendMessage(normalizedChannel, rendered);
+    const result = await sendTaggedResponse(rendered);
     if (!bypassCooldown) lastPublicResponseAt = Date.now();
     return { matched: true, responded: true, message: rendered, sendMethod: result?.method || 'unknown' };
   }
