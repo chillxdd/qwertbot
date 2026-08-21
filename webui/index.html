@@ -27,7 +27,7 @@
   <div class="grid">
     <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
     <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
-    <div class="box"><div id="dbStatusLabel" class="label">MongoDB Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
+    <div class="box"><div id="dbStatusLabel" class="label">Database Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
     <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
   </div>
 
@@ -43,7 +43,7 @@
     <div id="messagingPanel" class="section-panel">
       <div class="section-intro">
         <h3>AI Recap</h3>
-        <div class="detail">Manage hourly recap operation, testing, manual chat messaging, and prompt tuning.</div>
+        <div class="detail">Manage hourly recaps, testing, chat messages, and prompts.</div>
       </div>
 
       <div id="recapControls" class="recap-control-card">
@@ -112,13 +112,12 @@
       <div id="automationSpacingCard" class="custom-global-cooldown-card automation-spacing-card" hidden>
         <div class="custom-global-cooldown-copy">
           <strong id="automationSpacingTitle">Automation Spacing</strong>
-          <div id="automationSpacingDetail" class="detail">Minimum gap between automated outputs from hourly recaps, scheduled timers, and EventSub reactions. EventSub action delays and reaction holds still apply. Chat commands are not affected.</div>
-          <div id="automationReactionTimingDetail" class="detail" hidden>Additionally, recaps and timers stay paused for the entire reaction sequence automatically. Action delays control timing inside the sequence. After the final action, global Automation Spacing still applies; an optional Post-Reaction Hold can extend the quiet period even longer.</div>
+          <div id="automationSpacingDetail" class="detail">Minimum gap between automated recaps, timers, and EventSub reactions. Chat commands are unaffected.</div>
+          <div id="automationReactionTimingDetail" class="detail" hidden>Recaps and timers stay paused during a reaction sequence. Post-Reaction Hold can extend the quiet period afterward.</div>
         </div>
         <div class="custom-global-cooldown-control">
-          <label class="prompt-label" for="automationSpacingSeconds">Seconds</label>
           <div class="custom-global-cooldown-input-row">
-            <input id="automationSpacingSeconds" type="number" min="0" max="3600" step="1" value="30">
+            <div class="duration-field compact-duration-field"><input id="automationSpacingSeconds" type="number" min="0" max="3600" step="1" value="30"><span class="duration-unit">seconds</span></div>
             <button id="saveAutomationSpacingBtn" class="secondary" type="button">Save</button>
           </div>
           <div id="automationSpacingMsg" class="detail"></div>
@@ -156,7 +155,7 @@
           <button id="refreshCustomCommandsBtn" class="secondary" type="button">Refresh</button>
         </div>
       </div>
-      <div class="detail">Create bot-native chat commands and inline phrase triggers. Commands are stored in MongoDB and become live immediately after saving.</div>
+      <div class="detail">Create bot-native chat commands and inline phrase triggers.</div>
 
       <div class="custom-global-cooldown-card">
         <div class="custom-global-cooldown-copy">
@@ -164,9 +163,8 @@
           <div class="detail">Minimum spacing between any two SqwertArmyBot custom-command messages. Commands attempted during this window are silently ignored.</div>
         </div>
         <div class="custom-global-cooldown-control">
-          <label class="prompt-label" for="customGlobalCooldown">Seconds</label>
           <div class="custom-global-cooldown-input-row">
-            <input id="customGlobalCooldown" type="number" min="0" max="86400" step="0.001" value="5">
+            <div class="duration-field compact-duration-field"><input id="customGlobalCooldown" type="number" min="0" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
             <button id="saveCustomGlobalCooldownBtn" class="secondary" type="button">Save</button>
           </div>
           <div id="customGlobalCooldownMsg" class="detail"></div>
@@ -213,7 +211,7 @@
             <strong>Triggers</strong>
             <button id="addCustomTriggerBtn" class="secondary" type="button">Add Trigger</button>
           </div>
-          <div id="customTriggerHelp" class="detail">Add one or more triggers. Each trigger can independently be a !Command or Inline Phrase, and all triggers share this command's responses, cooldown, probability, counter, and user level.</div>
+          <div id="customTriggerHelp" class="detail">Add one or more command or inline-phrase triggers. All triggers share the same command settings.</div>
           <div id="customCommandTriggers" class="custom-trigger-list"></div>
           <div id="customTriggerMsg" class="detail custom-field-message"></div>
         </div>
@@ -222,13 +220,13 @@
           <strong class="custom-block-title">Command Settings</strong>
           <div class="custom-command-form-grid">
             <div>
-              <label class="prompt-label" for="customUserLevel">User Level (-ul)</label>
+              <label class="prompt-label" for="customUserLevel">User Level</label>
               <select id="customUserLevel">
                 <option value="everyone">Everyone</option>
                 <option value="subscriber">Subscriber</option>
-                <option value="twitch_vip">Twitch VIP</option>
+                <option value="twitch_vip">VIP</option>
                 <option value="moderator">Moderator</option>
-                <option value="owner">Broadcaster / Owner</option>
+                <option value="owner">Broadcaster</option>
               </select>
             </div>
             <div>
@@ -236,19 +234,19 @@
               <input id="customProbability" type="number" min="0" max="100" step="0.01" value="100">
             </div>
             <div>
-              <label class="prompt-label" for="customCooldown">Cooldown (seconds)</label>
-              <input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="5">
+              <label class="prompt-label" for="customCooldown">Cooldown</label>
+              <div class="duration-field"><input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
             </div>
             <div>
-              <label class="prompt-label" for="customResponseDelay">Delay (seconds)</label>
-              <input id="customResponseDelay" type="number" min="0" max="30" step="0.001" value="0">
+              <label class="prompt-label" for="customResponseDelay">Delay</label>
+              <div class="duration-field"><input id="customResponseDelay" type="number" min="0" max="30" step="0.001" value="0"><span class="duration-unit">seconds</span></div>
             </div>
           </div>
           <label class="inline-check custom-option-toggle"><input id="customUseCooldownResponse" type="checkbox"> Send a response when this command is on cooldown</label>
           <div id="customCooldownResponseWrap" class="custom-optional-panel" hidden>
             <label class="prompt-label" for="customCooldownResponse">Cooldown Message</label>
             <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
-            <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent only when a valid user triggers this command while it is still cooling down. Variables work here too. The counter does not increment.</span></div>
+            <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent when this command is triggered during cooldown. Variables are supported.</span></div>
           </div>
         </div>
 
@@ -337,11 +335,11 @@
             <div class="custom-variable-row"><code>$(query)</code> <span>or</span> <code>$query</code><div class="detail">Everything after the trigger. Example: <code>!say hello there</code> + <code>You said: $(query)</code> → <code>You said: hello there</code></div></div>
             <div class="custom-variable-row"><code>$(count)</code> <span>or</span> <code>$count</code><div class="detail">Persistent counter after a successful trigger increments it. Example: <code>Hydration #$(count)</code> → <code>Hydration #42</code></div></div>
             <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Without DEC it returns a whole integer. Optional DEC sets decimal places from 0–5. Example: <code>$(random 1 10 5)</code> → <code>3.14159</code>.</div></div>
-            <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding SqwertArmyBot and known utility bots. Example: <code>$(randomuser) has been selected!</code></div><div class="detail">Requires bot OAuth scope <code>moderator:read:chatters</code>.</div></div>
+            <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding SqwertArmyBot and known utility bots. Example: <code>$(randomuser) has been selected!</code></div></div>
             <div class="custom-variable-row"><code>$(followage)</code> <span>or</span> <code>$followage</code><div class="detail">How long <code>$(touser)</code> has followed Qwert, formatted compactly for chat (for example <code>2 years, 3 months</code>, <code>18 days</code>, or <code>42 seconds</code>). With no command argument, this checks the viewer who triggered the command. Example: <code>Following for $(followage).</code></div></div>
-            <div class="custom-variable-row"><code>$(followdate)</code> <span>or</span> <code>$followdate</code><div class="detail">UTC calendar date when <code>$(touser)</code> followed Qwert. Example: <code>Following since $(followdate).</code></div><div class="detail">Both follow variables use the existing broadcaster OAuth scope <code>moderator:read:followers</code>; no new authorization is required.</div></div>
-            <div class="custom-variable-row"><code>$(game)</code> <span>or</span> <code>$game</code><div class="detail">Twitch category currently being played, or the last category played, by <code>$(touser)</code>. With no command argument, this checks the viewer who triggered the command. Example: <code>They were last playing $(game).</code></div><div class="detail">No additional OAuth scope is required.</div></div>
-            <div class="custom-variable-note detail">No eval is needed. Multiple response entries each keep their own 500-character allowance.</div>
+            <div class="custom-variable-row"><code>$(followdate)</code> <span>or</span> <code>$followdate</code><div class="detail">UTC calendar date when <code>$(touser)</code> followed Qwert. Example: <code>Following since $(followdate).</code></div></div>
+            <div class="custom-variable-row"><code>$(game)</code> <span>or</span> <code>$game</code><div class="detail">Twitch category currently being played, or the last category played, by <code>$(touser)</code>. With no command argument, this checks the viewer who triggered the command. Example: <code>They were last playing $(game).</code></div></div>
+            <div class="custom-variable-note detail">Each response supports up to 500 characters.</div>
           </div>
         </dialog>
 
@@ -366,7 +364,7 @@
             <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
           </div>
         </div>
-        <div class="detail">Background chat messages that run only while Qwert is live. Scheduling, activity counters, history, and next-fire state are persisted in MongoDB so Render restarts do not reset them.</div>
+        <div class="detail">Background chat messages that run only while Qwert is live.</div>
 
         <div class="custom-editor-block timer-global-settings">
           <div class="custom-response-heading">
@@ -375,9 +373,9 @@
           </div>
           <div class="timer-settings-grid">
             <div>
-              <label class="prompt-label" for="timerGlobalStartDelay">Start Delay (seconds)</label>
-              <input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0">
-              <div class="detail">No timer may fire before this much stream uptime has passed. Automated-message spacing is controlled by Automation Spacing above.</div>
+              <label class="prompt-label" for="timerGlobalStartDelay">Start Delay</label>
+              <div class="duration-field"><input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
+              <div class="detail">Earliest point in the stream when this timer may run.</div>
             </div>
           </div>
           <div id="timerSettingsMsg" class="detail custom-field-message"></div>
@@ -422,16 +420,16 @@
             <strong class="custom-block-title">Schedule</strong>
             <div class="timer-settings-grid">
               <div>
-                <label class="prompt-label" for="timerInterval">Interval (seconds)</label>
-                <input id="timerInterval" type="number" min="30" max="86400" step="1" value="900">
+                <label class="prompt-label" for="timerInterval">Interval</label>
+                <div class="duration-field"><input id="timerInterval" type="number" min="30" max="86400" step="1" value="900"><span class="duration-unit">seconds</span></div>
               </div>
               <div>
                 <label class="prompt-label" for="timerStartDelay">Start Delay (optional)</label>
-                <input id="timerStartDelay" type="number" min="0" max="86400" step="1" placeholder="Use global delay">
+                <div class="duration-field"><input id="timerStartDelay" type="number" min="0" max="86400" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
               </div>
               <div>
-                <label class="prompt-label" for="timerJitter">Jitter (± seconds)</label>
-                <input id="timerJitter" type="number" min="0" max="86400" step="1" value="0">
+                <label class="prompt-label" for="timerJitter">Jitter (±)</label>
+                <div class="duration-field"><input id="timerJitter" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
               </div>
               <div>
                 <label class="prompt-label" for="timerPriority">Priority</label>
@@ -499,7 +497,7 @@
             </div>
             <div class="custom-variable-help-body">
               <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Optional DEC sets 0–5 decimal places; omitted DEC keeps whole-integer behavior.</div></div>
-              <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots. Requires bot OAuth scope <code>moderator:read:chatters</code>.</div></div>
+              <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots.</div></div>
               <div class="custom-variable-note detail">Timer responses have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, and <code>$(count)</code> are unavailable.</div>
             </div>
           </dialog>
@@ -576,8 +574,8 @@
             <label id="eventReactionMinimumWrap"> <span id="eventReactionMinimumLabel">Minimum</span>
               <input id="eventReactionMinimum" type="number" min="0" step="1" value="0">
             </label>
-            <label>Post-Reaction Hold (seconds)
-              <input id="eventReactionHold" type="number" min="0" max="3600" step="1" placeholder="Use global Automation Spacing">
+            <label>Post-Reaction Hold
+              <div class="duration-field"><input id="eventReactionHold" type="number" min="0" max="3600" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
             </label>
           </div>
 
@@ -717,7 +715,7 @@
       <div id="streamLoreView" class="subsection-view open">
       <div class="memory-block">
         <h4>Stream Specific Lore</h4>
-        <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat. Saved lore stays in MongoDB until you edit it.</div>
+        <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
         <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
         <div class="memory-actions">
           <button id="saveLoreBtn">Save Lore</button>
@@ -742,8 +740,8 @@
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsOnly" type="checkbox" checked> Mods/Broadcaster only</label>
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsBypassCooldown" type="checkbox" checked> Mods/Broadcaster bypass cooldown</label>
           <div class="personality-cooldown-field">
-            <label class="prompt-label" for="botPersonalityCooldown">Cooldown (seconds)</label>
-            <input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5">
+            <label class="prompt-label" for="botPersonalityCooldown">Cooldown</label>
+            <div class="duration-field"><input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
             <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
           </div>
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityUseCooldownResponse" type="checkbox"> Send a custom response while tagged questions are on cooldown</label>
@@ -757,7 +755,7 @@
           <div class="ai-retry-heading">
             <div>
               <div class="label">AI Retries</div>
-              <div class="detail">Retries temporary Gemini errors without starting the normal tagged-question cooldown. If every attempt fails, the bot sends the fallback response below and applies a short 20-second anti-hammer guard to that viewer.</div>
+              <div class="detail">Retries temporary Gemini errors. If all attempts fail, the bot sends the fallback response below.</div>
             </div>
             <label class="inline-check personality-audience-toggle"><input id="botPersonalityRetryEnabled" type="checkbox" checked> Retry temporary AI failures</label>
           </div>
@@ -770,7 +768,7 @@
             <div class="ai-retry-failure-response">
               <label class="prompt-label" for="botPersonalityFailureResponse">Failure Message</label>
               <textarea id="botPersonalityFailureResponse" maxlength="500">Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.</textarea>
-              <div class="detail"><code>$user</code> inserts the viewer name. This fallback does not start the normal tagged-question cooldown.</div>
+              <div class="detail"><code>$user</code> inserts the viewer name.</div>
             </div>
           </div>
         </div>
@@ -826,7 +824,7 @@
           <div class="custom-command-header">
             <div>
               <h4>Viewer Profiles</h4>
-              <div class="detail">Persistent, moderator-reviewable profiles learned from meaningful chat during the hourly recap cycle. Profiles never influence public recap generation.</div>
+              <div class="detail">Viewer context learned from meaningful chat and available for tagged AI questions.</div>
             </div>
             <div class="custom-command-list-controls">
               <label class="list-search-wrap" for="viewerProfileSearch">
@@ -848,7 +846,7 @@
           <div class="viewer-profile-settings-card">
             <div>
               <strong>Profile Settings</strong>
-              <div class="detail">Automatic learning extracts only durable, non-sensitive viewer observations from the same hourly chat intelligence pass used for Session Memory. Tagged-question use is independent and can stay disabled while profiles learn.</div>
+              <div class="detail">Learn useful, non-sensitive viewer context automatically. Learning and Tagged Question use can be enabled independently.</div>
             </div>
             <div class="viewer-profile-settings-toggles">
               <label class="inline-check"><input id="viewerProfileLearningEnabled" type="checkbox" checked> Automatic Learning</label>

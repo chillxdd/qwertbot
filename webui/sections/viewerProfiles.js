@@ -207,7 +207,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     if (!d.success) return setSettingsMessage(d.error || 'Could not load viewer profile settings.', true);
     $('viewerProfileLearningEnabled').checked = d.settings?.automaticLearningEnabled !== false;
     $('viewerProfilesTaggedEnabled').checked = d.settings?.useInTaggedQuestions === true;
-    if (!quiet) setSettingsMessage('Loaded.');
+    if (!quiet) setSettingsMessage('');
   }
 
   async function saveSettings() {
@@ -219,7 +219,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     });
     $('saveViewerProfileSettingsBtn').disabled = false;
     if (!d.success) return setSettingsMessage(d.error || 'Could not save viewer profile settings.', true);
-    setSettingsMessage('Saved. Changes are live immediately.');
+    setSettingsMessage('Saved.');
   }
 
   async function loadProfiles({ quiet = false } = {}) {
@@ -229,7 +229,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     profiles = Array.isArray(d.profiles) ? d.profiles : [];
     loaded = true;
     renderList();
-    setMessage(`${profiles.length} viewer profile${profiles.length === 1 ? '' : 's'} loaded.`);
+    setMessage(`${profiles.length} viewer profile${profiles.length === 1 ? '' : 's'}.`);
   }
 
   async function saveProfile() {

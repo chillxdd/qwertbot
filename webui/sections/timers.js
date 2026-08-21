@@ -214,7 +214,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       loaded = true;
       applySettingsToUi();
       renderList();
-      setListMessage(`${timers.length} timer${timers.length === 1 ? '' : 's'} loaded.`);
+      setListMessage(`${timers.length} timer${timers.length === 1 ? '' : 's'}.`);
     } catch (err) {
       setListMessage(err.message || 'Could not load timers.', true);
     }

@@ -70,8 +70,8 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
           <option value="twitch_shoutout">Twitch Shoutout</option>
         </select>
       </label>
-      <label>Delay (seconds)
-        <input class="event-action-delay" type="number" min="0" max="${limits.maxActionDelaySeconds}" step="0.1" value="${Number(action.delaySeconds || 0)}">
+      <label>Delay
+        <div class="duration-field"><input class="event-action-delay" type="number" min="0" max="${limits.maxActionDelaySeconds}" step="0.1" value="${Number(action.delaySeconds || 0)}"><span class="duration-unit">seconds</span></div>
       </label>
       <label class="event-action-value-wrap">Value
         <input class="event-action-value" maxlength="500" value="${esc(action.value || '')}">

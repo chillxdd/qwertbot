@@ -77,11 +77,11 @@ async function status() {
     $('recapNext').textContent = d.bot.nextRecapAt ? countdown(d.bot.nextRecapAt - Date.now()) : '—';
     $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${d.bot.twitchEventsInWindow || 0} event`;
 
-    $('dbStatusLabel').textContent = loggedIn ? 'MongoDB Status' : 'Database';
+    $('dbStatusLabel').textContent = 'Database Status';
     $('dbStatus').textContent = d.database.connected ? 'CONNECTED' : 'OFFLINE';
     $('dbStatus').className = `value ${d.database.connected ? 'good' : 'bad'}`;
     $('dbDetail').textContent = loggedIn
-      ? (d.database.connected ? 'Persistent storage ready' : 'Check MONGODB_URI / Atlas network access')
+      ? (d.database.connected ? 'Ready' : 'Check database connection')
       : '';
 
     const botMissing = d.oauth.botMissingScopes || [];
@@ -204,7 +204,7 @@ async function saveNativeResponseDialog() {
   if (!d.success) { $('nativeResponseMsg').textContent = d.error || 'Could not save responses.'; return; }
   nativeResponses = d.responses || nativeResponses;
   renderNativeResponseFields(editingNativeCommand);
-  $('nativeResponseMsg').textContent = 'Saved. Changes are live immediately.';
+  $('nativeResponseMsg').textContent = 'Saved.';
 }
 
 function resetNativeResponseDialog() {

@@ -66,7 +66,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customSendAsHelp').textContent = sendAs === 'announcement'
       ? "Announcement sends the selected response using Twitch's highlighted announcement banner. The bot account must be a moderator and authorized for announcements."
       : sendAs === 'reply'
-        ? 'Reply to Trigger sends the response as a Twitch reply to the viewer message that triggered the command. If no source message is available, it falls back to normal chat.'
+        ? 'Replies directly to the message that triggered the command.'
         : 'Chat Message sends a normal bot message.';
   }
 
@@ -425,7 +425,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     }
     const value = Number(d.settings?.globalCooldownSeconds ?? defaultGlobalCooldownSeconds);
     $('customGlobalCooldown').value = Number.isFinite(value) ? value : defaultGlobalCooldownSeconds;
-    setGlobalCooldownMessage(quiet ? '' : 'Loaded.');
+    setGlobalCooldownMessage('');
     return true;
   }
 
@@ -445,7 +445,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       return;
     }
     $('customGlobalCooldown').value = d.settings?.globalCooldownSeconds ?? value;
-    setGlobalCooldownMessage('Saved. Changes are live immediately.');
+    setGlobalCooldownMessage('Saved.');
   }
 
   async function loadCommands({ quiet = false } = {}) {
@@ -458,7 +458,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     commands = Array.isArray(d.commands) ? d.commands : [];
     loaded = true;
     renderList();
-    setMessage(`${commands.length} custom command${commands.length === 1 ? '' : 's'} loaded.`);
+    setMessage(`${commands.length} custom command${commands.length === 1 ? '' : 's'}.`);
     return true;
   }
 
@@ -540,7 +540,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
     closeEditor();
     await loadCommands({ quiet: true });
-    setMessage('Custom command saved to MongoDB. Changes are live immediately.');
+    setMessage('Saved.');
   }
 
   async function toggleCommand(command) {

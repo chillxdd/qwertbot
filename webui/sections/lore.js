@@ -108,7 +108,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       }
       $('streamLore').value = d.text || '';
       updateCount();
-      $('loreMsg').textContent = d.updatedAt ? 'Saved lore loaded.' : 'No lore saved yet.';
+      $('loreMsg').textContent = d.updatedAt ? '' : 'No lore saved yet.';
     } catch (_) {
       $('loreMsg').textContent = 'Could not load lore.';
     }
@@ -125,7 +125,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       }
       $('streamLore').value = d.text || '';
       updateCount();
-      $('loreMsg').textContent = d.text ? 'Saved to MongoDB.' : 'Lore cleared from MongoDB.';
+      $('loreMsg').textContent = d.text ? 'Saved.' : 'Lore cleared.';
     } catch (_) {
       $('loreMsg').textContent = 'Could not save lore.';
     } finally {
@@ -189,7 +189,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       setSessionMemorySettings(d.sessionMemory || {});
       syncCooldownResponseVisibility();
       updatePersonalityCount();
-      $('botPersonalityMsg').textContent = d.updatedAt ? 'Saved personality settings loaded.' : 'No personality saved yet.';
+      $('botPersonalityMsg').textContent = d.updatedAt ? '' : 'No personality saved yet.';
       await loadSessionMemoryStatus();
     } catch (_) {
       $('botPersonalityMsg').textContent = 'Could not load personality settings.';
@@ -242,7 +242,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       const retryText = d.aiRetry?.enabled === false ? ' AI retries: disabled.' : ` AI retries: ${d.aiRetry?.maxRetries ?? 2}.`;
       const memoryText = d.sessionMemory?.enabled === false ? ' Session Memory: disabled.' : ' Session Memory: enabled.';
       $('botPersonalityMsg').textContent = d.personality
-        ? `Saved to MongoDB and live immediately. ${audienceText}${cooldownText}${retryText}${memoryText}`
+        ? `Saved. ${audienceText}${cooldownText}${retryText}${memoryText}`
         : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}${retryText}${memoryText}`;
       await loadSessionMemoryStatus();
     } catch (_) {

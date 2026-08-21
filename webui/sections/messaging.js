@@ -38,9 +38,7 @@ export function initMessagingSection({ $, postJson }) {
       return false;
     }
     applyPromptConfig(d);
-    $('promptMsg').textContent = d.source === 'mongodb'
-      ? 'Loaded saved prompt settings from MongoDB.'
-      : 'Using code defaults. Save to create the editable MongoDB version.';
+    $('promptMsg').textContent = d.source === 'mongodb' ? '' : 'Using default instructions.';
     return true;
   }
 
@@ -95,12 +93,12 @@ export function initMessagingSection({ $, postJson }) {
     }
 
     applyPromptConfig(d);
-    $('promptMsg').textContent = 'Saved to MongoDB. The next recap will use these instructions.';
+    $('promptMsg').textContent = 'Saved. The next recap will use these instructions.';
   };
 
   $('undoPromptBtn').onclick = async () => {
     const loaded = await loadPrompt();
-    if (loaded) $('promptMsg').textContent = 'Unsaved changes discarded. Last saved MongoDB prompt reloaded.';
+    if (loaded) $('promptMsg').textContent = 'Unsaved changes discarded.';
   };
 
   setPromptSettingsOpen(false);
