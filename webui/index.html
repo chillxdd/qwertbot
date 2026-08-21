@@ -214,6 +214,26 @@
 
       </div>
 
+        <dialog id="customCounterDialog" class="custom-variables-dialog custom-counter-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3>Set Command Counter</h3>
+              <div id="customCounterCommandName" class="detail"></div>
+            </div>
+            <button id="closeCustomCounterBtn" class="secondary" type="button" aria-label="Close set counter dialog">Close</button>
+          </div>
+          <div class="custom-counter-body">
+            <label class="prompt-label" for="customCounterValue">Counter value</label>
+            <input id="customCounterValue" type="number" min="0" step="1" inputmode="numeric" autocomplete="off">
+            <div class="detail">Enter any whole number greater than or equal to 0.</div>
+            <div id="customCounterMsg" class="detail custom-field-message" aria-live="polite"></div>
+          </div>
+          <div class="modal-actions custom-counter-actions">
+            <button id="saveCustomCounterBtn" type="button">Save Counter</button>
+            <button id="cancelCustomCounterBtn" class="secondary" type="button">Cancel</button>
+          </div>
+        </dialog>
+
         <dialog id="customVariablesDialog" class="custom-variables-dialog">
           <div class="custom-dialog-header">
             <h3>Available Response Variables</h3>
@@ -408,7 +428,7 @@
 
     <div id="lorePanel" class="section-panel">
       <h3>Memory Management</h3>
-      <div class="subsection-nav" role="tablist" aria-label="Memory management views">
+      <div class="subsection-nav memory-subsection-nav" role="tablist" aria-label="Memory management views">
         <button id="streamLoreViewTab" class="secondary active" type="button" aria-selected="true">Stream-Specific Lore</button>
         <button id="botPersonalityViewTab" class="secondary" type="button" aria-selected="false">Bot Personality & Tagged Questions</button>
         <button id="viewerProfilesViewTab" class="secondary" type="button" aria-selected="false">Viewer Profiles</button>

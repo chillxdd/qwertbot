@@ -119,7 +119,7 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .custom-command-editor.open .custom-editor-header{position:sticky;top:-20px;z-index:2;background:#111114;padding:20px 0 14px;border-bottom:1px solid #2f2f38}
 .custom-command-editor.open .custom-editor-actions{position:sticky;bottom:-20px;background:#111114;padding:14px 0 20px;border-top:1px solid #2f2f38}
 
-.subsection-nav{grid-template-columns:repeat(3,minmax(0,1fr))}
+.memory-subsection-nav{grid-template-columns:repeat(3,minmax(0,1fr))}
 .viewer-profile-settings-card{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(250px,.8fr);gap:18px;align-items:start;background:#0e0e10;border:1px solid #2a2a30;border-radius:7px;padding:14px;margin:14px 0 8px}
 .viewer-profile-settings-toggles{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
 .viewer-profile-settings-toggles button{margin:2px 0 0}
@@ -136,7 +136,7 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .viewer-profile-fact-copy{min-width:0;overflow-wrap:anywhere}
 
 @media(max-width:760px){.viewer-profile-settings-card,.viewer-profile-form-grid{grid-template-columns:1fr}.custom-command-editor.open{inset:10px;width:calc(100vw - 20px);max-height:calc(100vh - 20px);padding:14px}.custom-command-editor.open .custom-editor-header{top:-14px;padding-top:14px}.custom-command-editor.open .custom-editor-actions{bottom:-14px;padding-bottom:14px}}
-@media(max-width:600px){.subsection-nav{grid-template-columns:1fr}}
+@media(max-width:600px){.memory-subsection-nav{grid-template-columns:1fr}}
 .custom-editor-header-actions{display:flex;align-items:center;gap:10px}.custom-editor-header-actions button{margin:0;padding:8px 10px}
 .custom-command-editor.open{box-sizing:border-box}.custom-command-header h4{margin:0 0 4px;color:#fff}
 .entity-editor-dialog::backdrop{background:rgba(0,0,0,.72)}
@@ -154,3 +154,12 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .custom-editor-header-actions .custom-enabled-check input{width:18px;height:18px;margin:0;accent-color:#9146ff;cursor:pointer}
 .custom-editor-header-actions .custom-enabled-check:hover{border-color:#6b6b78;background:#24242b}
 @media(max-width:600px){.custom-editor-header-actions{flex-wrap:wrap;justify-content:flex-end}.custom-editor-header-actions .custom-enabled-check{padding:8px 10px}}
+
+/* Compact Set Counter dialog */
+.custom-counter-dialog{width:min(460px,calc(100vw - 32px));}
+.custom-counter-dialog .custom-dialog-header{align-items:flex-start;}
+.custom-counter-dialog .custom-dialog-header h3{margin-bottom:4px;}
+.custom-counter-body{margin:14px 0 18px;}
+.custom-counter-body input{font-size:16px;margin:6px 0 6px;}
+.custom-counter-actions{padding-top:12px;border-top:1px solid #2a2a30;}
+#customCounterMsg.bad{margin-top:8px;color:#ff4f4f;}

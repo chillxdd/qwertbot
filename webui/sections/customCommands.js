@@ -12,6 +12,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   let editingId = null;
   let loaded = false;
   let currentPage = 1;
+  let counterCommand = null;
 
   const SORT_STORAGE_KEY = 'sqwert-custom-command-sort';
   const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'counter_desc', 'counter_asc']);
@@ -519,20 +520,60 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     setMessage(`${commandLabel(command)} ${command.enabled ? 'disabled' : 'enabled'}.`);
   }
 
-  async function setCounter(command) {
-    const label = commandLabel(command);
-    const raw = prompt(`Set the counter for ${label} to any whole integer >= 0:`, String(command.counter ?? 0));
-    if (raw === null) return;
+  function closeCounterDialog() {
+    counterCommand = null;
+    $('customCounterMsg').textContent = '';
+    $('customCounterMsg').classList.remove('bad');
+    const dialog = $('customCounterDialog');
+    if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+    else dialog.removeAttribute('open');
+  }
 
-    const value = Number(raw.trim());
-    if (!Number.isInteger(value) || value < 0) {
-      return setMessage('Counter must be a whole integer greater than or equal to 0.', true);
+  function setCounter(command) {
+    counterCommand = command;
+    $('customCounterCommandName').textContent = commandLabel(command);
+    $('customCounterValue').value = String(command.counter ?? 0);
+    $('customCounterMsg').textContent = '';
+    $('customCounterMsg').classList.remove('bad');
+    const dialog = $('customCounterDialog');
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    requestAnimationFrame(() => {
+      $('customCounterValue').focus();
+      $('customCounterValue').select();
+    });
+  }
+
+  async function saveCounter() {
+    if (!counterCommand) return;
+    const raw = String($('customCounterValue').value || '').trim();
+    const value = Number(raw);
+    const counterMsg = $('customCounterMsg');
+    counterMsg.textContent = '';
+    counterMsg.classList.remove('bad');
+    if (raw === '' || !Number.isInteger(value) || value < 0) {
+      counterMsg.textContent = 'Counter must be a whole integer greater than or equal to 0.';
+      counterMsg.classList.add('bad');
+      $('customCounterValue').focus();
+      return;
     }
 
-    const d = await postJson('/custom-commands/set-counter', { id: command.id, counter: value });
-    if (!d.success) return setMessage(d.error || 'Could not set counter.', true);
-    await loadCommands({ quiet: true });
-    setMessage(`${label} counter set to ${value}.`);
+    const command = counterCommand;
+    const label = commandLabel(command);
+    $('saveCustomCounterBtn').disabled = true;
+    try {
+      const d = await postJson('/custom-commands/set-counter', { id: command.id, counter: value });
+      if (!d.success) {
+        counterMsg.textContent = d.error || 'Could not set counter.';
+        counterMsg.classList.add('bad');
+        return;
+      }
+      closeCounterDialog();
+      await loadCommands({ quiet: true });
+      setMessage(`${label} counter set to ${value}.`);
+    } finally {
+      $('saveCustomCounterBtn').disabled = false;
+    }
   }
 
   async function deleteCommand(command) {
@@ -544,6 +585,24 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     await loadCommands({ quiet: true });
     setMessage(`${label} deleted.`);
   }
+
+  const counterDialog = $('customCounterDialog');
+  $('saveCustomCounterBtn').onclick = saveCounter;
+  $('cancelCustomCounterBtn').onclick = closeCounterDialog;
+  $('closeCustomCounterBtn').onclick = closeCounterDialog;
+  $('customCounterValue').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void saveCounter();
+    }
+  });
+  counterDialog.addEventListener('click', (event) => {
+    if (event.target === counterDialog) closeCounterDialog();
+  });
+  counterDialog.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    closeCounterDialog();
+  });
 
   const variablesDialog = $('customVariablesDialog');
   $('showCustomVariablesBtn').onclick = () => {
