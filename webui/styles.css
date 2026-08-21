@@ -558,3 +558,8 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 .native-response-dialog{width:min(760px,calc(100vw - 32px))}
 .native-response-fields{display:grid;gap:14px;margin:14px 0}
 .native-response-field textarea{min-height:84px;resize:vertical}
+
+/* Keep native-command actions together on wider layouts, even when descriptions wrap. */
+.native-command-main{flex:1 1 auto;min-width:0}
+.native-command-card>.custom-command-actions{flex:0 0 auto;flex-wrap:nowrap;align-items:center}
+@media(max-width:600px){.native-command-card>.custom-command-actions{flex-wrap:wrap}}
