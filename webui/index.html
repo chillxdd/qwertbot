@@ -503,8 +503,8 @@
         <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
 
         <div class="event-reaction-info-card">
-          <strong>Sequence Hold</strong>
-          <div class="detail">When a reaction starts, scheduled timers and automatic hourly recaps pause. EventSub reactions take priority and start immediately; their configured action delays control the sequence. After the final action, the reaction Hold and shared Automation Spacing keep other automation from crowding the moment. Due work is deferred rather than discarded.</div>
+          <strong>Reaction Timing</strong>
+          <div class="detail">Recaps and timers stay paused for the entire reaction sequence automatically. Action delays control timing inside the sequence. After the final action, global Automation Spacing still applies; an optional Post-Reaction Hold can extend the quiet period even longer.</div>
         </div>
 
         <div id="eventReactionsMsg" class="detail"></div>
@@ -546,11 +546,11 @@
             <label id="eventReactionMinimumWrap"> <span id="eventReactionMinimumLabel">Minimum</span>
               <input id="eventReactionMinimum" type="number" min="0" step="1" value="0">
             </label>
-            <label>Hold (seconds)
-              <input id="eventReactionHold" type="number" min="0" max="600" step="1" value="60">
+            <label>Post-Reaction Hold (seconds)
+              <input id="eventReactionHold" type="number" min="0" max="3600" step="1" value="60">
             </label>
           </div>
-          <div class="detail">Hold starts immediately when the reaction begins and continues for this many seconds after the final action finishes. Use 0 for events that should not delay recaps or timers.</div>
+          <div id="eventReactionHoldHelp" class="detail">Recaps and timers stay paused throughout the reaction sequence automatically. Set this to 0 to use global Automation Spacing only, or use a value equal to or greater than Automation Spacing to extend the quiet period after the final action.</div>
 
           <div class="custom-editor-block">
             <div class="custom-trigger-heading">

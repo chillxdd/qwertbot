@@ -1,7 +1,8 @@
 export function initEventSubReactionsSection({ $, esc, postJson }) {
   let reactions = [];
   let eventTypes = [];
-  let limits = { maxActions: 12, maxHoldSeconds: 600, maxActionDelaySeconds: 300 };
+  let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300 };
+  let automationSpacingSeconds = 0;
   let editingId = null;
   let page = 1;
   let loaded = false;
@@ -16,6 +17,26 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
   function setMsg(text, bad = false) { const el=$('eventReactionsMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
   function setEditorMsg(text, bad = false) { const el=$('eventReactionEditorMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
   function formatDate(value) { if (!value) return ''; const d=new Date(value); return Number.isNaN(d.getTime())?'':d.toLocaleString(); }
+  function updateHoldUi() {
+    const holdEl = $('eventReactionHold');
+    holdEl.max = String(limits.maxHoldSeconds);
+    const spacing = Math.max(0, Number(automationSpacingSeconds) || 0);
+    $('eventReactionHoldHelp').textContent = spacing > 0
+      ? `Recaps and timers stay paused throughout the reaction sequence automatically. Automation Spacing is currently ${spacing} seconds. Enter 0 to use global spacing only, or ${spacing} seconds or more to extend the quiet period after the final action.`
+      : 'Recaps and timers stay paused throughout the reaction sequence automatically. Set this to 0 to use global Automation Spacing only, or use a larger value to extend the quiet period after the final action.';
+  }
+
+  function validateHold() {
+    const hold = Number($('eventReactionHold').value || 0);
+    const spacing = Math.max(0, Number(automationSpacingSeconds) || 0);
+    if (!Number.isFinite(hold) || hold < 0 || hold > limits.maxHoldSeconds) {
+      return `Post-Reaction Hold must be between 0 and ${limits.maxHoldSeconds} seconds.`;
+    }
+    if (hold > 0 && hold < spacing) {
+      return `Automation Spacing is currently ${spacing} seconds. Enter 0 to use global spacing only, or ${spacing} seconds or more for an additional post-reaction hold.`;
+    }
+    return '';
+  }
 
   function renderTypeOptions() {
     $('eventReactionType').innerHTML = eventTypes.map((item) => `<option value="${esc(item.type)}">${esc(item.label)}</option>`).join('');
@@ -100,7 +121,8 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     $('eventReactionEnabled').checked = reaction?.enabled !== false;
     $('eventReactionType').value = reaction?.eventType || (eventTypes.some((item)=>item.type==='channel.raid') ? 'channel.raid' : eventTypes[0]?.type || '');
     $('eventReactionMinimum').value = reaction?.minimumValue ?? 0;
-    $('eventReactionHold').value = reaction?.holdSeconds ?? 60;
+    $('eventReactionHold').value = reaction?.holdSeconds ?? 0;
+    updateHoldUi();
     actionsEl.replaceChildren();
     const actionValues = reaction?.actions?.length ? reaction.actions : [{ type:'chat_message', value:'Thanks for the raid, $(raider)!', delaySeconds:0, enabled:true }];
     actionValues.forEach(addAction);
@@ -187,13 +209,21 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     reactions = d.reactions || [];
     eventTypes = d.eventTypes || [];
     limits = { ...limits, ...(d.limits||{}) };
+    automationSpacingSeconds = Math.max(0, Number(d.automationSpacingSeconds) || 0);
     renderTypeOptions();
+    updateHoldUi();
     loaded = true;
     render();
     setMsg('');
   }
 
   $('eventReactionType').addEventListener('change', updateThresholdUi);
+  $('eventReactionHold').addEventListener('input', () => {
+    const raw = $('eventReactionHold').value.trim();
+    if (!raw) return setEditorMsg('');
+    const error = validateHold();
+    setEditorMsg(error, Boolean(error));
+  });
   $('addEventReactionActionBtn').onclick = () => addAction({ type:'chat_message', value:'', delaySeconds:0, enabled:true });
   $('showEventReactionVariablesBtn').onclick = () => { if (typeof variablesDialog.showModal === 'function') variablesDialog.showModal(); else variablesDialog.setAttribute('open', ''); };
   $('closeEventReactionVariablesBtn').onclick = () => { if (typeof variablesDialog.close === 'function') variablesDialog.close(); else variablesDialog.removeAttribute('open'); };
@@ -218,6 +248,8 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
 
   $('saveEventReactionBtn').onclick = async () => {
     setEditorMsg('');
+    const holdError = validateHold();
+    if (holdError) return setEditorMsg(holdError, true);
     const payload = {
       id: editingId,
       name: $('eventReactionName').value.trim(),

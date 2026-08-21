@@ -8,7 +8,7 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
     if (!getDatabaseConnected() || !manager) return unavailable(res);
     try {
       const reactions = await manager.listReactions();
-      return res.json({ success: true, reactions, eventTypes: EVENT_TYPES, limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS } });
+      return res.json({ success: true, reactions, eventTypes: EVENT_TYPES, automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0), limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS } });
     } catch (err) {
       return res.status(500).json({ success: false, error: err.message || 'Could not load EventSub reactions.' });
     }

@@ -1,4 +1,5 @@
 const EventSubReaction = require('../models/EventSubReaction');
+const { MAX_AUTOMATION_SPACING_SECONDS } = require('./automationSpacing');
 const { beginEventReaction, endEventReaction, getEventReactionHoldStatus } = require('./eventReactionHold');
 const { getStoredAuth } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
@@ -18,7 +19,7 @@ const EVENT_TYPES = [
 const EVENT_TYPE_SET = new Set(EVENT_TYPES.map((item) => item.type));
 const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_shoutout']);
 const MAX_ACTIONS = 12;
-const MAX_HOLD_SECONDS = 600;
+const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
 const MAX_ACTION_DELAY_SECONDS = 300;
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -70,7 +71,7 @@ function reactionToClient(item) {
   };
 }
 
-function normalizeReaction(input = {}) {
+function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
   const name = cleanText(input.name, 80);
   if (!name) throw new Error('Name is required.');
   const eventType = String(input.eventType || '').trim();
@@ -79,7 +80,11 @@ function normalizeReaction(input = {}) {
   if (!Number.isFinite(minimumValue) || minimumValue < 0) throw new Error('Minimum value must be 0 or greater.');
   const holdSeconds = Number(input.holdSeconds ?? 60);
   if (!Number.isFinite(holdSeconds) || holdSeconds < 0 || holdSeconds > MAX_HOLD_SECONDS) {
-    throw new Error(`Hold must be between 0 and ${MAX_HOLD_SECONDS} seconds.`);
+    throw new Error(`Post-reaction hold must be between 0 and ${MAX_HOLD_SECONDS} seconds.`);
+  }
+  const spacingSeconds = Math.max(0, Number(automationSpacingSeconds) || 0);
+  if (holdSeconds > 0 && holdSeconds < spacingSeconds) {
+    throw new Error(`Automation Spacing is currently ${spacingSeconds} seconds. Enter 0 to use global spacing only, or ${spacingSeconds} seconds or more for an additional post-reaction hold.`);
   }
   const rawActions = Array.isArray(input.actions) ? input.actions : [];
   if (!rawActions.length) throw new Error('Add at least one action.');
@@ -123,9 +128,15 @@ function renderEventTemplate(template, type, event = {}) {
   return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
-function createEventSubReactionManager({ channelName, sendMessage, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null }) {
+function createEventSubReactionManager({ channelName, sendMessage, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
+
+  function currentAutomationSpacingSeconds() {
+    if (typeof getAutomationSpacingSeconds !== 'function') return 0;
+    const value = Number(getAutomationSpacingSeconds());
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
 
   async function refreshCache() {
     cache = await EventSubReaction.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
@@ -143,7 +154,7 @@ function createEventSubReactionManager({ channelName, sendMessage, getBotAccessT
   }
 
   async function saveReaction(input = {}) {
-    const normalized = normalizeReaction(input);
+    const normalized = normalizeReaction(input, currentAutomationSpacingSeconds());
     const id = String(input.id || '').trim();
     let saved;
     if (id) {
@@ -265,6 +276,7 @@ function createEventSubReactionManager({ channelName, sendMessage, getBotAccessT
     handleEvent,
     refreshCache,
     getHoldStatus: getEventReactionHoldStatus,
+    getAutomationSpacingSeconds: currentAutomationSpacingSeconds,
     eventTypes: EVENT_TYPES
   };
 }

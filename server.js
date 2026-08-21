@@ -214,7 +214,8 @@ eventSubReactionManager = createEventSubReactionManager({
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
   getBotAccessToken,
   getCustomCommandManager: () => customCommandManager,
-  noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve()
+  noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve(),
+  getAutomationSpacingSeconds: () => automationSpacingManager?.getSettings?.().minimumSpacingSeconds || 0
 });
 
 botPersonalityManager = createBotPersonalityManager({
