@@ -211,3 +211,5 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
   .event-reaction-action-row{grid-template-columns:1fr;grid-template-areas:"enabled" "type" "delay" "value" "order"}
   .event-action-order-buttons{justify-content:flex-start}
 }
+
+.automation-spacing-card[hidden]{display:none}

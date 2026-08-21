@@ -28,6 +28,18 @@ function formatCountdown(milliseconds) {
   return minutes > 0 ? `${minutes}min ${seconds}s` : `${seconds}s`;
 }
 
+function nextAnchoredRecapAt(streamSessionStartedAt, afterMs = Date.now()) {
+  const anchor = Number(streamSessionStartedAt || 0);
+  if (!anchor) return Number(afterMs || Date.now()) + RECURRING_RECAP_DELAY;
+
+  const after = Number(afterMs || Date.now());
+  const firstDue = anchor + FIRST_RECAP_DELAY;
+  if (after < firstDue) return firstDue;
+
+  const completedIntervals = Math.floor((after - anchor) / RECURRING_RECAP_DELAY);
+  return anchor + ((completedIntervals + 1) * RECURRING_RECAP_DELAY);
+}
+
 function createRecapManager({
   client,
   channelName,
@@ -790,11 +802,11 @@ function createRecapManager({
       discardEventSnapshot(snapshotMaxEventId);
       firstRecapSent = true;
       recapInProgress = false;
-      nextRecapAt = Date.now() + RECURRING_RECAP_DELAY;
+      nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
       scheduleRecapAt(nextRecapAt);
       markActiveStateDirty();
       await persistActiveState({ force: true });
-      console.log('[Recap] Next automatic recap scheduled in 60 minutes.');
+      console.log(`[Recap] Next automatic recap remains on the anchored hourly cadence at ${new Date(nextRecapAt).toISOString()}.`);
     } catch (err) {
       console.error('[Recap] Automatic recap failed:', err);
 
@@ -812,7 +824,7 @@ function createRecapManager({
             console.error('[Recap] Failed to send blocked-recap notice:', sendErr);
           }
 
-          nextRecapAt = Date.now() + RECURRING_RECAP_DELAY;
+          nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
           scheduleRecapAt(nextRecapAt);
           markActiveStateDirty();
           await persistActiveState({ force: true });

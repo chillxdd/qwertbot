@@ -176,6 +176,8 @@ function selectCommandsView(view = 'commands', { load = true } = {}) {
   $('timersViewTab').setAttribute('aria-selected', timersSelected ? 'true' : 'false');
   $('eventReactionsViewTab').setAttribute('aria-selected', reactionsSelected ? 'true' : 'false');
   $('nativeCommandsViewTab').setAttribute('aria-selected', nativeSelected ? 'true' : 'false');
+  // Automation Spacing only applies to automated engines exposed here: Timers and EventSub Reactions.
+  $('automationSpacingCard').hidden = !(timersSelected || reactionsSelected);
   if (load) {
     customCommands.onVisibilityChange(commandsSelected);
     timers.onVisibilityChange(timersSelected);
