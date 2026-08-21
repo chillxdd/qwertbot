@@ -172,6 +172,11 @@ function registerDashboardRoutes(app, options) {
 
   app.get('/mod-session', (req, res) => res.json({ success: true, authenticated: modSessionManager.hasValidSession(req) }));
 
+  app.post('/mod-logout', (req, res) => {
+    modSessionManager.clearSession(req, res);
+    return res.json({ success: true });
+  });
+
   app.post('/render-logs', requireModSession, async (req, res) => {
     try {
       const config = getRenderLogsConfigStatus();

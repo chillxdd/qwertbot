@@ -67,6 +67,20 @@ function createModSessionManager({
     return Boolean(session && session.expiresAt > Date.now());
   }
 
+  function clearSession(req, res) {
+    const token = parseCookies(req)[cookieName];
+    if (token) sessions.delete(token);
+    const cookieParts = [
+      `${cookieName}=`,
+      'HttpOnly',
+      'SameSite=Strict',
+      'Path=/',
+      'Max-Age=0'
+    ];
+    if (secureCookie) cookieParts.push('Secure');
+    res.setHeader('Set-Cookie', cookieParts.join('; '));
+  }
+
   function requireSession(req, res, next) {
     if (!hasValidSession(req)) {
       return res.status(401).json({ success: false, error: 'MOD session expired. Please log in again.' });
@@ -77,6 +91,7 @@ function createModSessionManager({
   return {
     isValidPassword,
     createSession,
+    clearSession,
     hasValidSession,
     requireSession
   };

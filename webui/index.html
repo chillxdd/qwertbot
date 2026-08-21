@@ -9,9 +9,9 @@
 <body>
 <div id="login" class="mod-login" role="dialog" aria-modal="true" aria-labelledby="modLoginTitle">
   <button id="closeLoginBtn" class="login-close" type="button" aria-label="Close login">×</button>
-  <h3 id="modLoginTitle">Login</h3>
-  <input id="password" type="password" placeholder="Your password..." autocomplete="current-password">
-  <button id="loginBtn" type="button">Login</button>
+  <h3 id="modLoginTitle">Mod Login</h3>
+  <input id="password" type="password" placeholder="Password..." autocomplete="current-password">
+  <button id="loginBtn" type="button">Mod Login</button>
   <div id="loginMsg" class="detail login-message" aria-live="polite"></div>
 </div>
 
@@ -20,7 +20,8 @@
     <h2>GeneralQwert's Twitch Bot</h2>
     <div class="dashboard-session-actions">
       <span id="readonlyBadge" class="readonly-badge" hidden>Read-only</span>
-      <button id="openLoginBtn" class="secondary" type="button" hidden>Login</button>
+      <button id="openLoginBtn" class="secondary" type="button" hidden>Mod Login</button>
+      <button id="logoutBtn" class="secondary" type="button" hidden>Logout</button>
     </div>
   </div>
   <div class="grid">
@@ -877,16 +878,67 @@
       <button id="readonlyNativeCommandsTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
     </div>
     <div id="readonlyCustomCommandsView" class="subsection-view open">
-      <div class="detail readonly-command-help">Chat commands available to everyone.</div>
+      <div class="custom-command-header readonly-list-header">
+        <div class="detail readonly-command-help">Chat commands available to everyone.</div>
+        <div class="custom-command-list-controls">
+          <label class="list-search-wrap" for="readonlyCustomCommandSearch">
+            <span class="sr-only">Search public custom commands</span>
+            <input id="readonlyCustomCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search public custom commands">
+          </label>
+          <label class="custom-command-sort-label" for="readonlyCustomCommandSort">Sort
+            <select id="readonlyCustomCommandSort" aria-label="Sort public custom commands">
+              <option value="name_asc">Name — A to Z</option>
+              <option value="name_desc">Name — Z to A</option>
+              <option value="cooldown_asc">Cooldown — lowest first</option>
+              <option value="cooldown_desc">Cooldown — highest first</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <div id="readonlyCustomCommandList" class="custom-command-list"></div>
       <div id="readonlyCustomCommandsMsg" class="detail"></div>
+      <div id="readonlyCustomCommandPagination" class="list-pagination" aria-label="Public custom command pagination">
+        <label class="list-page-size">Show
+          <select id="readonlyCustomCommandPageSize" aria-label="Public custom commands per page">
+            <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+          </select>
+        </label>
+        <div id="readonlyCustomCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+        <div class="list-page-buttons">
+          <button id="readonlyCustomCommandPrevPage" class="secondary" type="button" aria-label="Previous public custom command page">←</button>
+          <button id="readonlyCustomCommandNextPage" class="secondary" type="button" aria-label="Next public custom command page">→</button>
+        </div>
+      </div>
     </div>
     <div id="readonlyNativeCommandsView" class="subsection-view">
-      <div class="detail readonly-command-help">Built-in commands available to Everyone.</div>
-      <div class="native-command-list">
-        <div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>!recap</code><span class="native-command-badge">Everyone</span></div><div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div></div><span class="native-command-status enabled">Built-in</span></div>
-        <div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>!optout</code><span class="native-command-badge">Everyone</span></div><div class="detail">Opts you out of Viewer Profiles and removes stored profile content.</div></div><span class="native-command-status enabled">Built-in</span></div>
-        <div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>!optin</code><span class="native-command-badge">Everyone</span></div><div class="detail">Opts you back into Viewer Profiles.</div></div><span class="native-command-status enabled">Built-in</span></div>
+      <div class="custom-command-header readonly-list-header">
+        <div class="detail readonly-command-help">Built-in commands available to everyone.</div>
+        <div class="custom-command-list-controls">
+          <label class="list-search-wrap" for="readonlyNativeCommandSearch">
+            <span class="sr-only">Search public native commands</span>
+            <input id="readonlyNativeCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search public native commands">
+          </label>
+          <label class="custom-command-sort-label" for="readonlyNativeCommandSort">Sort
+            <select id="readonlyNativeCommandSort" aria-label="Sort public native commands">
+              <option value="name_asc">Name — A to Z</option>
+              <option value="name_desc">Name — Z to A</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div id="readonlyNativeCommandList" class="native-command-list"></div>
+      <div id="readonlyNativeCommandsMsg" class="detail"></div>
+      <div id="readonlyNativeCommandPagination" class="list-pagination" aria-label="Public native command pagination">
+        <label class="list-page-size">Show
+          <select id="readonlyNativeCommandPageSize" aria-label="Public native commands per page">
+            <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+          </select>
+        </label>
+        <div id="readonlyNativeCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+        <div class="list-page-buttons">
+          <button id="readonlyNativeCommandPrevPage" class="secondary" type="button" aria-label="Previous public native command page">←</button>
+          <button id="readonlyNativeCommandNextPage" class="secondary" type="button" aria-label="Next public native command page">→</button>
+        </div>
       </div>
     </div>
   </div>

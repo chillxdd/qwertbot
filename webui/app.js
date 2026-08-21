@@ -111,6 +111,17 @@ async function status() {
   }
 }
 
+const READONLY_PAGE_SIZES = new Set([10, 25, 50]);
+let readOnlyCustomCommands = [];
+let readOnlyCustomPage = 1;
+let readOnlyNativePage = 1;
+
+const readOnlyNativeCommands = [
+  { name: '!recap', description: 'Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.' },
+  { name: '!optout', description: 'Opts you out of Viewer Profiles and removes stored profile content.' },
+  { name: '!optin', description: 'Opts you back into Viewer Profiles.' }
+];
+
 function selectReadOnlyCommandsView(view = 'commands') {
   const commandsSelected = view === 'commands';
   $('readonlyCustomCommandsView').classList.toggle('open', commandsSelected);
@@ -121,37 +132,131 @@ function selectReadOnlyCommandsView(view = 'commands') {
   $('readonlyNativeCommandsTab').setAttribute('aria-selected', commandsSelected ? 'false' : 'true');
 }
 
-async function loadReadOnlyCommands() {
+function readOnlyPageSize(id) {
+  const value = Number($(id)?.value || 10);
+  return READONLY_PAGE_SIZES.has(value) ? value : 10;
+}
+
+function updateReadOnlyPagination({ totalItems, page, setPage, pageSizeId, labelId, prevId, nextId, paginationId }) {
+  const pageSize = readOnlyPageSize(pageSizeId);
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  if (safePage !== page) setPage(safePage);
+  $(labelId).textContent = `Page ${safePage} of ${totalPages}`;
+  $(prevId).disabled = safePage <= 1;
+  $(nextId).disabled = safePage >= totalPages;
+  $(paginationId).hidden = totalItems === 0;
+  return { page: safePage, pageSize };
+}
+
+function renderReadOnlyCustomCommands() {
   const list = $('readonlyCustomCommandList');
+  const msg = $('readonlyCustomCommandsMsg');
+  const query = String($('readonlyCustomCommandSearch')?.value || '').trim().toLocaleLowerCase();
+  const sort = $('readonlyCustomCommandSort')?.value || 'name_asc';
+  const filtered = readOnlyCustomCommands.filter((command) => {
+    if (!query) return true;
+    const triggers = Array.isArray(command.triggers) ? command.triggers : [];
+    const haystack = [command.name, ...triggers.flatMap((trigger) => [trigger?.trigger, trigger?.triggerType])]
+      .filter(Boolean).join(' ').toLocaleLowerCase();
+    return haystack.includes(query);
+  }).sort((a, b) => {
+    const nameA = String(a?.name || 'Custom Command');
+    const nameB = String(b?.name || 'Custom Command');
+    if (sort === 'name_desc') return nameB.localeCompare(nameA, undefined, { sensitivity: 'base', numeric: true });
+    if (sort === 'cooldown_asc') return Number(a?.cooldownSeconds || 0) - Number(b?.cooldownSeconds || 0) || nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
+    if (sort === 'cooldown_desc') return Number(b?.cooldownSeconds || 0) - Number(a?.cooldownSeconds || 0) || nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
+    return nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
+  });
+
+  const { page, pageSize } = updateReadOnlyPagination({
+    totalItems: filtered.length,
+    page: readOnlyCustomPage,
+    setPage: (value) => { readOnlyCustomPage = value; },
+    pageSizeId: 'readonlyCustomCommandPageSize',
+    labelId: 'readonlyCustomCommandPageLabel',
+    prevId: 'readonlyCustomCommandPrevPage',
+    nextId: 'readonlyCustomCommandNextPage',
+    paginationId: 'readonlyCustomCommandPagination'
+  });
+  const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  if (!readOnlyCustomCommands.length) {
+    list.innerHTML = '<div class="coming-soon custom-empty-state">No commands are available right now.</div>';
+  } else if (!visible.length) {
+    list.innerHTML = '<div class="coming-soon custom-empty-state">No commands match your search.</div>';
+  } else {
+    list.innerHTML = visible.map((command) => {
+      const triggers = Array.isArray(command.triggers) ? command.triggers : [];
+      const chips = triggers.map((trigger) => {
+        const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
+        return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
+      }).join('');
+      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="native-command-badge">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
+    }).join('');
+  }
+  msg.textContent = query ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyCustomCommands.length} command${readOnlyCustomCommands.length === 1 ? '' : 's'} available.`;
+}
+
+function renderReadOnlyNativeCommands() {
+  const list = $('readonlyNativeCommandList');
+  const msg = $('readonlyNativeCommandsMsg');
+  const query = String($('readonlyNativeCommandSearch')?.value || '').trim().toLocaleLowerCase();
+  const sort = $('readonlyNativeCommandSort')?.value || 'name_asc';
+  const filtered = readOnlyNativeCommands.filter((command) => !query || `${command.name} ${command.description}`.toLocaleLowerCase().includes(query))
+    .sort((a, b) => sort === 'name_desc'
+      ? b.name.localeCompare(a.name, undefined, { sensitivity: 'base', numeric: true })
+      : a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+  const { page, pageSize } = updateReadOnlyPagination({
+    totalItems: filtered.length,
+    page: readOnlyNativePage,
+    setPage: (value) => { readOnlyNativePage = value; },
+    pageSizeId: 'readonlyNativeCommandPageSize',
+    labelId: 'readonlyNativeCommandPageLabel',
+    prevId: 'readonlyNativeCommandPrevPage',
+    nextId: 'readonlyNativeCommandNextPage',
+    paginationId: 'readonlyNativeCommandPagination'
+  });
+  const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
+  list.innerHTML = visible.length
+    ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code><span class="native-command-badge">Everyone</span></div><div class="detail">${esc(command.description)}</div></div><span class="native-command-status enabled">Built-in</span></div>`).join('')
+    : '<div class="coming-soon custom-empty-state">No commands match your search.</div>';
+  msg.textContent = query ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${readOnlyNativeCommands.length} command${readOnlyNativeCommands.length === 1 ? '' : 's'} available.`;
+}
+
+async function loadReadOnlyCommands() {
   const msg = $('readonlyCustomCommandsMsg');
   msg.textContent = 'Loading public commands...';
   try {
     const response = await fetch('/public-commands', { cache: 'no-store' });
     const d = await response.json();
     if (!d.success) throw new Error(d.error || 'Could not load public commands.');
-    const commands = Array.isArray(d.commands) ? d.commands : [];
-    if (!commands.length) {
-      list.innerHTML = '<div class="coming-soon custom-empty-state">No commands are available right now.</div>';
-    } else {
-      list.innerHTML = commands.map((command) => {
-        const triggers = Array.isArray(command.triggers) ? command.triggers : [];
-        const chips = triggers.map((trigger) => {
-          const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
-          return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
-        }).join('');
-        return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="native-command-badge">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
-      }).join('');
-    }
-    msg.textContent = `${commands.length} command${commands.length === 1 ? '' : 's'} available.`;
+    readOnlyCustomCommands = Array.isArray(d.commands) ? d.commands : [];
+    readOnlyCustomPage = 1;
+    renderReadOnlyCustomCommands();
+    renderReadOnlyNativeCommands();
   } catch (err) {
-    list.innerHTML = '';
+    readOnlyCustomCommands = [];
+    $('readonlyCustomCommandList').innerHTML = '';
+    $('readonlyCustomCommandPagination').hidden = true;
     msg.textContent = err?.message || 'Could not load public commands.';
+    renderReadOnlyNativeCommands();
   }
 }
 
 $('readonlyCustomCommandsTab').onclick = () => selectReadOnlyCommandsView('commands');
 $('readonlyNativeCommandsTab').onclick = () => selectReadOnlyCommandsView('native');
 selectReadOnlyCommandsView('commands');
+$('readonlyCustomCommandSearch').oninput = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
+$('readonlyCustomCommandSort').onchange = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
+$('readonlyCustomCommandPageSize').onchange = () => { readOnlyCustomPage = 1; renderReadOnlyCustomCommands(); };
+$('readonlyCustomCommandPrevPage').onclick = () => { if (readOnlyCustomPage > 1) { readOnlyCustomPage -= 1; renderReadOnlyCustomCommands(); } };
+$('readonlyCustomCommandNextPage').onclick = () => { readOnlyCustomPage += 1; renderReadOnlyCustomCommands(); };
+$('readonlyNativeCommandSearch').oninput = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
+$('readonlyNativeCommandSort').onchange = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
+$('readonlyNativeCommandPageSize').onchange = () => { readOnlyNativePage = 1; renderReadOnlyNativeCommands(); };
+$('readonlyNativeCommandPrevPage').onclick = () => { if (readOnlyNativePage > 1) { readOnlyNativePage -= 1; renderReadOnlyNativeCommands(); } };
+$('readonlyNativeCommandNextPage').onclick = () => { readOnlyNativePage += 1; renderReadOnlyNativeCommands(); };
 
 async function showAuthenticatedUi({ loadLore = true } = {}) {
   loggedIn = true;
@@ -159,6 +264,7 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   $('protected').style.display = 'block';
   $('readonlyCommandsPanel').hidden = true;
   $('openLoginBtn').hidden = true;
+  $('logoutBtn').hidden = false;
   $('readonlyBadge').hidden = true;
   $('password').value = '';
   $('loginMsg').textContent = '';
@@ -177,6 +283,7 @@ function enterReadOnlyMode() {
   $('readonlyCommandsPanel').hidden = false;
   $('login').style.display = 'none';
   $('openLoginBtn').hidden = false;
+  $('logoutBtn').hidden = true;
   $('readonlyBadge').hidden = false;
   $('password').value = '';
   $('loginMsg').textContent = '';
@@ -190,6 +297,7 @@ function showLogin(message = '') {
   $('protected').style.display = 'none';
   $('readonlyCommandsPanel').hidden = true;
   $('openLoginBtn').hidden = true;
+  $('logoutBtn').hidden = true;
   $('readonlyBadge').hidden = false;
   $('login').style.display = 'block';
   $('loginMsg').textContent = message;
@@ -209,6 +317,12 @@ async function doLogin() {
   await showAuthenticatedUi();
 }
 
+async function doLogout() {
+  const d = await postJson('/mod-logout', {});
+  if (!d.success) return;
+  enterReadOnlyMode();
+}
+
 async function restoreSession() {
   try {
     const response = await fetch('/mod-session', { cache: 'no-store', credentials: 'same-origin' });
@@ -224,6 +338,7 @@ async function restoreSession() {
 $('loginBtn').onclick = doLogin;
 $('closeLoginBtn').onclick = enterReadOnlyMode;
 $('openLoginBtn').onclick = () => showLogin();
+$('logoutBtn').onclick = doLogout;
 $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
 window.addEventListener('dashboard-auth-expired', () => showLogin('MOD session expired. Please log in again.'));
 $('chatToggle').onclick = () => setChatOpen(!$('chatSidebar').classList.contains('open'));
