@@ -34,7 +34,10 @@ function createRecapManager({
   getTwitchAccessToken,
   refreshTwitchAccessToken,
   validateTwitchAccessToken,
-  getSessionMemoryConfig
+  getSessionMemoryConfig,
+  getEventReactionHoldStatus = null,
+  getAutomationSpacingStatus = null,
+  tryReserveAutomationSlot = null
 }) {
   let twitchClientId = (process.env.TWITCH_CLIENT_ID || '').trim();
   let streamStateInitialized = false;
@@ -65,6 +68,63 @@ function createRecapManager({
   let activeStateSaveInProgress = false;
   let activeStateSavePromise = null;
   let lastRecapCommandUse = 0;
+
+
+  function eventReactionHold() {
+    try {
+      return typeof getEventReactionHoldStatus === 'function'
+        ? (getEventReactionHoldStatus() || { active: false })
+        : { active: false };
+    } catch (_) {
+      return { active: false };
+    }
+  }
+
+  function deferForEventReaction(reason = 'EventSub reaction hold') {
+    const hold = eventReactionHold();
+    if (!hold.active) return false;
+    const resumeAt = hold.holdUntil && hold.holdUntil > Date.now()
+      ? hold.holdUntil + 1000
+      : Date.now() + 1000;
+    recapInProgress = false;
+    scheduleRecapAt(resumeAt);
+    console.log(`[Recap] Deferred by ${reason}; retrying after EventSub activity settles.`);
+    return true;
+  }
+
+
+
+  function automationSpacing() {
+    try {
+      return typeof getAutomationSpacingStatus === 'function'
+        ? (getAutomationSpacingStatus('recap') || { active: false })
+        : { active: false };
+    } catch (_) {
+      return { active: false };
+    }
+  }
+
+  function deferForAutomationSpacing(reason = 'automation spacing') {
+    const spacing = automationSpacing();
+    if (!spacing.active) return false;
+    const resumeAt = spacing.availableAt && spacing.availableAt > Date.now()
+      ? spacing.availableAt + 1000
+      : Date.now() + Math.max(1000, Number(spacing.remainingMs || 0));
+    recapInProgress = false;
+    scheduleRecapAt(resumeAt);
+    console.log(`[Recap] Deferred by ${reason}; retrying after automated-message spacing clears.`);
+    return true;
+  }
+
+  async function reserveAutomationSlot() {
+    try {
+      return typeof tryReserveAutomationSlot === 'function'
+        ? await tryReserveAutomationSlot('recap')
+        : { allowed: true, status: { active: false } };
+    } catch (_) {
+      return { allowed: true, status: { active: false } };
+    }
+  }
 
   function readSessionMemoryConfig() {
     try {
@@ -583,6 +643,8 @@ function createRecapManager({
 
   async function sendAutomaticRecap(reason) {
     if (!streamLive || recapPaused || recapInProgress) return;
+    if (deferForEventReaction()) return;
+    if (deferForAutomationSpacing()) return;
 
     recapInProgress = true;
     clearRecapTimer();
@@ -639,6 +701,18 @@ function createRecapManager({
       if (!streamLive) {
         console.log('[Recap] Stream ended during recap generation. Recap was not sent.');
         recapInProgress = false;
+        return;
+      }
+
+      if (deferForEventReaction('EventSub reaction started during recap generation')) return;
+      if (deferForAutomationSpacing('automation activity during recap generation')) return;
+      const automationReservation = await reserveAutomationSlot();
+      if (!automationReservation?.allowed) {
+        const spacing = automationReservation?.status || automationSpacing();
+        const resumeAt = spacing.availableAt && spacing.availableAt > Date.now() ? spacing.availableAt + 1000 : Date.now() + 1000;
+        recapInProgress = false;
+        scheduleRecapAt(resumeAt);
+        console.log('[Recap] Deferred because another automation engine won the send slot.');
         return;
       }
 

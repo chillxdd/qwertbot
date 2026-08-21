@@ -12,7 +12,7 @@ const {
 const { MAX_STREAM_LORE_LENGTH } = require('../services/streamLore');
 const {
   MAX_TIMER_NAME_LENGTH, MIN_TIMER_INTERVAL_SECONDS, MAX_TIMER_INTERVAL_SECONDS, MAX_TIMER_RESPONSES, MAX_TIMER_RESPONSE_LENGTH,
-  MAX_START_DELAY_SECONDS, MAX_JITTER_SECONDS, MAX_MINIMUM_CHAT_MESSAGES, MAX_MINIMUM_VIEWERS, MAX_GLOBAL_SPACING_SECONDS
+  MAX_START_DELAY_SECONDS, MAX_JITTER_SECONDS, MAX_MINIMUM_CHAT_MESSAGES, MAX_MINIMUM_VIEWERS
 } = require('../services/chatTimers');
 const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
 const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('../services/renderLogs');
@@ -58,8 +58,7 @@ function registerDashboardRoutes(app, options) {
         maxStartDelaySeconds: MAX_START_DELAY_SECONDS,
         maxJitterSeconds: MAX_JITTER_SECONDS,
         maxMinimumChatMessages: MAX_MINIMUM_CHAT_MESSAGES,
-        maxMinimumViewers: MAX_MINIMUM_VIEWERS,
-        maxGlobalSpacingSeconds: MAX_GLOBAL_SPACING_SECONDS
+        maxMinimumViewers: MAX_MINIMUM_VIEWERS
       },
       customCommands: {
         maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,

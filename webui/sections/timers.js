@@ -8,10 +8,9 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const maxJitterSeconds = Number(config.maxJitterSeconds || 86400);
   const maxMinimumChatMessages = Number(config.maxMinimumChatMessages || 100000);
   const maxMinimumViewers = Number(config.maxMinimumViewers || 1000000);
-  const maxGlobalSpacingSeconds = Number(config.maxGlobalSpacingSeconds || 3600);
 
   let timers = [];
-  let settings = { globalStartDelaySeconds: 0, minimumSpacingSeconds: 60 };
+  let settings = { globalStartDelaySeconds: 0 };
   let editingId = null;
   let loaded = false;
   let currentPage = 1;
@@ -202,7 +201,6 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
 
   function applySettingsToUi() {
     $('timerGlobalStartDelay').value = String(Number(settings.globalStartDelaySeconds || 0));
-    $('timerGlobalSpacing').value = String(Number(settings.minimumSpacingSeconds ?? 60));
     $('timerStartDelay').min = String(Number(settings.globalStartDelaySeconds || 0));
   }
 
@@ -225,16 +223,12 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   async function saveSettings() {
     setSettingsMessage('');
     const globalStartDelaySeconds = Number($('timerGlobalStartDelay').value);
-    const minimumSpacingSeconds = Number($('timerGlobalSpacing').value);
     if (!Number.isInteger(globalStartDelaySeconds) || globalStartDelaySeconds < 0 || globalStartDelaySeconds > maxStartDelaySeconds) {
       return setSettingsMessage(`Start Delay must be a whole number between 0 and ${maxStartDelaySeconds} seconds.`, true);
     }
-    if (!Number.isInteger(minimumSpacingSeconds) || minimumSpacingSeconds < 0 || minimumSpacingSeconds > maxGlobalSpacingSeconds) {
-      return setSettingsMessage(`Spacing must be a whole number between 0 and ${maxGlobalSpacingSeconds} seconds.`, true);
-    }
     $('saveTimerSettingsBtn').disabled = true;
     try {
-      const d = await postJson('/timers/settings', { globalStartDelaySeconds, minimumSpacingSeconds });
+      const d = await postJson('/timers/settings', { globalStartDelaySeconds });
       if (!d.success) throw new Error(d.error || 'Could not save timer settings.');
       settings = { ...settings, ...(d.settings || {}) };
       applySettingsToUi();

@@ -39,7 +39,7 @@ function formatEventSubForRecap(type, event) {
   }
 }
 
-function registerEventSubRoutes(app, { getRecapManager }) {
+function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager }) {
   const recentMessageIds = new Map();
 
   function cleanupRecentIds() {
@@ -78,9 +78,16 @@ function registerEventSubRoutes(app, { getRecapManager }) {
       const event = req.body?.event || {};
       const text = formatEventSubForRecap(type, event);
       const recapManager = getRecapManager();
+      const reactionManager = getEventSubReactionManager?.();
 
       if (text && recapManager) {
         recapManager.recordTwitchEvent({ type, text, timestamp: Date.now() });
+      }
+
+      if (reactionManager) {
+        void reactionManager.handleEvent(type, event).catch((reactionErr) => {
+          console.error('[EventSub Reactions] Event handling failed:', reactionErr?.message || reactionErr);
+        });
       }
 
       console.log(`[EventSub] ${type}: ${text || 'event received'}`);

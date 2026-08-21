@@ -178,3 +178,36 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 
 /* Keep compact command settings on one row on desktop. */
 @media(min-width:901px){.custom-command-form-grid{grid-template-columns:minmax(190px,1.35fr) minmax(145px,.9fr) minmax(190px,1fr) minmax(145px,.9fr);gap:10px}}
+
+/* EventSub Reactions */
+.commands-subsection-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
+.event-reaction-info-card{margin:14px 0 16px;padding:13px 14px;background:#121216;border:1px solid #303039;border-radius:7px}
+.event-reaction-info-card strong{display:block;margin-bottom:4px;color:#fff}
+.event-reaction-card .custom-command-card-actions{flex-wrap:wrap;justify-content:flex-end}
+.event-reaction-dialog{width:min(980px,calc(100vw - 40px))}
+.event-reaction-basics-grid{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(190px,1fr) minmax(170px,.8fr) minmax(150px,.7fr);gap:12px;align-items:end}
+.event-reaction-basics-grid label{margin:0}
+.event-reaction-basics-grid input,.event-reaction-basics-grid select{margin:5px 0 0}
+.event-reaction-actions-head{display:grid;grid-template-columns:64px minmax(160px,.8fr) 130px minmax(220px,1.4fr) 150px;gap:10px;padding:8px 10px 4px}
+.event-reaction-actions{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.event-reaction-action-row{display:grid;grid-template-columns:64px minmax(160px,.8fr) 130px minmax(220px,1.4fr) 150px;gap:10px;align-items:end;padding:10px;background:#0e0e10;border:1px solid #2f2f38;border-radius:7px}
+.event-reaction-action-row label{margin:0;min-width:0}
+.event-reaction-action-row input,.event-reaction-action-row select{margin:5px 0 0;width:100%}
+.event-action-enabled{align-self:center;padding-bottom:8px}
+.event-action-order-buttons{display:flex;gap:5px;align-items:center;justify-content:flex-end;padding-bottom:1px}
+.event-action-order-buttons button{margin:0;padding:8px 9px;min-width:36px}
+.event-action-order-buttons .event-action-remove{padding-left:10px;padding-right:10px}
+.event-reaction-vars{margin-top:10px;line-height:1.7}
+.event-reaction-vars code{white-space:nowrap}
+@media(max-width:900px){
+  .event-reaction-basics-grid{grid-template-columns:1fr 1fr}
+  .event-reaction-actions-head{display:none}
+  .event-reaction-action-row{grid-template-columns:90px 1fr 130px;grid-template-areas:"enabled type delay" "value value order"}
+  .event-action-enabled{grid-area:enabled}.event-action-type{grid-area:type}.event-reaction-action-row>label:nth-of-type(2){grid-area:type}.event-reaction-action-row>label:nth-of-type(3){grid-area:delay}.event-action-value-wrap{grid-area:value}.event-action-order-buttons{grid-area:order;align-self:end}
+}
+@media(max-width:600px){
+  .commands-subsection-nav{grid-template-columns:1fr}
+  .event-reaction-basics-grid{grid-template-columns:1fr}
+  .event-reaction-action-row{grid-template-columns:1fr;grid-template-areas:"enabled" "type" "delay" "value" "order"}
+  .event-action-order-buttons{justify-content:flex-start}
+}

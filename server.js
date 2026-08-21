@@ -9,6 +9,9 @@ const { createModSessionManager } = require('./middleware/modSession');
 const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
 const { createCustomCommandManager } = require('./services/customCommands');
 const { createChatTimerManager } = require('./services/chatTimers');
+const { createEventSubReactionManager } = require('./services/eventSubReactions');
+const { createAutomationSpacingManager } = require('./services/automationSpacing');
+const { getEventReactionHoldStatus } = require('./services/eventReactionHold');
 const { getStreamLore } = require('./services/streamLore');
 const { createBotPersonalityManager } = require('./services/botPersonality');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
@@ -34,6 +37,8 @@ const { registerCustomCommandRoutes } = require('./routes/customCommands');
 const { registerTimerRoutes } = require('./routes/timers');
 const { registerDashboardRoutes } = require('./routes/dashboard');
 const { registerEventSubRoutes } = require('./routes/eventSub');
+const { registerEventSubReactionRoutes } = require('./routes/eventSubReactions');
+const { registerAutomationRoutes } = require('./routes/automation');
 const { registerMemoryRoutes } = require('./routes/memory');
 const { registerRecapRoutes } = require('./routes/recap');
 
@@ -45,7 +50,7 @@ const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
-const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', REQUIRED_CHATTERS_SCOPE];
+const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_CHATTERS_SCOPE];
 const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
@@ -74,6 +79,8 @@ let twitchClient = null;
 let recapManager = null;
 let customCommandManager = null;
 let chatTimerManager = null;
+let eventSubReactionManager = null;
+let automationSpacingManager = null;
 let botPersonalityManager = null;
 let twitchReconnectInProgress = false;
 let twitchAuthRecoveryInProgress = false;
@@ -184,6 +191,8 @@ const modSessionManager = createModSessionManager({
 
 const requireModSession = modSessionManager.requireSession;
 
+automationSpacingManager = createAutomationSpacingManager({ channelName });
+
 customCommandManager = createCustomCommandManager({
   channelName,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
@@ -194,7 +203,18 @@ chatTimerManager = createChatTimerManager({
   channelName,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
   getStreamStatus: () => recapManager?.getStatus?.() || {},
-  getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
+  getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] }),
+  getEventReactionHoldStatus,
+  getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
+  tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: true })
+});
+
+eventSubReactionManager = createEventSubReactionManager({
+  channelName,
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  getBotAccessToken,
+  getCustomCommandManager: () => customCommandManager,
+  noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve()
 });
 
 botPersonalityManager = createBotPersonalityManager({
@@ -478,7 +498,8 @@ async function reconnectTwitchClient(reason = 'manual reconnect', { accessToken 
 
 
 registerEventSubRoutes(app, {
-  getRecapManager: () => recapManager
+  getRecapManager: () => recapManager,
+  getEventSubReactionManager: () => eventSubReactionManager
 });
 
 registerDashboardRoutes(app, {
@@ -542,6 +563,18 @@ registerTimerRoutes(app, {
   getChatTimerManager: () => chatTimerManager
 });
 
+registerAutomationRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => databaseConnected,
+  getAutomationSpacingManager: () => automationSpacingManager
+});
+
+registerEventSubReactionRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => databaseConnected,
+  getEventSubReactionManager: () => eventSubReactionManager
+});
+
 registerChatRoutes(app, {
   requireModSession,
   channelName,
@@ -556,6 +589,14 @@ async function bootstrap() {
     databaseConnected = false;
     console.error('[Database] Startup failed:', err.message || err);
     console.error('[Database] The web dashboard will still start, but MongoDB OAuth cannot work until the connection is fixed.');
+  }
+
+  if (databaseConnected && automationSpacingManager) {
+    try {
+      await automationSpacingManager.initialize();
+    } catch (err) {
+      console.error('[Automation] Startup load failed:', err.message || err);
+    }
   }
 
   if (databaseConnected && customCommandManager) {
@@ -574,6 +615,14 @@ async function bootstrap() {
     }
   }
 
+  if (databaseConnected && eventSubReactionManager) {
+    try {
+      await eventSubReactionManager.initialize();
+    } catch (err) {
+      console.error('[EventSub Reactions] Startup load failed:', err.message || err);
+    }
+  }
+
   if (databaseConnected && botPersonalityManager) {
     try {
       await botPersonalityManager.initialize();
@@ -588,7 +637,10 @@ async function bootstrap() {
     getTwitchAccessToken: getBotAccessToken,
     refreshTwitchAccessToken: refreshBotAccessToken,
     validateTwitchAccessToken: validateAnyBotToken,
-    getSessionMemoryConfig: () => botPersonalityManager?.getConfig?.()?.sessionMemory || {}
+    getSessionMemoryConfig: () => botPersonalityManager?.getConfig?.()?.sessionMemory || {},
+    getEventReactionHoldStatus,
+    getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
+    tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: true })
   });
 
   const accessToken = await resolveStartupToken();

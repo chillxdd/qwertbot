@@ -26,7 +26,7 @@
 
   <div id="protected">
     <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
-      <button id="customCommandsTab" class="secondary" type="button">Commands and Timers</button>
+      <button id="customCommandsTab" class="secondary" type="button">Commands &amp; Automation</button>
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
@@ -61,11 +61,27 @@
     </div>
 
     <div id="customCommandsPanel" class="section-panel">
-      <h3>Commands and Timers</h3>
-      <div class="subsection-nav commands-subsection-nav" role="tablist" aria-label="Commands and timers views">
+      <h3>Commands &amp; Automation</h3>
+      <div class="subsection-nav commands-subsection-nav" role="tablist" aria-label="Commands and automation views">
         <button id="customCommandsViewTab" class="secondary active" type="button" aria-selected="true">Custom Commands</button>
         <button id="timersViewTab" class="secondary" type="button" aria-selected="false">Timers</button>
+        <button id="eventReactionsViewTab" class="secondary" type="button" aria-selected="false">EventSub Reactions</button>
         <button id="nativeCommandsViewTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
+      </div>
+
+      <div class="custom-global-cooldown-card automation-spacing-card">
+        <div class="custom-global-cooldown-copy">
+          <strong>Automation Spacing</strong>
+          <div class="detail">Minimum gap between automated outputs from hourly recaps, scheduled timers, and EventSub reactions. EventSub action delays and reaction holds still apply. Chat commands are not affected.</div>
+        </div>
+        <div class="custom-global-cooldown-control">
+          <label class="prompt-label" for="automationSpacingSeconds">Seconds</label>
+          <div class="custom-global-cooldown-input-row">
+            <input id="automationSpacingSeconds" type="number" min="0" max="3600" step="1" value="30">
+            <button id="saveAutomationSpacingBtn" class="secondary" type="button">Save</button>
+          </div>
+          <div id="automationSpacingMsg" class="detail"></div>
+        </div>
       </div>
 
       <div id="customCommandsView" class="subsection-view open">
@@ -289,12 +305,7 @@
             <div>
               <label class="prompt-label" for="timerGlobalStartDelay">Start Delay (seconds)</label>
               <input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0">
-              <div class="detail">No timer may fire before this much stream uptime has passed.</div>
-            </div>
-            <div>
-              <label class="prompt-label" for="timerGlobalSpacing">Spacing (seconds)</label>
-              <input id="timerGlobalSpacing" type="number" min="0" max="3600" step="1" value="60">
-              <div class="detail">If several timers are due, they wait and drain naturally instead of posting together.</div>
+              <div class="detail">No timer may fire before this much stream uptime has passed. Automated-message spacing is controlled by Automation Spacing above.</div>
             </div>
           </div>
           <div id="timerSettingsMsg" class="detail custom-field-message"></div>
@@ -427,6 +438,101 @@
             <button id="closeTimerPreviewBtn" class="secondary" type="button">Close</button>
           </div>
           <div id="timerPreviewBody" class="custom-variable-help-body"></div>
+        </dialog>
+      </div>
+
+
+      <div id="eventReactionsView" class="subsection-view">
+        <div class="custom-command-header">
+          <div>
+            <h3>EventSub Reactions</h3>
+            <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
+          </div>
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="eventReactionSearch">
+              <span class="sr-only">Search EventSub reactions</span>
+              <input id="eventReactionSearch" class="list-search-input" type="search" placeholder="Search reactions..." autocomplete="off" aria-label="Search EventSub reactions">
+            </label>
+            <label class="custom-command-sort-label" for="eventReactionSort">Sort
+              <select id="eventReactionSort" aria-label="Sort EventSub reactions">
+                <option value="created_asc">Date added — oldest first</option>
+                <option value="updated_desc">Recently updated</option>
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="event_asc">Event — A to Z</option>
+              </select>
+            </label>
+            <button id="refreshEventReactionsBtn" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="event-reaction-info-card">
+          <strong>Sequence Hold</strong>
+          <div class="detail">When a reaction starts, scheduled timers and automatic hourly recaps pause. EventSub reactions take priority and start immediately; their configured action delays control the sequence. After the final action, the reaction Hold and shared Automation Spacing keep other automation from crowding the moment. Due work is deferred rather than discarded.</div>
+        </div>
+
+        <div id="eventReactionsMsg" class="detail"></div>
+        <div id="eventReactionList" class="custom-command-list"></div>
+        <div id="eventReactionPagination" class="list-pagination" aria-label="EventSub reaction pagination">
+          <label class="list-page-size">Show
+            <select id="eventReactionPageSize" aria-label="EventSub reactions per page">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <div id="eventReactionPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="eventReactionPrevPage" class="secondary" type="button" aria-label="Previous EventSub reaction page">←</button>
+            <button id="eventReactionNextPage" class="secondary" type="button" aria-label="Next EventSub reaction page">→</button>
+          </div>
+        </div>
+        <div class="custom-command-add-row">
+          <button id="addEventReactionBtn" type="button">Add EventSub Reaction</button>
+        </div>
+
+        <dialog id="eventReactionEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog">
+          <div class="custom-editor-header">
+            <h3 id="eventReactionEditorTitle">Add EventSub Reaction</h3>
+            <div class="custom-editor-header-actions">
+              <label class="inline-check custom-enabled-check"><input id="eventReactionEnabled" type="checkbox" checked> Enabled</label>
+              <button id="closeEventReactionEditorBtn" class="secondary" type="button">Close</button>
+            </div>
+          </div>
+
+          <div class="custom-editor-block event-reaction-basics-grid">
+            <label>Name
+              <input id="eventReactionName" type="text" maxlength="80" placeholder="Example: Raid Welcome">
+            </label>
+            <label>Event
+              <select id="eventReactionType"></select>
+            </label>
+            <label id="eventReactionMinimumWrap"> <span id="eventReactionMinimumLabel">Minimum</span>
+              <input id="eventReactionMinimum" type="number" min="0" step="1" value="0">
+            </label>
+            <label>Hold (seconds)
+              <input id="eventReactionHold" type="number" min="0" max="600" step="1" value="60">
+            </label>
+          </div>
+          <div class="detail">Hold starts immediately when the reaction begins and continues for this many seconds after the final action finishes. Use 0 for events that should not delay recaps or timers.</div>
+
+          <div class="custom-editor-block">
+            <div class="custom-trigger-heading">
+              <strong>Actions</strong>
+              <button id="addEventReactionActionBtn" class="secondary" type="button">Add Action</button>
+            </div>
+            <div id="eventReactionActionHelp" class="detail"></div>
+            <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Value</span><span>Order</span></div>
+            <div id="eventReactionActions" class="event-reaction-actions"></div>
+            <div class="detail event-reaction-vars"><strong>Event variables:</strong> <code>$(user)</code>, <code>$(username)</code>, <code>$(raider)</code>, <code>$(viewers)</code>, <code>$(bits)</code>, <code>$(gifts)</code>, <code>$(level)</code>, <code>$(months)</code>, <code>$(event)</code>. Twitch Shoutout uses the EventSub actor automatically.</div>
+            <div class="detail">Run Custom Command uses the saved command response/variables, but EventSub sequencing controls timing: normal command probability, cooldowns, and response delay are bypassed for this system-triggered run. Twitch Shoutout requires the bot account to be a moderator and authorized with <code>moderator:manage:shoutouts</code>.</div>
+          </div>
+
+          <div class="custom-editor-actions">
+            <button id="saveEventReactionBtn" type="button">Save Reaction</button>
+            <button id="cancelEventReactionBtn" class="secondary" type="button">Cancel</button>
+            <div id="eventReactionEditorMsg" class="detail"></div>
+          </div>
         </dialog>
       </div>
 

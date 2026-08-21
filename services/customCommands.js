@@ -549,7 +549,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     };
   }
 
-  async function handleMessage({ rawMessage, displayName, tags = {} }) {
+  async function handleMessage({ rawMessage, displayName, tags = {}, systemInvocation = false }) {
     const match = findMatch(rawMessage);
     if (!match) return { matched: false };
 
@@ -557,7 +557,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     const matchedTrigger = match.trigger;
     const commandId = String(command._id);
 
-    if (!meetsUserLevel(tags, command.userLevel || 'everyone')) {
+    if (!systemInvocation && !meetsUserLevel(tags, command.userLevel || 'everyone')) {
       return {
         matched: true,
         triggerType: matchedTrigger.triggerType,
@@ -569,7 +569,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     }
 
     const now = Date.now();
-    if (isGlobalCoolingDown(now)) {
+    if (!systemInvocation && isGlobalCoolingDown(now)) {
       return {
         matched: true,
         triggerType: matchedTrigger.triggerType,
@@ -582,7 +582,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     const cooldownMs = Math.max(0, Number(command.cooldownSeconds || 0) * 1000);
     const previous = lastTriggeredAt.get(commandId) || 0;
 
-    if (cooldownMs > 0 && now - previous < cooldownMs) {
+    if (!systemInvocation && cooldownMs > 0 && now - previous < cooldownMs) {
       const cooldownTemplate = String(command.cooldownResponse || '').trim();
       if (!cooldownTemplate) {
         return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
@@ -655,7 +655,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     }
 
     const probability = Math.max(0, Math.min(100, Number(command.probability ?? 100)));
-    if (probability <= 0 || Math.random() * 100 >= probability) {
+    if (!systemInvocation && (probability <= 0 || Math.random() * 100 >= probability)) {
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'probability' };
     }
 
@@ -716,7 +716,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     }
 
     const responseDelayMs = Math.max(0, Number(command.responseDelaySeconds || 0) * 1000);
-    if (responseDelayMs > 0) {
+    if (!systemInvocation && responseDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, responseDelayMs));
 
       // Another invocation of this command may have completed while this one was
@@ -724,13 +724,17 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       // slip through concurrently when the global cooldown is disabled.
       const delayedNow = Date.now();
       const delayedPrevious = lastTriggeredAt.get(commandId) || 0;
-      if (cooldownMs > 0 && delayedNow - delayedPrevious < cooldownMs) {
+      if (!systemInvocation && cooldownMs > 0 && delayedNow - delayedPrevious < cooldownMs) {
         return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
       }
     }
 
-    if (!acquireGlobalResponseSlot()) {
-      return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
+    let globalSlotAcquired = false;
+    if (!systemInvocation) {
+      if (!acquireGlobalResponseSlot()) {
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
+      }
+      globalSlotAcquired = true;
     }
 
     let updated;
@@ -741,12 +745,12 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
         { new: true }
       ).lean();
     } catch (err) {
-      releaseGlobalResponseSlot();
+      if (globalSlotAcquired) releaseGlobalResponseSlot();
       throw err;
     }
 
     if (!updated) {
-      releaseGlobalResponseSlot();
+      if (globalSlotAcquired) releaseGlobalResponseSlot();
       await refreshCache();
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'disabled' };
     }
@@ -761,7 +765,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     });
 
     if (!rendered) {
-      releaseGlobalResponseSlot();
+      if (globalSlotAcquired) releaseGlobalResponseSlot();
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'empty_response' };
     }
 
@@ -778,9 +782,9 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       ).catch(() => {});
       throw err;
     } finally {
-      releaseGlobalResponseSlot({ sent });
+      if (globalSlotAcquired) releaseGlobalResponseSlot({ sent });
     }
-    lastTriggeredAt.set(commandId, Date.now());
+    if (!systemInvocation) lastTriggeredAt.set(commandId, Date.now());
 
     const cached = cache.find((item) => String(item._id) === commandId);
     if (cached) cached.counter = updated.counter;

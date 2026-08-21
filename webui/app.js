@@ -4,6 +4,8 @@ import { initLoreSection } from './sections/lore.js';
 import { initViewerProfilesSection } from './sections/viewerProfiles.js';
 import { initCustomCommandsSection } from './sections/customCommands.js';
 import { initTimersSection } from './sections/timers.js';
+import { initEventSubReactionsSection } from './sections/eventSubReactions.js';
+import { initAutomationSection } from './sections/automation.js';
 import { initOauthSection } from './sections/oauth.js';
 import { initRenderLogsSection } from './sections/renderLogs.js';
 
@@ -45,6 +47,8 @@ const viewerProfiles = initViewerProfilesSection({ $, esc, postJson });
 const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername, viewerProfiles });
 const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
 const timers = initTimersSection({ $, esc, postJson, config: config.timers || {} });
+const eventSubReactions = initEventSubReactionsSection({ $, esc, postJson });
+const automation = initAutomationSection({ $, postJson });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
 void messaging;
@@ -100,6 +104,7 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   $('loginMsg').textContent = '';
   if (loadLore) await lore.loadMemory();
   await messaging.loadPrompt();
+  await automation.loadSettings();
   await status();
   // Load the Twitch embed only after the login overlay is gone and the dashboard layout is stable.
   requestAnimationFrame(() => requestAnimationFrame(ensureTwitchChatLoaded));
@@ -157,23 +162,29 @@ $('resumeBtn').onclick = () => recapAction('start');
 function selectCommandsView(view = 'commands', { load = true } = {}) {
   const commandsSelected = view === 'commands';
   const timersSelected = view === 'timers';
+  const reactionsSelected = view === 'reactions';
   const nativeSelected = view === 'native';
   $('customCommandsView').classList.toggle('open', commandsSelected);
   $('timersView').classList.toggle('open', timersSelected);
+  $('eventReactionsView').classList.toggle('open', reactionsSelected);
   $('nativeCommandsView').classList.toggle('open', nativeSelected);
   $('customCommandsViewTab').classList.toggle('active', commandsSelected);
   $('timersViewTab').classList.toggle('active', timersSelected);
+  $('eventReactionsViewTab').classList.toggle('active', reactionsSelected);
   $('nativeCommandsViewTab').classList.toggle('active', nativeSelected);
   $('customCommandsViewTab').setAttribute('aria-selected', commandsSelected ? 'true' : 'false');
   $('timersViewTab').setAttribute('aria-selected', timersSelected ? 'true' : 'false');
+  $('eventReactionsViewTab').setAttribute('aria-selected', reactionsSelected ? 'true' : 'false');
   $('nativeCommandsViewTab').setAttribute('aria-selected', nativeSelected ? 'true' : 'false');
   if (load) {
     customCommands.onVisibilityChange(commandsSelected);
     timers.onVisibilityChange(timersSelected);
+    eventSubReactions.onVisibilityChange(reactionsSelected);
   }
 }
 $('customCommandsViewTab').onclick = () => selectCommandsView('commands');
 $('timersViewTab').onclick = () => selectCommandsView('timers');
+$('eventReactionsViewTab').onclick = () => selectCommandsView('reactions');
 $('nativeCommandsViewTab').onclick = () => selectCommandsView('native');
 selectCommandsView('commands', { load: false });
 
@@ -196,6 +207,7 @@ function toggleSection(tabId) {
     if (panelId === 'customCommandsPanel') {
       customCommands.onVisibilityChange(false);
       timers.onVisibilityChange(false);
+      eventSubReactions.onVisibilityChange(false);
     }
     if (panelId === 'lorePanel') viewerProfiles.onVisibilityChange(false);
   });

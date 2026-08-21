@@ -12,9 +12,7 @@ const MAX_START_DELAY_SECONDS = 86400;
 const MAX_JITTER_SECONDS = 86400;
 const MAX_MINIMUM_CHAT_MESSAGES = 100000;
 const MAX_MINIMUM_VIEWERS = 1000000;
-const MAX_GLOBAL_SPACING_SECONDS = 3600;
 const DEFAULT_GLOBAL_START_DELAY_SECONDS = 0;
-const DEFAULT_GLOBAL_SPACING_SECONDS = 60;
 const SCHEDULER_TICK_MS = 1000;
 const ACTIVITY_CHECKPOINT_MS = 60 * 1000;
 const OWN_RESPONSE_TTL_MS = 15000;
@@ -36,12 +34,7 @@ function normalizeSettings(input = {}) {
     throw new Error(`Global stream-start delay must be between 0 and ${MAX_START_DELAY_SECONDS} seconds.`);
   }
 
-  const minimumSpacingSeconds = wholeNumber(input.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS);
-  if (minimumSpacingSeconds < 0 || minimumSpacingSeconds > MAX_GLOBAL_SPACING_SECONDS) {
-    throw new Error(`Minimum timer spacing must be between 0 and ${MAX_GLOBAL_SPACING_SECONDS} seconds.`);
-  }
-
-  return { globalStartDelaySeconds, minimumSpacingSeconds };
+  return { globalStartDelaySeconds };
 }
 
 function normalizeInput(input = {}, settings = {}) {
@@ -209,13 +202,11 @@ async function renderTimerResponse(template, getRandomChatters) {
   return Array.from(output).slice(0, MAX_TIMER_RESPONSE_LENGTH).join('').trim();
 }
 
-function createChatTimerManager({ channelName, sendMessage, getStreamStatus = null, getRandomChatters = null }) {
+function createChatTimerManager({ channelName, sendMessage, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   let settings = {
-    globalStartDelaySeconds: DEFAULT_GLOBAL_START_DELAY_SECONDS,
-    minimumSpacingSeconds: DEFAULT_GLOBAL_SPACING_SECONDS,
-    lastTimerMessageAt: null
+    globalStartDelaySeconds: DEFAULT_GLOBAL_START_DELAY_SECONDS
   };
   let scheduler = null;
   let checkpointTimer = null;
@@ -223,6 +214,36 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
   let lastSeenStreamId = '';
   let activityDirty = false;
   const ownResponses = [];
+
+
+  function eventReactionHoldActive() {
+    try {
+      return Boolean(typeof getEventReactionHoldStatus === 'function' && getEventReactionHoldStatus()?.active);
+    } catch (_) {
+      return false;
+    }
+  }
+
+
+  function automationSpacingStatus() {
+    try {
+      return typeof getAutomationSpacingStatus === 'function'
+        ? (getAutomationSpacingStatus('timer') || { active: false })
+        : { active: false };
+    } catch (_) {
+      return { active: false };
+    }
+  }
+
+  async function reserveAutomationSlot() {
+    try {
+      return typeof tryReserveAutomationSlot === 'function'
+        ? await tryReserveAutomationSlot('timer')
+        : { allowed: true, status: { active: false } };
+    } catch (_) {
+      return { allowed: true, status: { active: false } };
+    }
+  }
 
   function streamStatus() {
     const status = typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {};
@@ -314,9 +335,8 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     const effectiveDelay = effectiveStartDelay(timer, settings);
     const missingMessages = Math.max(0, wholeNumber(timer.minimumChatMessages, 0) - wholeNumber(timer.messagesSinceLastFire, 0));
     const missingViewers = Math.max(0, wholeNumber(timer.minimumViewers, 0) - status.viewerCount);
-    const globalSpacingMs = Math.max(0, wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS)) * 1000;
-    const lastTimerMessageMs = dateMs(settings.lastTimerMessageAt);
-    const spacingRemainingMs = lastTimerMessageMs ? Math.max(0, lastTimerMessageMs + globalSpacingMs - now) : 0;
+    const automationStatus = automationSpacingStatus();
+    const spacingRemainingMs = Math.max(0, Number(automationStatus.remainingMs || 0));
     const startNotBefore = status.startedAt ? status.startedAt + effectiveDelay * 1000 : 0;
     const startDelayRemainingMs = status.live && startNotBefore ? Math.max(0, startNotBefore - now) : 0;
 
@@ -326,7 +346,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     else if (dueAt > now) waitingFor = timer.nextRetryAt ? 'Retry delay' : 'Interval';
     else if (missingMessages > 0) waitingFor = `${missingMessages} more chat message${missingMessages === 1 ? '' : 's'}`;
     else if (missingViewers > 0) waitingFor = `${missingViewers} more viewer${missingViewers === 1 ? '' : 's'}`;
-    else if (spacingRemainingMs > 0) waitingFor = 'Global timer spacing';
+    else if (automationStatus.active) waitingFor = 'Automation spacing';
 
     return {
       id: String(timer._id),
@@ -374,9 +394,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     if (now < startNotBefore) return false;
     if (wholeNumber(timer.messagesSinceLastFire, 0) < wholeNumber(timer.minimumChatMessages, 0)) return false;
     if (status.viewerCount < wholeNumber(timer.minimumViewers, 0)) return false;
-    const spacingMs = Math.max(0, wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS)) * 1000;
-    const lastMessageAt = dateMs(settings.lastTimerMessageAt);
-    if (lastMessageAt && now < lastMessageAt + spacingMs) return false;
+    if (automationSpacingStatus().active) return false;
     return true;
   }
 
@@ -398,11 +416,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
       history: nextHistory
     };
     Object.assign(timer, patch);
-    settings.lastTimerMessageAt = now;
-    await Promise.all([
-      persistSchedulePatch(timer._id, patch),
-      TimerConfig.updateOne({ channelName: normalizedChannel }, { $set: { lastTimerMessageAt: now } }, { upsert: true })
-    ]);
+    await persistSchedulePatch(timer._id, patch);
     activityDirty = false;
     console.log(`[Timers] Sent ${timer.name} -> response ${selection.index + 1}/${timer.responses.length} (${selection.mode}); next eligibility ${nextDueAt.toISOString()}.`);
   }
@@ -448,6 +462,9 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
 
   async function runScheduledTimer(timer) {
     try {
+      const reservation = await reserveAutomationSlot();
+      if (!reservation?.allowed) return;
+      if (eventReactionHoldActive()) return;
       await persistSchedulePatch(timer._id, { lastAttemptAt: new Date() });
       await sendSelected(timer, { reason: 'scheduled', affectSchedule: true });
     } catch (err) {
@@ -469,6 +486,8 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
         lastSeenStreamId = status.streamId;
         await refreshCache();
       }
+
+      if (eventReactionHoldActive()) return;
 
       const now = Date.now();
       const candidates = cache
@@ -522,7 +541,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     await refreshCache();
     if (!scheduler) scheduler = setInterval(() => { void tick(); }, SCHEDULER_TICK_MS);
     if (!checkpointTimer) checkpointTimer = setInterval(() => { void checkpointActivity(); }, ACTIVITY_CHECKPOINT_MS);
-    console.log(`[Timers] Loaded ${cache.length} timer(s) from MongoDB. Global start delay ${settings.globalStartDelaySeconds}s; minimum spacing ${settings.minimumSpacingSeconds}s.`);
+    console.log(`[Timers] Loaded ${cache.length} timer(s) from MongoDB. Global start delay ${settings.globalStartDelaySeconds}s.`);
   }
 
   async function listTimers() {
@@ -534,9 +553,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
   async function getSettings() {
     await loadSettings();
     return {
-      globalStartDelaySeconds: wholeNumber(settings.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS),
-      minimumSpacingSeconds: wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS),
-      lastTimerMessageAt: settings.lastTimerMessageAt || null
+      globalStartDelaySeconds: wholeNumber(settings.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS)
     };
   }
 
@@ -561,7 +578,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     }
     settings = { ...settings, ...saved };
     await refreshCache();
-    console.log(`[Timers] Updated global settings: start delay ${normalized.globalStartDelaySeconds}s; spacing ${normalized.minimumSpacingSeconds}s.`);
+    console.log(`[Timers] Updated settings: start delay ${normalized.globalStartDelaySeconds}s.`);
     return getSettings();
   }
 
@@ -647,12 +664,6 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     const timer = await findTimerOrThrow(id);
     const status = streamStatus();
     if (!status.live || !status.streamId) throw new Error('Fire Now is only available while Qwert is live. Use Test for an offline send check.');
-    const spacingMs = Math.max(0, wholeNumber(settings.minimumSpacingSeconds, DEFAULT_GLOBAL_SPACING_SECONDS)) * 1000;
-    const lastMessageAt = dateMs(settings.lastTimerMessageAt);
-    if (lastMessageAt && Date.now() < lastMessageAt + spacingMs) {
-      const remaining = Math.ceil((lastMessageAt + spacingMs - Date.now()) / 1000);
-      throw new Error(`Global timer spacing is active. Try Fire Now again in ${remaining}s.`);
-    }
     const result = await sendSelected(timer, { reason: 'manual', affectSchedule: true });
     console.log(`[Timers] Fire Now sent for ${timer.name} and reset its timer schedule.`);
     return result;
@@ -685,9 +696,7 @@ module.exports = {
   MAX_JITTER_SECONDS,
   MAX_MINIMUM_CHAT_MESSAGES,
   MAX_MINIMUM_VIEWERS,
-  MAX_GLOBAL_SPACING_SECONDS,
   DEFAULT_GLOBAL_START_DELAY_SECONDS,
-  DEFAULT_GLOBAL_SPACING_SECONDS,
   TIMER_RESPONSE_MODES,
   TIMER_PRIORITIES,
   createChatTimerManager
