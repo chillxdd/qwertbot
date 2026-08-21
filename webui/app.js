@@ -67,7 +67,7 @@ async function status() {
     if (d.bot.recapPaused) botDetail = `Recaps PAUSED - ${d.bot.messagesInWindow} message(s) preserved`;
     if (d.bot.recapInProgress) botDetail += '<br>Recap generation in progress';
     else if (d.bot.nextRecapAt) botDetail += `<br>Next recap in ${countdown(d.bot.nextRecapAt - Date.now())}`;
-    $('bDetail').innerHTML = botDetail;
+    $('bDetail').innerHTML = loggedIn ? botDetail : '';
 
     const recapState = !d.qwert.live ? 'OFFLINE' : d.bot.recapPaused ? 'PAUSED' : d.bot.recapInProgress ? 'GENERATING' : 'RUNNING';
     $('recapState').textContent = recapState;
@@ -77,9 +77,12 @@ async function status() {
     $('recapNext').textContent = d.bot.nextRecapAt ? countdown(d.bot.nextRecapAt - Date.now()) : '—';
     $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${d.bot.twitchEventsInWindow || 0} event`;
 
+    $('dbStatusLabel').textContent = loggedIn ? 'MongoDB Status' : 'Database';
     $('dbStatus').textContent = d.database.connected ? 'CONNECTED' : 'OFFLINE';
     $('dbStatus').className = `value ${d.database.connected ? 'good' : 'bad'}`;
-    $('dbDetail').textContent = d.database.connected ? 'Persistent storage ready' : 'Check MONGODB_URI / Atlas network access';
+    $('dbDetail').textContent = loggedIn
+      ? (d.database.connected ? 'Persistent storage ready' : 'Check MONGODB_URI / Atlas network access')
+      : '';
 
     const botMissing = d.oauth.botMissingScopes || [];
     const broadcaster = d.oauth.broadcaster || {};
@@ -87,11 +90,16 @@ async function status() {
     const botReady = Boolean(d.oauth.stored && botMissing.length === 0);
     const broadcasterReady = Boolean(broadcaster.stored && broadcasterMissing.length === 0);
     const chatReady = Boolean(d.oauth.chatApiReady);
-    $('chatApiStatusBox').textContent = chatReady ? 'BOT BADGE READY' : 'NOT READY';
+    $('chatApiStatusLabel').textContent = loggedIn ? 'Twitch Chat API Status' : 'Chat Connection';
+    $('chatApiStatusBox').textContent = loggedIn
+      ? (chatReady ? 'BOT BADGE READY' : 'NOT READY')
+      : (chatReady ? 'CONNECTED AS CHATBOT' : 'NOT CONNECTED');
     $('chatApiStatusBox').className = `value ${chatReady ? 'good' : 'warn'}`;
-    $('chatApiDetail').textContent = chatReady
-      ? 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
-      : (!botReady || !broadcasterReady ? 'Complete both OAuth grants in OAuth Management' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.');
+    $('chatApiDetail').textContent = loggedIn
+      ? (chatReady
+        ? 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
+        : (!botReady || !broadcasterReady ? 'Complete both OAuth grants in OAuth Management' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.'))
+      : '';
 
     if (loggedIn) {
       $('pauseBtn').disabled = !d.qwert.live || d.bot.recapPaused || d.bot.recapInProgress;
@@ -99,7 +107,7 @@ async function status() {
       oauth.updateStatus(d);
     }
   } catch (_) {
-    $('bDetail').textContent = 'Status request failed';
+    if (loggedIn) $('bDetail').textContent = 'Status request failed';
   }
 }
 
@@ -123,7 +131,7 @@ async function loadReadOnlyCommands() {
     if (!d.success) throw new Error(d.error || 'Could not load public commands.');
     const commands = Array.isArray(d.commands) ? d.commands : [];
     if (!commands.length) {
-      list.innerHTML = '<div class="coming-soon custom-empty-state">No public custom commands are available right now.</div>';
+      list.innerHTML = '<div class="coming-soon custom-empty-state">No commands are available right now.</div>';
     } else {
       list.innerHTML = commands.map((command) => {
         const triggers = Array.isArray(command.triggers) ? command.triggers : [];
@@ -131,10 +139,10 @@ async function loadReadOnlyCommands() {
           const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
           return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
         }).join('');
-        return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="native-command-badge">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">100% chance · ${esc(command.cooldownSeconds || 0)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay</div></div></div>`;
+        return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong><span class="native-command-badge">Everyone</span></div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
       }).join('');
     }
-    msg.textContent = `${commands.length} public custom command${commands.length === 1 ? '' : 's'}.`;
+    msg.textContent = `${commands.length} command${commands.length === 1 ? '' : 's'} available.`;
   } catch (err) {
     list.innerHTML = '';
     msg.textContent = err?.message || 'Could not load public commands.';

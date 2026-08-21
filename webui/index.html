@@ -26,8 +26,8 @@
   <div class="grid">
     <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
     <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
-    <div class="box"><div class="label">MongoDB Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
-    <div class="box"><div class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
+    <div class="box"><div id="dbStatusLabel" class="label">MongoDB Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
+    <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
   </div>
 
   <div id="protected">
@@ -877,7 +877,7 @@
       <button id="readonlyNativeCommandsTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
     </div>
     <div id="readonlyCustomCommandsView" class="subsection-view open">
-      <div class="detail readonly-command-help">Public commands available to Everyone with a 100% trigger probability.</div>
+      <div class="detail readonly-command-help">Chat commands available to everyone.</div>
       <div id="readonlyCustomCommandList" class="custom-command-list"></div>
       <div id="readonlyCustomCommandsMsg" class="detail"></div>
     </div>

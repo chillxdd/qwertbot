@@ -15,10 +15,7 @@ function registerCustomCommandRoutes(app, { requireModSession, getDatabaseConnec
           id: command.id,
           name: command.name,
           triggers: Array.isArray(command.triggers) ? command.triggers : [],
-          userLevel: 'everyone',
-          probability: 100,
-          cooldownSeconds: Number(command.cooldownSeconds || 0),
-          responseDelaySeconds: Number(command.responseDelaySeconds || 0)
+          cooldownSeconds: Number(command.cooldownSeconds || 0)
         }));
       return res.json({ success: true, commands: publicCommands });
     } catch (err) {
