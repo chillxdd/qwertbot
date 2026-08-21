@@ -31,7 +31,9 @@ export function initAutomationSection({ $, postJson }) {
     try {
       const d = await postJson('/automation/settings/save', { minimumSpacingSeconds });
       if (!d.success) throw new Error(d.error || 'Could not save automation settings.');
-      $('automationSpacingSeconds').value = String(Number(d.settings?.minimumSpacingSeconds ?? minimumSpacingSeconds));
+      const savedSpacingSeconds = Number(d.settings?.minimumSpacingSeconds ?? minimumSpacingSeconds);
+      $('automationSpacingSeconds').value = String(savedSpacingSeconds);
+      window.dispatchEvent(new CustomEvent('qwertbot:automation-spacing-changed', { detail: { minimumSpacingSeconds: savedSpacingSeconds } }));
       setMessage('Automation spacing saved.');
     } catch (err) {
       setMessage(err.message || 'Could not save automation settings.', true);

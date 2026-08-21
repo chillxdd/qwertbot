@@ -13,7 +13,7 @@ const eventSubReactionSchema = new mongoose.Schema({
   eventType: { type: String, required: true, index: true },
   enabled: { type: Boolean, default: true },
   minimumValue: { type: Number, default: 0, min: 0 },
-  holdSeconds: { type: Number, default: 60, min: 0, max: 3600 },
+  holdSeconds: { type: Number, default: null, min: 0, max: 3600 },
   actions: { type: [actionSchema], default: [] }
 }, { timestamps: true });
 

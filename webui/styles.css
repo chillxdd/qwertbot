@@ -544,3 +544,5 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
   text-align:left;
 }
 .mod-login .login-message:empty{display:none}
+
+#automationReactionTimingDetail{margin-top:10px}

@@ -110,8 +110,9 @@
 
       <div id="automationSpacingCard" class="custom-global-cooldown-card automation-spacing-card" hidden>
         <div class="custom-global-cooldown-copy">
-          <strong>Automation Spacing</strong>
-          <div class="detail">Minimum gap between automated outputs from hourly recaps, scheduled timers, and EventSub reactions. EventSub action delays and reaction holds still apply. Chat commands are not affected.</div>
+          <strong id="automationSpacingTitle">Automation Spacing</strong>
+          <div id="automationSpacingDetail" class="detail">Minimum gap between automated outputs from hourly recaps, scheduled timers, and EventSub reactions. EventSub action delays and reaction holds still apply. Chat commands are not affected.</div>
+          <div id="automationReactionTimingDetail" class="detail" hidden>Additionally, recaps and timers stay paused for the entire reaction sequence automatically. Action delays control timing inside the sequence. After the final action, global Automation Spacing still applies; an optional Post-Reaction Hold can extend the quiet period even longer.</div>
         </div>
         <div class="custom-global-cooldown-control">
           <label class="prompt-label" for="automationSpacingSeconds">Seconds</label>
@@ -502,10 +503,6 @@
         </div>
         <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
 
-        <div class="event-reaction-info-card">
-          <strong>Reaction Timing</strong>
-          <div class="detail">Recaps and timers stay paused for the entire reaction sequence automatically. Action delays control timing inside the sequence. After the final action, global Automation Spacing still applies; an optional Post-Reaction Hold can extend the quiet period even longer.</div>
-        </div>
 
         <div id="eventReactionsMsg" class="detail"></div>
         <div id="eventReactionList" class="custom-command-list"></div>
@@ -547,10 +544,9 @@
               <input id="eventReactionMinimum" type="number" min="0" step="1" value="0">
             </label>
             <label>Post-Reaction Hold (seconds)
-              <input id="eventReactionHold" type="number" min="0" max="3600" step="1" value="60">
+              <input id="eventReactionHold" type="number" min="0" max="3600" step="1" placeholder="Use global Automation Spacing">
             </label>
           </div>
-          <div id="eventReactionHoldHelp" class="detail">Recaps and timers stay paused throughout the reaction sequence automatically. Set this to 0 to use global Automation Spacing only, or use a value equal to or greater than Automation Spacing to extend the quiet period after the final action.</div>
 
           <div class="custom-editor-block">
             <div class="custom-trigger-heading">

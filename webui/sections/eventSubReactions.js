@@ -20,20 +20,19 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
   function updateHoldUi() {
     const holdEl = $('eventReactionHold');
     holdEl.max = String(limits.maxHoldSeconds);
-    const spacing = Math.max(0, Number(automationSpacingSeconds) || 0);
-    $('eventReactionHoldHelp').textContent = spacing > 0
-      ? `Recaps and timers stay paused throughout the reaction sequence automatically. Automation Spacing is currently ${spacing} seconds. Enter 0 to use global spacing only, or ${spacing} seconds or more to extend the quiet period after the final action.`
-      : 'Recaps and timers stay paused throughout the reaction sequence automatically. Set this to 0 to use global Automation Spacing only, or use a larger value to extend the quiet period after the final action.';
+    holdEl.placeholder = 'Use global Automation Spacing';
   }
 
   function validateHold() {
-    const hold = Number($('eventReactionHold').value || 0);
+    const raw = $('eventReactionHold').value.trim();
+    if (!raw) return '';
+    const hold = Number(raw);
     const spacing = Math.max(0, Number(automationSpacingSeconds) || 0);
     if (!Number.isFinite(hold) || hold < 0 || hold > limits.maxHoldSeconds) {
-      return `Post-Reaction Hold must be between 0 and ${limits.maxHoldSeconds} seconds.`;
+      return `Post-Reaction Hold must be blank or between 0 and ${limits.maxHoldSeconds} seconds.`;
     }
-    if (hold > 0 && hold < spacing) {
-      return `Automation Spacing is currently ${spacing} seconds. Enter 0 to use global spacing only, or ${spacing} seconds or more for an additional post-reaction hold.`;
+    if (hold < spacing) {
+      return `Automation Spacing is currently ${spacing} seconds. Leave Post-Reaction Hold blank to use global spacing, or enter ${spacing} seconds or more.`;
     }
     return '';
   }
@@ -121,7 +120,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     $('eventReactionEnabled').checked = reaction?.enabled !== false;
     $('eventReactionType').value = reaction?.eventType || (eventTypes.some((item)=>item.type==='channel.raid') ? 'channel.raid' : eventTypes[0]?.type || '');
     $('eventReactionMinimum').value = reaction?.minimumValue ?? 0;
-    $('eventReactionHold').value = reaction?.holdSeconds ?? 0;
+    $('eventReactionHold').value = Number(reaction?.holdSeconds) > 0 ? String(reaction.holdSeconds) : '';
     updateHoldUi();
     actionsEl.replaceChildren();
     const actionValues = reaction?.actions?.length ? reaction.actions : [{ type:'chat_message', value:'Thanks for the raid, $(raider)!', delaySeconds:0, enabled:true }];
@@ -168,10 +167,11 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     $('eventReactionList').innerHTML = visible.length ? visible.map((r) => {
       const enabledActions = (r.actions||[]).filter((a)=>a.enabled!==false).length;
       const threshold = r.minimumValue > 0 && typeMeta(r.eventType).threshold ? ` · min ${r.minimumValue} ${typeMeta(r.eventType).threshold.toLowerCase()}` : '';
+      const holdLabel = Number(r.holdSeconds) > 0 ? `${Number(r.holdSeconds)}s post-hold` : 'global post-hold';
       return `<div class="custom-command-card event-reaction-card" data-id="${esc(r.id)}">
         <div class="custom-command-card-main">
           <div class="custom-command-title"><strong>${esc(r.name)}</strong><span class="custom-command-state ${r.enabled?'enabled':'disabled'}">${r.enabled?'Enabled':'Disabled'}</span></div>
-          <div class="detail">${esc(typeMeta(r.eventType).label)}${esc(threshold)} · ${enabledActions} action${enabledActions===1?'':'s'} · hold ${Number(r.holdSeconds||0)}s after sequence</div>
+          <div class="detail">${esc(typeMeta(r.eventType).label)}${esc(threshold)} · ${enabledActions} action${enabledActions===1?'':'s'} · ${esc(holdLabel)}</div>
           <div class="detail">Updated ${esc(formatDate(r.updatedAt) || '—')}</div>
         </div>
         <div class="custom-command-card-actions">
@@ -217,6 +217,14 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     setMsg('');
   }
 
+  window.addEventListener('qwertbot:automation-spacing-changed', (event) => {
+    automationSpacingSeconds = Math.max(0, Number(event.detail?.minimumSpacingSeconds) || 0);
+    updateHoldUi();
+    if (editor.open) {
+      const error = validateHold();
+      setEditorMsg(error, Boolean(error));
+    }
+  });
   $('eventReactionType').addEventListener('change', updateThresholdUi);
   $('eventReactionHold').addEventListener('input', () => {
     const raw = $('eventReactionHold').value.trim();
@@ -256,7 +264,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
       enabled: $('eventReactionEnabled').checked,
       eventType: $('eventReactionType').value,
       minimumValue: Number($('eventReactionMinimum').value || 0),
-      holdSeconds: Number($('eventReactionHold').value || 0),
+      holdSeconds: $('eventReactionHold').value.trim() === '' ? null : Number($('eventReactionHold').value),
       actions: readActions()
     };
     const d = await postJson('/eventsub-reactions/save', payload);
