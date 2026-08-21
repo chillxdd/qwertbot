@@ -175,3 +175,6 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .custom-counter-body input{font-size:16px;margin:6px 0 6px;}
 .custom-counter-actions{padding-top:12px;border-top:1px solid #2a2a30;}
 #customCounterMsg.bad{margin-top:8px;color:#ff4f4f;}
+
+/* Keep compact command settings on one row on desktop. */
+@media(min-width:901px){.custom-command-form-grid{grid-template-columns:minmax(190px,1.35fr) minmax(145px,.9fr) minmax(190px,1fr) minmax(145px,.9fr);gap:10px}}
