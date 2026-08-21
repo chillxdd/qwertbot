@@ -8,6 +8,7 @@ const MAX_TRIGGERS = 25;
 const MAX_RESPONSES = 25;
 const MAX_RESPONSE_LENGTH = 500;
 const MAX_COOLDOWN_SECONDS = 86400;
+const MAX_RESPONSE_DELAY_SECONDS = 30;
 const DEFAULT_COMMAND_COOLDOWN_SECONDS = 5;
 const DEFAULT_GLOBAL_COOLDOWN_SECONDS = 5;
 const RESERVED_COMMANDS = new Set(['!recap', '!startrecap', '!stoprecap']);
@@ -155,6 +156,11 @@ function validateAndNormalizeInput(input = {}) {
     throw new Error(`Cooldown response can contain at most ${MAX_RESPONSE_LENGTH} characters.`);
   }
 
+  const responseDelaySeconds = Number(input.responseDelaySeconds ?? 0);
+  if (!Number.isFinite(responseDelaySeconds) || responseDelaySeconds < 0 || responseDelaySeconds > MAX_RESPONSE_DELAY_SECONDS) {
+    throw new Error(`Response delay must be between 0 and ${MAX_RESPONSE_DELAY_SECONDS} seconds.`);
+  }
+
   const primary = triggers[0];
   return {
     name,
@@ -171,6 +177,7 @@ function validateAndNormalizeInput(input = {}) {
     probability,
     cooldownSeconds: Math.round(cooldownSeconds * 1000) / 1000,
     cooldownResponse,
+    responseDelaySeconds: Math.round(responseDelaySeconds * 1000) / 1000,
     enabled: input.enabled !== false
   };
 }
@@ -194,6 +201,7 @@ function commandToClient(command) {
     probability: Number(command.probability ?? 100),
     cooldownSeconds: Number(command.cooldownSeconds ?? 0),
     cooldownResponse: String(command.cooldownResponse || ''),
+    responseDelaySeconds: Number(command.responseDelaySeconds ?? 0),
     enabled: command.enabled !== false,
     counter: Number(command.counter || 0),
     createdAt: command.createdAt || null,
@@ -707,6 +715,20 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       };
     }
 
+    const responseDelayMs = Math.max(0, Number(command.responseDelaySeconds || 0) * 1000);
+    if (responseDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, responseDelayMs));
+
+      // Another invocation of this command may have completed while this one was
+      // waiting. Re-check the per-command cooldown so delayed responses cannot
+      // slip through concurrently when the global cooldown is disabled.
+      const delayedNow = Date.now();
+      const delayedPrevious = lastTriggeredAt.get(commandId) || 0;
+      if (cooldownMs > 0 && delayedNow - delayedPrevious < cooldownMs) {
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
+      }
+    }
+
     if (!acquireGlobalResponseSlot()) {
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
     }
@@ -798,6 +820,7 @@ module.exports = {
   MAX_RESPONSES,
   MAX_RESPONSE_LENGTH,
   MAX_COOLDOWN_SECONDS,
+  MAX_RESPONSE_DELAY_SECONDS,
   DEFAULT_COMMAND_COOLDOWN_SECONDS,
   DEFAULT_GLOBAL_COOLDOWN_SECONDS,
   RESERVED_COMMANDS,

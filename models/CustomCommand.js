@@ -110,6 +110,12 @@ const customCommandSchema = new mongoose.Schema({
     default: '',
     maxlength: 500
   },
+  responseDelaySeconds: {
+    type: Number,
+    min: 0,
+    max: 30,
+    default: 0
+  },
   enabled: {
     type: Boolean,
     default: true

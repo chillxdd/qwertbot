@@ -225,6 +225,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customUserLevel').value = command?.userLevel || 'everyone';
     $('customProbability').value = command?.probability ?? 100;
     $('customCooldown').value = command?.cooldownSeconds ?? defaultCommandCooldownSeconds;
+    $('customResponseDelay').value = command?.responseDelaySeconds ?? 0;
     $('customCooldownResponse').value = command?.cooldownResponse || '';
     $('customUseCooldownResponse').checked = Boolean(command?.cooldownResponse);
     $('customCooldownResponseWrap').hidden = !$('customUseCooldownResponse').checked;
@@ -368,7 +369,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
               ${statusBadge(command)}
             </div>
             <div class="custom-trigger-chip-list">${triggerChips}</div>
-            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · Counter: ${esc(command.counter)}</div>
+            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · Counter: ${esc(command.counter)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary custom-edit-btn" type="button">Edit</button>
@@ -481,6 +482,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       userLevel: $('customUserLevel').value,
       probability: Number($('customProbability').value),
       cooldownSeconds: Number($('customCooldown').value),
+      responseDelaySeconds: Number($('customResponseDelay').value),
       cooldownResponse: $('customUseCooldownResponse').checked ? $('customCooldownResponse').value.trim() : '',
       enabled: $('customEnabled').checked,
       responseMode: responseMode(),

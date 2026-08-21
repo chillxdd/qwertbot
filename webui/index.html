@@ -172,8 +172,12 @@
               <label class="prompt-label" for="customCooldown">Per-Command Cooldown (seconds)</label>
               <input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="5">
             </div>
+            <div>
+              <label class="prompt-label" for="customResponseDelay">Response Delay (seconds)</label>
+              <input id="customResponseDelay" type="number" min="0" max="30" step="0.001" value="0">
+            </div>
           </div>
-          <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. New commands default to a 5-second per-command cooldown. The separate global cooldown above spaces all custom-command bot messages. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
+          <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. New commands default to a 5-second per-command cooldown and a 0-second response delay. Response Delay waits after a valid trigger before sending the normal response; cooldowns begin only after the response is actually sent. The separate global cooldown above spaces all custom-command bot messages. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
           <label class="inline-check custom-option-toggle"><input id="customUseCooldownResponse" type="checkbox"> Send a response when this command is on cooldown</label>
           <div id="customCooldownResponseWrap" class="custom-optional-panel" hidden>
             <label class="prompt-label" for="customCooldownResponse">Cooldown Response</label>
