@@ -236,6 +236,8 @@ function replaceAllToken(text, token, value) {
   return text.split(token).join(String(value ?? ''));
 }
 
+const MAX_RANDOM_DECIMAL_PLACES = 5;
+
 function randomIntegerInclusive(min, max) {
   const low = Math.ceil(Number(min));
   const high = Math.floor(Number(max));
@@ -243,6 +245,19 @@ function randomIntegerInclusive(min, max) {
   const span = high - low + 1;
   if (!Number.isSafeInteger(span) || span <= 0) return null;
   return Math.floor(Math.random() * span) + low;
+}
+
+function randomNumberInclusive(min, max, decimalPlaces = 0) {
+  const rawDecimals = Number(decimalPlaces);
+  if (!Number.isInteger(rawDecimals) || rawDecimals < 0) return null;
+  const decimals = Math.min(rawDecimals, MAX_RANDOM_DECIMAL_PLACES);
+  const scale = 10 ** decimals;
+  const low = Math.ceil(Number(min) * scale);
+  const high = Math.floor(Number(max) * scale);
+  if (!Number.isSafeInteger(low) || !Number.isSafeInteger(high) || low > high) return null;
+  const scaled = randomIntegerInclusive(low, high);
+  if (scaled === null) return null;
+  return (scaled / scale).toFixed(decimals);
 }
 
 function renderResponse(template, context) {
@@ -254,9 +269,13 @@ function renderResponse(template, context) {
   const followDate = String(context.followDate || '');
 
   let output = String(template || '');
-  output = output.replace(/\$\(random\s+(-?\d+)\s+(-?\d+)\)/gi, (match, min, max) => {
-    const value = randomIntegerInclusive(min, max);
-    return value === null ? match : String(value);
+  output = output.replace(/\$\(random\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)(?:\s+(\d+))?\)/gi, (match, min, max, decimals) => {
+    if (decimals === undefined) {
+      const value = randomIntegerInclusive(min, max);
+      return value === null ? match : String(value);
+    }
+    const value = randomNumberInclusive(min, max, decimals);
+    return value === null ? match : value;
   });
 
   const randomUsers = Array.isArray(context.randomUsers) ? [...context.randomUsers] : [];
@@ -835,6 +854,8 @@ module.exports = {
   normalizeResponseCondition,
   renderResponse,
   randomIntegerInclusive,
+  randomNumberInclusive,
+  MAX_RANDOM_DECIMAL_PLACES,
   getViewerUserLevel,
   meetsUserLevel,
   chooseResponseTemplate,

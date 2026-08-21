@@ -492,3 +492,55 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 
 @media(max-width:800px){.recap-status-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:520px){.dashboard-header{align-items:flex-start}.recap-status-grid{grid-template-columns:1fr}.recap-control-actions{align-items:stretch}.recap-control-actions button{flex:1 1 140px}}
+
+
+/* Compact centered login modal */
+.mod-login{
+  width:min(340px,calc(100vw - 48px));
+  padding:28px 24px 24px;
+  text-align:center;
+}
+.mod-login h3{
+  margin:0 0 22px;
+  color:var(--nb-text);
+  font-size:20px;
+  font-weight:650;
+  text-transform:none;
+  letter-spacing:-.01em;
+}
+.mod-login .login-close{
+  position:absolute;
+  top:10px;
+  right:11px;
+  width:26px;
+  height:26px;
+  min-height:0;
+  margin:0;
+  padding:0;
+  display:grid;
+  place-items:center;
+  border:0;
+  border-radius:6px;
+  background:transparent;
+  color:var(--nb-muted);
+  font-size:19px;
+  font-weight:500;
+  line-height:1;
+}
+.mod-login .login-close:hover{background:var(--nb-surface-3);color:var(--nb-text)}
+.mod-login .login-close:active{transform:none}
+.mod-login input{
+  margin:0 0 12px;
+  text-align:left;
+}
+.mod-login #loginBtn{
+  width:100%;
+  margin:0;
+  border-radius:999px;
+}
+.mod-login .login-message{
+  min-height:0;
+  margin-top:8px;
+  text-align:left;
+}
+.mod-login .login-message:empty{display:none}
