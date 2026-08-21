@@ -2,6 +2,7 @@
 <html>
 <head>
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b0e13">
   <title>GeneralQwert's Twitch Bot</title>
   <link rel="stylesheet" href="/webui/styles.css">
 </head>
@@ -444,10 +445,7 @@
 
       <div id="eventReactionsView" class="subsection-view">
         <div class="custom-command-header">
-          <div>
-            <h3>EventSub Reactions</h3>
-            <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
-          </div>
+          <h3>EventSub Reactions</h3>
           <div class="custom-command-list-controls">
             <label class="list-search-wrap" for="eventReactionSearch">
               <span class="sr-only">Search EventSub reactions</span>
@@ -465,6 +463,7 @@
             <button id="refreshEventReactionsBtn" class="secondary" type="button">Refresh</button>
           </div>
         </div>
+        <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
 
         <div class="event-reaction-info-card">
           <strong>Sequence Hold</strong>
@@ -519,12 +518,15 @@
           <div class="custom-editor-block">
             <div class="custom-trigger-heading">
               <strong>Actions</strong>
-              <button id="addEventReactionActionBtn" class="secondary" type="button">Add Action</button>
+              <div class="custom-response-heading-actions">
+                <button id="showEventReactionVariablesBtn" class="secondary" type="button">Variables</button>
+                <button id="addEventReactionActionBtn" class="secondary" type="button">Add Action</button>
+              </div>
             </div>
             <div id="eventReactionActionHelp" class="detail"></div>
             <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Value</span><span>Order</span></div>
             <div id="eventReactionActions" class="event-reaction-actions"></div>
-            <div class="detail event-reaction-vars"><strong>Event variables:</strong> <code>$(user)</code>, <code>$(username)</code>, <code>$(raider)</code>, <code>$(viewers)</code>, <code>$(bits)</code>, <code>$(gifts)</code>, <code>$(level)</code>, <code>$(months)</code>, <code>$(event)</code>. Twitch Shoutout uses the EventSub actor automatically.</div>
+            <div class="detail">Variables can be used in Chat Message and Run Custom Command values. Twitch Shoutout uses the EventSub actor automatically.</div>
             <div class="detail">Run Custom Command uses the saved command response/variables, but EventSub sequencing controls timing: normal command probability, cooldowns, and response delay are bypassed for this system-triggered run. Twitch Shoutout requires the bot account to be a moderator and authorized with <code>moderator:manage:shoutouts</code>.</div>
           </div>
 
@@ -532,6 +534,25 @@
             <button id="saveEventReactionBtn" type="button">Save Reaction</button>
             <button id="cancelEventReactionBtn" class="secondary" type="button">Cancel</button>
             <div id="eventReactionEditorMsg" class="detail"></div>
+          </div>
+        </dialog>
+
+        <dialog id="eventReactionVariablesDialog" class="custom-variables-dialog">
+          <div class="custom-dialog-header">
+            <h3>Available EventSub Variables</h3>
+            <button id="closeEventReactionVariablesBtn" class="secondary" type="button" aria-label="Close EventSub variables">Close</button>
+          </div>
+          <div class="custom-variable-help-body">
+            <div class="custom-variable-row"><code>$(user)</code><div class="detail">Display name of the EventSub actor. Example: <code>Thanks, $(user)!</code></div></div>
+            <div class="custom-variable-row"><code>$(username)</code><div class="detail">Login name of the EventSub actor.</div></div>
+            <div class="custom-variable-row"><code>$(raider)</code><div class="detail">Event actor display name, intended for Raid reactions. Example: <code>Welcome in, $(raider)!</code></div></div>
+            <div class="custom-variable-row"><code>$(viewers)</code><div class="detail">Raid viewer count. Example: <code>Thanks for bringing $(viewers) viewers!</code></div></div>
+            <div class="custom-variable-row"><code>$(bits)</code><div class="detail">Number of Bits in a Bits / Cheer event.</div></div>
+            <div class="custom-variable-row"><code>$(gifts)</code><div class="detail">Number of gifted subscriptions in a Gift Subs event.</div></div>
+            <div class="custom-variable-row"><code>$(level)</code><div class="detail">Hype Train level when supplied by the event.</div></div>
+            <div class="custom-variable-row"><code>$(months)</code><div class="detail">Cumulative subscription months in a Resub Message event.</div></div>
+            <div class="custom-variable-row"><code>$(event)</code><div class="detail">Friendly name of the EventSub event that fired, such as <code>Raid</code> or <code>Bits / Cheer</code>.</div></div>
+            <div class="custom-variable-note detail">Variables are available in Chat Message and Run Custom Command values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div>
           </div>
         </dialog>
       </div>

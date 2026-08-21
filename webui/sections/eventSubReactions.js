@@ -6,6 +6,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
   let page = 1;
   let loaded = false;
   const editor = $('eventReactionEditor');
+  const variablesDialog = $('eventReactionVariablesDialog');
   const actionsEl = $('eventReactionActions');
   const PAGE_SIZE_STORAGE_KEY = 'qwertbot.eventSubReactions.pageSize';
   const SORT_STORAGE_KEY = 'qwertbot.eventSubReactions.sort';
@@ -194,10 +195,14 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
 
   $('eventReactionType').addEventListener('change', updateThresholdUi);
   $('addEventReactionActionBtn').onclick = () => addAction({ type:'chat_message', value:'', delaySeconds:0, enabled:true });
+  $('showEventReactionVariablesBtn').onclick = () => { if (typeof variablesDialog.showModal === 'function') variablesDialog.showModal(); else variablesDialog.setAttribute('open', ''); };
+  $('closeEventReactionVariablesBtn').onclick = () => { if (typeof variablesDialog.close === 'function') variablesDialog.close(); else variablesDialog.removeAttribute('open'); };
+  variablesDialog.addEventListener('click', (event) => { if (event.target === variablesDialog && typeof variablesDialog.close === 'function') variablesDialog.close(); });
   $('addEventReactionBtn').onclick = () => openEditor();
   $('closeEventReactionEditorBtn').onclick = closeEditor;
   $('cancelEventReactionBtn').onclick = closeEditor;
-  editor.addEventListener('click', (e)=>{ if (e.target===editor) closeEditor(); });
+  editor.addEventListener('click', (e)=>{ if (e.target===editor && !variablesDialog.open) closeEditor(); });
+  editor.addEventListener('cancel', (event)=>{ event.preventDefault(); if (!variablesDialog.open) closeEditor(); });
   $('refreshEventReactionsBtn').onclick = load;
   $('eventReactionSearch').addEventListener('input', ()=>{ page=1; render(); });
   try {
@@ -230,7 +235,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
 
   return {
     onVisibilityChange(visible) {
-      if (!visible) { if (editor.open) closeEditor(); return; }
+      if (!visible) { if (variablesDialog.open && typeof variablesDialog.close === 'function') variablesDialog.close(); if (editor.open) closeEditor(); return; }
       if (!loaded) void load();
     },
     load
