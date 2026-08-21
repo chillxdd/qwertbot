@@ -199,7 +199,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   async function saveBotPersonality() {
     const cooldownSeconds = Number($('botPersonalityCooldown').value);
     if (!Number.isFinite(cooldownSeconds) || cooldownSeconds < 5) {
-      $('botPersonalityMsg').textContent = 'Tagged-question cooldown must be at least 5 seconds.';
+      $('botPersonalityMsg').textContent = 'Cooldown must be at least 5 seconds.';
       $('botPersonalityCooldown').focus();
       return;
     }

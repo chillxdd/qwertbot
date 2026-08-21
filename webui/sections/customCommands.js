@@ -444,7 +444,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       return;
     }
     if (name.length > maxCommandNameLength) {
-      setEditorMessage(`Command name cannot exceed ${maxCommandNameLength} characters.`, true);
+      setEditorMessage(`Name cannot exceed ${maxCommandNameLength} characters.`, true);
       return;
     }
 

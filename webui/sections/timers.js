@@ -227,10 +227,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     const globalStartDelaySeconds = Number($('timerGlobalStartDelay').value);
     const minimumSpacingSeconds = Number($('timerGlobalSpacing').value);
     if (!Number.isInteger(globalStartDelaySeconds) || globalStartDelaySeconds < 0 || globalStartDelaySeconds > maxStartDelaySeconds) {
-      return setSettingsMessage(`Global stream-start delay must be a whole number between 0 and ${maxStartDelaySeconds} seconds.`, true);
+      return setSettingsMessage(`Start Delay must be a whole number between 0 and ${maxStartDelaySeconds} seconds.`, true);
     }
     if (!Number.isInteger(minimumSpacingSeconds) || minimumSpacingSeconds < 0 || minimumSpacingSeconds > maxGlobalSpacingSeconds) {
-      return setSettingsMessage(`Minimum timer spacing must be a whole number between 0 and ${maxGlobalSpacingSeconds} seconds.`, true);
+      return setSettingsMessage(`Spacing must be a whole number between 0 and ${maxGlobalSpacingSeconds} seconds.`, true);
     }
     $('saveTimerSettingsBtn').disabled = true;
     try {
@@ -349,8 +349,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     setResponseMessage('');
 
     const name = $('timerName').value.trim();
-    if (!name) return setEditorMessage('Timer Name is required.', true);
-    if (name.length > maxTimerNameLength) return setEditorMessage(`Timer Name can contain at most ${maxTimerNameLength} characters.`, true);
+    if (!name) return setEditorMessage('Name is required.', true);
+    if (name.length > maxTimerNameLength) return setEditorMessage(`Name can contain at most ${maxTimerNameLength} characters.`, true);
 
     const intervalSeconds = Number($('timerInterval').value);
     const startDelayRaw = $('timerStartDelay').value.trim();
@@ -362,19 +362,19 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       return setScheduleMessage(`Interval must be between ${minIntervalSeconds} and ${maxIntervalSeconds} seconds.`, true);
     }
     if (startDelaySeconds !== null && (!Number.isInteger(startDelaySeconds) || startDelaySeconds < Number(settings.globalStartDelaySeconds || 0) || startDelaySeconds > maxStartDelaySeconds)) {
-      return setScheduleMessage(`Per-timer start delay must be blank or a whole number from the global delay (${settings.globalStartDelaySeconds || 0}s) through ${maxStartDelaySeconds}s.`, true);
+      return setScheduleMessage(`Start Delay must be blank or a whole number from the global delay (${settings.globalStartDelaySeconds || 0}s) through ${maxStartDelaySeconds}s.`, true);
     }
     if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > maxJitterSeconds) {
-      return setScheduleMessage(`Random timing variation must be a whole number between 0 and ${maxJitterSeconds} seconds.`, true);
+      return setScheduleMessage(`Jitter must be a whole number between 0 and ${maxJitterSeconds} seconds.`, true);
     }
 
     const minimumChatMessages = Number($('timerMinimumMessages').value);
     const minimumViewers = Number($('timerMinimumViewers').value);
     if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > maxMinimumChatMessages) {
-      return setActivityMessage(`Minimum chat messages must be a whole number between 0 and ${maxMinimumChatMessages}.`, true);
+      return setActivityMessage(`Min Messages must be a whole number between 0 and ${maxMinimumChatMessages}.`, true);
     }
     if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > maxMinimumViewers) {
-      return setActivityMessage(`Minimum viewers must be a whole number between 0 and ${maxMinimumViewers}.`, true);
+      return setActivityMessage(`Min Viewers must be a whole number between 0 and ${maxMinimumViewers}.`, true);
     }
 
     const rows = collectResponses();

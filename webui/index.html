@@ -93,7 +93,7 @@
 
       <div class="custom-global-cooldown-card">
         <div class="custom-global-cooldown-copy">
-          <strong>Global Command Cooldown</strong>
+          <strong>Global Cooldown</strong>
           <div class="detail">Minimum spacing between any two SqwertArmyBot custom-command messages. Commands attempted during this window are silently ignored.</div>
         </div>
         <div class="custom-global-cooldown-control">
@@ -130,13 +130,13 @@
         <div class="custom-editor-header">
           <h3 id="customCommandEditorTitle">Add Custom Command</h3>
           <div class="custom-editor-header-actions">
-            <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Command Enabled</label>
+            <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
             <button id="closeCustomCommandEditorBtn" class="secondary" type="button">Close</button>
           </div>
         </div>
 
         <div class="custom-editor-block">
-          <label class="prompt-label" for="customCommandName">Command Name</label>
+          <label class="prompt-label" for="customCommandName">Name</label>
           <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
           <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
         </div>
@@ -165,22 +165,22 @@
               </select>
             </div>
             <div>
-              <label class="prompt-label" for="customProbability">Trigger Probability (%)</label>
+              <label class="prompt-label" for="customProbability">Probability (%)</label>
               <input id="customProbability" type="number" min="0" max="100" step="0.01" value="100">
             </div>
             <div>
-              <label class="prompt-label" for="customCooldown">Per-Command Cooldown (seconds)</label>
+              <label class="prompt-label" for="customCooldown">Cooldown (seconds)</label>
               <input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="5">
             </div>
             <div>
-              <label class="prompt-label" for="customResponseDelay">Response Delay (seconds)</label>
+              <label class="prompt-label" for="customResponseDelay">Delay (seconds)</label>
               <input id="customResponseDelay" type="number" min="0" max="30" step="0.001" value="0">
             </div>
           </div>
           <div class="detail">User Level works like Nightbot <code>-ul</code>: higher Twitch roles can use commands requiring a lower level. New commands default to a 5-second per-command cooldown and a 0-second response delay. Response Delay waits after a valid trigger before sending the normal response; cooldowns begin only after the response is actually sent. The separate global cooldown above spaces all custom-command bot messages. Nightbot Regulars are not supported yet because SqwertArmyBot does not currently maintain a Regulars list.</div>
           <label class="inline-check custom-option-toggle"><input id="customUseCooldownResponse" type="checkbox"> Send a response when this command is on cooldown</label>
           <div id="customCooldownResponseWrap" class="custom-optional-panel" hidden>
-            <label class="prompt-label" for="customCooldownResponse">Cooldown Response</label>
+            <label class="prompt-label" for="customCooldownResponse">Cooldown Message</label>
             <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
             <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent only when a valid user triggers this command while it is still cooling down. Variables work here too. The counter does not increment.</span></div>
           </div>
@@ -188,14 +188,14 @@
 
         <div class="custom-editor-block">
           <div class="custom-response-heading">
-            <strong>Possible Responses</strong>
+            <strong>Responses</strong>
             <div class="custom-response-heading-actions">
-              <button id="showCustomVariablesBtn" class="secondary" type="button">Response Variables</button>
+              <button id="showCustomVariablesBtn" class="secondary" type="button">Variables</button>
               <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
             </div>
           </div>
           <div class="custom-response-mode-wrap">
-            <label class="prompt-label" for="customResponseMode">Response Type</label>
+            <label class="prompt-label" for="customResponseMode">Mode</label>
             <select id="customResponseMode">
               <option value="equal">Equal Odds</option>
               <option value="weighted">Specified Weight</option>
@@ -222,13 +222,13 @@
         <dialog id="customCounterDialog" class="custom-variables-dialog custom-counter-dialog">
           <div class="custom-dialog-header">
             <div>
-              <h3>Set Command Counter</h3>
+              <h3>Set Counter</h3>
               <div id="customCounterCommandName" class="detail"></div>
             </div>
             <button id="closeCustomCounterBtn" class="secondary" type="button" aria-label="Close set counter dialog">Close</button>
           </div>
           <div class="custom-counter-body">
-            <label class="prompt-label" for="customCounterValue">Counter value</label>
+            <label class="prompt-label" for="customCounterValue">Value</label>
             <input id="customCounterValue" type="number" min="0" step="1" inputmode="numeric" autocomplete="off">
             <div class="detail">Enter any whole number greater than or equal to 0.</div>
             <div id="customCounterMsg" class="detail custom-field-message" aria-live="polite"></div>
@@ -241,7 +241,7 @@
 
         <dialog id="customVariablesDialog" class="custom-variables-dialog">
           <div class="custom-dialog-header">
-            <h3>Available Response Variables</h3>
+            <h3>Available Variables</h3>
             <button id="closeCustomVariablesBtn" class="secondary" type="button" aria-label="Close response variables">Close</button>
           </div>
           <div class="custom-variable-help-body">
@@ -282,17 +282,17 @@
 
         <div class="custom-editor-block timer-global-settings">
           <div class="custom-response-heading">
-            <strong>Global Timer Settings</strong>
+            <strong>Timer Settings</strong>
             <button id="saveTimerSettingsBtn" class="secondary" type="button">Save Settings</button>
           </div>
           <div class="timer-settings-grid">
             <div>
-              <label class="prompt-label" for="timerGlobalStartDelay">Global stream-start delay (seconds)</label>
+              <label class="prompt-label" for="timerGlobalStartDelay">Start Delay (seconds)</label>
               <input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0">
               <div class="detail">No timer may fire before this much stream uptime has passed.</div>
             </div>
             <div>
-              <label class="prompt-label" for="timerGlobalSpacing">Minimum time between timer messages (seconds)</label>
+              <label class="prompt-label" for="timerGlobalSpacing">Spacing (seconds)</label>
               <input id="timerGlobalSpacing" type="number" min="0" max="3600" step="1" value="60">
               <div class="detail">If several timers are due, they wait and drain naturally instead of posting together.</div>
             </div>
@@ -324,13 +324,13 @@
           <div class="custom-editor-header">
             <h3 id="timerEditorTitle">Add Timer</h3>
             <div class="custom-editor-header-actions">
-              <label class="inline-check custom-enabled-check"><input id="timerEnabled" type="checkbox" checked> Timer Enabled</label>
+              <label class="inline-check custom-enabled-check"><input id="timerEnabled" type="checkbox" checked> Enabled</label>
               <button id="closeTimerEditorBtn" class="secondary" type="button">Close</button>
             </div>
           </div>
 
           <div class="custom-editor-block">
-            <label class="prompt-label" for="timerName">Timer Name</label>
+            <label class="prompt-label" for="timerName">Name</label>
             <input id="timerName" type="text" maxlength="80" placeholder="Example: Discord Reminder">
             <div class="detail">A friendly dashboard name. It is never included in the Twitch message.</div>
           </div>
@@ -343,11 +343,11 @@
                 <input id="timerInterval" type="number" min="30" max="86400" step="1" value="900">
               </div>
               <div>
-                <label class="prompt-label" for="timerStartDelay">Per-timer stream-start delay (optional)</label>
+                <label class="prompt-label" for="timerStartDelay">Start Delay (optional)</label>
                 <input id="timerStartDelay" type="number" min="0" max="86400" step="1" placeholder="Use global delay">
               </div>
               <div>
-                <label class="prompt-label" for="timerJitter">Random timing variation ± seconds</label>
+                <label class="prompt-label" for="timerJitter">Jitter (± seconds)</label>
                 <input id="timerJitter" type="number" min="0" max="86400" step="1" value="0">
               </div>
               <div>
@@ -364,15 +364,15 @@
           </div>
 
           <div class="custom-editor-block">
-            <strong class="custom-block-title">Activity Requirements</strong>
+            <strong class="custom-block-title">Activity</strong>
             <div class="timer-settings-grid">
               <div>
-                <label class="prompt-label" for="timerMinimumMessages">Minimum chat messages</label>
+                <label class="prompt-label" for="timerMinimumMessages">Min Messages</label>
                 <input id="timerMinimumMessages" type="number" min="0" max="100000" step="1" value="0">
                 <div class="detail">0 disables this requirement. Count resets after a successful scheduled/manual firing.</div>
               </div>
               <div>
-                <label class="prompt-label" for="timerMinimumViewers">Minimum viewers</label>
+                <label class="prompt-label" for="timerMinimumViewers">Min Viewers</label>
                 <input id="timerMinimumViewers" type="number" min="0" max="1000000" step="1" value="0">
                 <div class="detail">0 disables this requirement. Uses Twitch's current stream viewer count.</div>
               </div>
@@ -382,14 +382,14 @@
 
           <div class="custom-editor-block">
             <div class="custom-response-heading">
-              <strong>Possible Responses</strong>
+              <strong>Responses</strong>
               <div class="custom-response-heading-actions">
-                <button id="showTimerVariablesBtn" class="secondary" type="button">Response Variables</button>
+                <button id="showTimerVariablesBtn" class="secondary" type="button">Variables</button>
                 <button id="addTimerResponseBtn" class="secondary" type="button">Add Response</button>
               </div>
             </div>
             <div class="custom-response-mode-wrap">
-              <label class="prompt-label" for="timerResponseMode">Response Type</label>
+              <label class="prompt-label" for="timerResponseMode">Mode</label>
               <select id="timerResponseMode">
                 <option value="equal">Equal Odds</option>
                 <option value="weighted">Specified Weight</option>
@@ -504,13 +504,13 @@
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsOnly" type="checkbox" checked> Mods/Broadcaster only</label>
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsBypassCooldown" type="checkbox" checked> Mods/Broadcaster bypass cooldown</label>
           <div class="personality-cooldown-field">
-            <label class="prompt-label" for="botPersonalityCooldown">Tagged-question cooldown (seconds)</label>
+            <label class="prompt-label" for="botPersonalityCooldown">Cooldown (seconds)</label>
             <input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5">
             <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
           </div>
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityUseCooldownResponse" type="checkbox"> Send a custom response while tagged questions are on cooldown</label>
           <div id="botPersonalityCooldownResponsePanel" class="personality-cooldown-response-panel" hidden>
-            <label class="prompt-label" for="botPersonalityCooldownResponse">Cooldown Response</label>
+            <label class="prompt-label" for="botPersonalityCooldownResponse">Cooldown Message</label>
             <textarea id="botPersonalityCooldownResponse" maxlength="500" placeholder="$user, try asking again in $time."></textarea>
             <div class="detail">Optional. <code>$user</code> inserts the viewer name and <code>$time</code> inserts the remaining cooldown, such as <code>14m 51s</code>. Also accepts <code>$(user)</code>, <code>$(time)</code>, and <code>$remaining</code>.</div>
           </div>
@@ -518,26 +518,26 @@
         <div class="ai-retry-panel">
           <div class="ai-retry-heading">
             <div>
-              <div class="label">AI Retry &amp; Failure Handling</div>
+              <div class="label">AI Retries</div>
               <div class="detail">Retries temporary Gemini errors without starting the normal tagged-question cooldown. If every attempt fails, the bot sends the fallback response below and applies a short 20-second anti-hammer guard to that viewer.</div>
             </div>
             <label class="inline-check personality-audience-toggle"><input id="botPersonalityRetryEnabled" type="checkbox" checked> Retry temporary AI failures</label>
           </div>
           <div class="ai-retry-grid">
             <div>
-              <label class="prompt-label" for="botPersonalityRetryCount">Retries after the first attempt</label>
+              <label class="prompt-label" for="botPersonalityRetryCount">Retries</label>
               <input id="botPersonalityRetryCount" type="number" min="0" max="2" step="1" value="2">
               <div class="detail">Default 2. Retry attempts are kept inside an approximately 15-second total retry window.</div>
             </div>
             <div class="ai-retry-failure-response">
-              <label class="prompt-label" for="botPersonalityFailureResponse">AI Failure Response</label>
+              <label class="prompt-label" for="botPersonalityFailureResponse">Failure Message</label>
               <textarea id="botPersonalityFailureResponse" maxlength="500">Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.</textarea>
               <div class="detail"><code>$user</code> inserts the viewer name. This fallback does not start the normal tagged-question cooldown.</div>
             </div>
           </div>
         </div>
         <div class="session-memory-panel">
-          <label class="inline-check personality-audience-toggle"><input id="sessionMemoryEnabled" type="checkbox" checked> Session Memory enabled for tagged questions</label>
+          <label class="inline-check personality-audience-toggle"><input id="sessionMemoryEnabled" type="checkbox" checked> Use Session Memory</label>
           <div class="detail">Temporary current-stream memory is built from each completed hourly recap window so tagged questions can answer about earlier moments without relying on the short public recap. It is automatically removed when the stream ends.</div>
           <div id="sessionMemoryStatus" class="detail session-memory-status">Session memory status not loaded yet.</div>
           <button id="sessionMemorySettingsToggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="sessionMemorySettingsBody">Show Advanced Session Memory Settings</button>
@@ -545,32 +545,32 @@
             <div class="advanced-warning">These settings control how much temporary stream memory is supplied to tagged AI questions. Detailed hourly blocks are still retained for the active stream; these limits primarily control what is injected into each question.</div>
             <div class="session-memory-settings-grid">
               <div>
-                <label class="prompt-label" for="sessionMemoryRecentHours">Recent detailed memory window (hours)</label>
+                <label class="prompt-label" for="sessionMemoryRecentHours">Recent Detail (hours)</label>
                 <input id="sessionMemoryRecentHours" type="number" min="1" max="8" step="1" value="2">
                 <div class="detail">Completed memory blocks inside this recent window are included in full.</div>
               </div>
               <div>
-                <label class="prompt-label" for="sessionMemoryRelevantOlder">Relevant older detailed blocks</label>
+                <label class="prompt-label" for="sessionMemoryRelevantOlder">Older Blocks</label>
                 <input id="sessionMemoryRelevantOlder" type="number" min="0" max="6" step="1" value="2">
                 <div class="detail">Older blocks are keyword-matched against the viewer's question. Compact summaries for the full stream remain available.</div>
               </div>
               <div>
-                <label class="prompt-label" for="sessionMemoryRecentChat">Recent meaningful chat messages</label>
+                <label class="prompt-label" for="sessionMemoryRecentChat">Recent Chat</label>
                 <input id="sessionMemoryRecentChat" type="number" min="0" max="100" step="1" value="30">
                 <div class="detail">Covers the current hour before the next memory block is generated. Set to 0 to disable.</div>
               </div>
               <div>
-                <label class="prompt-label" for="sessionMemoryMaxContext">Maximum session-memory context (characters)</label>
+                <label class="prompt-label" for="sessionMemoryMaxContext">Max Context (characters)</label>
                 <input id="sessionMemoryMaxContext" type="number" min="4000" max="40000" step="500" value="18000">
                 <div class="detail">Hard cap on temporary memory injected into one tagged question.</div>
               </div>
             </div>
-            <label class="prompt-label" for="sessionMemoryPromptInstructions">Session Memory Summarization Instructions</label>
+            <label class="prompt-label" for="sessionMemoryPromptInstructions">Memory Instructions</label>
             <textarea id="sessionMemoryPromptInstructions" maxlength="6000" placeholder="Optional: preserve specific kinds of current-stream details that matter to this community. Leave blank to use the built-in accuracy-focused memory prompt."></textarea>
             <div id="sessionMemoryPromptCount" class="detail">0/6000 characters</div>
             <div class="memory-actions">
-              <button id="refreshSessionMemoryBtn" class="secondary" type="button">Refresh Memory Status</button>
-              <button id="clearSessionMemoryBtn" class="secondary" type="button">Clear Current Session Memory</button>
+              <button id="refreshSessionMemoryBtn" class="secondary" type="button">Refresh Status</button>
+              <button id="clearSessionMemoryBtn" class="secondary" type="button">Clear Session Memory</button>
             </div>
             <div id="sessionMemoryActionMsg" class="detail"></div>
           </div>
@@ -609,12 +609,12 @@
 
           <div class="viewer-profile-settings-card">
             <div>
-              <strong>Profile Learning &amp; Tagged Questions</strong>
+              <strong>Profile Settings</strong>
               <div class="detail">Automatic learning extracts only durable, non-sensitive viewer observations from the same hourly chat intelligence pass used for Session Memory. Tagged-question use is independent and can stay disabled while profiles learn.</div>
             </div>
             <div class="viewer-profile-settings-toggles">
-              <label class="inline-check"><input id="viewerProfileLearningEnabled" type="checkbox" checked> Automatic Viewer Profile Learning</label>
-              <label class="inline-check"><input id="viewerProfilesTaggedEnabled" type="checkbox"> Use Viewer Profiles in Tagged Questions</label>
+              <label class="inline-check"><input id="viewerProfileLearningEnabled" type="checkbox" checked> Automatic Learning</label>
+              <label class="inline-check"><input id="viewerProfilesTaggedEnabled" type="checkbox"> Use in Tagged Questions</label>
               <button id="saveViewerProfileSettingsBtn" class="secondary" type="button">Save Settings</button>
             </div>
           </div>
