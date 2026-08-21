@@ -155,20 +155,26 @@ $('resumeBtn').onclick = () => recapAction('start');
 
 
 function selectCommandsView(view = 'commands', { load = true } = {}) {
-  const commandsSelected = view !== 'timers';
+  const commandsSelected = view === 'commands';
+  const timersSelected = view === 'timers';
+  const nativeSelected = view === 'native';
   $('customCommandsView').classList.toggle('open', commandsSelected);
-  $('timersView').classList.toggle('open', !commandsSelected);
+  $('timersView').classList.toggle('open', timersSelected);
+  $('nativeCommandsView').classList.toggle('open', nativeSelected);
   $('customCommandsViewTab').classList.toggle('active', commandsSelected);
-  $('timersViewTab').classList.toggle('active', !commandsSelected);
+  $('timersViewTab').classList.toggle('active', timersSelected);
+  $('nativeCommandsViewTab').classList.toggle('active', nativeSelected);
   $('customCommandsViewTab').setAttribute('aria-selected', commandsSelected ? 'true' : 'false');
-  $('timersViewTab').setAttribute('aria-selected', commandsSelected ? 'false' : 'true');
+  $('timersViewTab').setAttribute('aria-selected', timersSelected ? 'true' : 'false');
+  $('nativeCommandsViewTab').setAttribute('aria-selected', nativeSelected ? 'true' : 'false');
   if (load) {
     customCommands.onVisibilityChange(commandsSelected);
-    timers.onVisibilityChange(!commandsSelected);
+    timers.onVisibilityChange(timersSelected);
   }
 }
 $('customCommandsViewTab').onclick = () => selectCommandsView('commands');
 $('timersViewTab').onclick = () => selectCommandsView('timers');
+$('nativeCommandsViewTab').onclick = () => selectCommandsView('native');
 selectCommandsView('commands', { load: false });
 
 const sectionMap = {

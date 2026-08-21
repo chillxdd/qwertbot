@@ -62,9 +62,10 @@
 
     <div id="customCommandsPanel" class="section-panel">
       <h3>Commands and Timers</h3>
-      <div class="subsection-nav" role="tablist" aria-label="Commands and timers views">
+      <div class="subsection-nav commands-subsection-nav" role="tablist" aria-label="Commands and timers views">
         <button id="customCommandsViewTab" class="secondary active" type="button" aria-selected="true">Custom Commands</button>
         <button id="timersViewTab" class="secondary" type="button" aria-selected="false">Timers</button>
+        <button id="nativeCommandsViewTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
       </div>
 
       <div id="customCommandsView" class="subsection-view open">
@@ -423,6 +424,43 @@
           </div>
           <div id="timerPreviewBody" class="custom-variable-help-body"></div>
         </dialog>
+      </div>
+
+      <div id="nativeCommandsView" class="subsection-view">
+        <div class="custom-command-header">
+          <div>
+            <h3>Native Commands</h3>
+            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they perform bot actions instead of sending a configurable response.</div>
+          </div>
+        </div>
+
+        <div class="native-command-list">
+          <div class="native-command-card">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!recap</code><span class="native-command-badge">Viewer</span></div>
+              <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
+            </div>
+            <span class="native-command-status enabled">Built-in</span>
+          </div>
+
+          <div class="native-command-card">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!startrecap</code><span class="native-command-badge">Mod / Qwert</span></div>
+              <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
+            </div>
+            <span class="native-command-status enabled">Built-in</span>
+          </div>
+
+          <div class="native-command-card">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!stoprecap</code><span class="native-command-badge">Mod / Qwert</span></div>
+              <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
+            </div>
+            <span class="native-command-status enabled">Built-in</span>
+          </div>
+        </div>
+
+        <div class="native-command-note detail">Native Commands is intentionally for stateful or privileged bot actions. Ordinary text responses, counters, random replies, and inline triggers should stay in Custom Commands.</div>
       </div>
     </div>
 
