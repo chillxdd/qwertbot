@@ -7,8 +7,12 @@
   <link rel="stylesheet" href="/webui/styles.css">
 </head>
 <body>
-<div id="login" class="mod-login">
-  <h3>MOD Login</h3>
+<div id="login" class="mod-login" role="dialog" aria-modal="true" aria-labelledby="modLoginTitle">
+  <div class="mod-login-header">
+    <h3 id="modLoginTitle">MOD Login</h3>
+    <button id="closeLoginBtn" class="secondary login-close" type="button" aria-label="Close login">Close</button>
+  </div>
+  <div class="detail login-helper">Log in for dashboard controls and configuration. Close this window to use the public read-only status view.</div>
   <input id="password" type="password" placeholder="MOD password" autocomplete="current-password">
   <button id="loginBtn" type="button">Login</button>
   <div id="loginMsg" class="detail"></div>
@@ -17,10 +21,14 @@
 <div class="card">
   <div class="dashboard-header">
     <h2>GeneralQwert's Twitch Bot</h2>
+    <div class="dashboard-session-actions">
+      <span id="readonlyBadge" class="readonly-badge" hidden>Read-only</span>
+      <button id="openLoginBtn" class="secondary" type="button" hidden>Login</button>
+    </div>
   </div>
   <div class="grid">
     <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
-    <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div><div id="recapControls" class="recap-controls"><button id="pauseBtn" class="danger">Pause Recaps</button><button id="resumeBtn">Resume Recaps</button><div id="recapMsg" class="detail"></div></div></div>
+    <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
     <div class="box"><div class="label">MongoDB Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
     <div class="box"><div class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
   </div>
@@ -35,15 +43,48 @@
     </div>
 
     <div id="messagingPanel" class="section-panel">
-      <h3>AI Recap Testing</h3>
-      <button id="storedBtn" class="secondary">Test Current Recap Window</button>
-      <div id="testResult"></div>
-      <h3>Send Message to Twitch</h3>
-      <input id="chatMessage" placeholder="Message">
-      <button id="sendBtn">Send to Chat</button>
-      <div id="chatMsg" class="detail"></div>
+      <div class="section-intro">
+        <h3>AI Recap</h3>
+        <div class="detail">Manage hourly recap operation, testing, manual chat messaging, and prompt tuning.</div>
+      </div>
 
-      <div class="prompt-settings">
+      <div id="recapControls" class="recap-control-card">
+        <div class="recap-card-heading">
+          <div>
+            <div class="recap-card-title">Recap Control</div>
+            <div class="detail">Operational controls for the current stream's hourly recap session.</div>
+          </div>
+        </div>
+        <div class="recap-status-grid">
+          <div class="recap-status-item"><div class="label">Current State</div><div id="recapState" class="value warn">Checking...</div></div>
+          <div class="recap-status-item"><div class="label">Logging</div><div id="recapLogging" class="value warn">Checking...</div></div>
+          <div class="recap-status-item"><div class="label">Next Recap</div><div id="recapNext" class="value">—</div></div>
+          <div class="recap-status-item"><div class="label">Current Window</div><div id="recapWindow" class="value">—</div></div>
+        </div>
+        <div class="recap-control-actions">
+          <button id="resumeBtn" type="button">Resume Recaps</button>
+          <button id="pauseBtn" class="danger" type="button">Pause Recaps</button>
+          <div id="recapMsg" class="detail"></div>
+        </div>
+      </div>
+
+      <div class="recap-utility-card">
+        <div class="recap-card-title">Recap Testing</div>
+        <div class="detail">Generate a test using the current recap window without waiting for the next automatic send.</div>
+        <button id="storedBtn" class="secondary" type="button">Test Current Recap Window</button>
+        <div class="utility-output-label">Result</div>
+        <div id="testResult"></div>
+      </div>
+
+      <div class="recap-utility-card">
+        <div class="recap-card-title">Send Message to Twitch</div>
+        <div class="detail">Send a manual message directly through the bot's Twitch chat connection.</div>
+        <input id="chatMessage" placeholder="Message">
+        <button id="sendBtn" type="button">Send to Chat</button>
+        <div id="chatMsg" class="detail"></div>
+      </div>
+
+      <div class="prompt-settings recap-advanced-card">
         <button id="promptSettingsToggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="promptSettingsBody">Show Advanced Prompt Settings</button>
         <div id="promptSettingsBody" class="advanced-settings-body">
           <h3>AI Recap Prompt Settings</h3>

@@ -450,3 +450,44 @@ select{padding-right:30px}
 @media(max-width:1050px){.grid{grid-template-columns:1fr 1fr}.card{max-width:900px}}
 @media(max-width:800px){body{padding:18px}.card{margin:12px auto 30px;padding:20px}.section-nav{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:600px){body{padding:10px}.card{padding:16px;border-radius:10px}.grid{grid-template-columns:1fr}.dashboard-header h2{font-size:20px}.list-search-input{min-width:0}.subsection-nav{padding:4px}}
+
+/* AI Recap control surface + public read-only login flow */
+.dashboard-session-actions{display:flex;align-items:center;gap:8px}
+.readonly-badge{display:inline-flex;align-items:center;min-height:28px;padding:0 9px;border:1px solid var(--nb-border-strong);border-radius:999px;background:var(--nb-surface-2);color:var(--nb-muted);font-size:10px;font-weight:750;letter-spacing:.075em;text-transform:uppercase}
+.mod-login{width:min(360px,calc(100vw - 56px));padding:18px}
+.mod-login-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.mod-login-header h3{margin:0;color:var(--nb-text)}
+.mod-login .login-close{min-height:30px;padding:5px 9px;margin:0}
+.mod-login .login-helper{margin-bottom:10px}
+.mod-login input{margin-top:8px}
+
+.section-intro{margin-bottom:14px}
+.section-intro h3{margin-bottom:5px}
+.recap-control-card,.recap-utility-card{
+  background:var(--nb-surface-2);
+  border:1px solid var(--nb-border);
+  border-radius:var(--nb-radius);
+  padding:16px;
+  margin-top:12px;
+}
+.recap-card-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+.recap-card-title{color:var(--nb-text);font-size:14px;font-weight:700;letter-spacing:-.01em;margin-bottom:3px}
+.recap-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.recap-status-item{background:var(--nb-input);border:1px solid var(--nb-border);border-radius:6px;padding:11px 12px;min-height:48px}
+.recap-status-item .value{font-size:13px;margin:5px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recap-control-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}
+.recap-control-actions button{margin:0}
+.recap-control-actions #recapMsg{flex:1 1 260px}
+.recap-utility-card>.detail{margin-bottom:10px}
+.recap-utility-card #chatMessage{margin-top:2px}
+.utility-output-label{margin-top:12px;color:var(--nb-muted);font-size:10px;font-weight:700;letter-spacing:.075em;text-transform:uppercase}
+#testResult{min-height:24px;margin-top:6px}
+.recap-advanced-card{margin-top:12px;padding-top:0;border-top:0}
+.recap-advanced-card>.advanced-toggle{width:100%;text-align:left;margin:0}
+
+/* Keep the fixed chat chevron vertically anchored while pressed. The global
+   button active transform must not replace its translateY(-50%) centering. */
+button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
+
+@media(max-width:800px){.recap-status-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.dashboard-header{align-items:flex-start}.recap-status-grid{grid-template-columns:1fr}.recap-control-actions{align-items:stretch}.recap-control-actions button{flex:1 1 140px}}

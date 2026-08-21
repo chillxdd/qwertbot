@@ -69,6 +69,14 @@ async function status() {
     else if (d.bot.nextRecapAt) botDetail += `<br>Next recap in ${countdown(d.bot.nextRecapAt - Date.now())}`;
     $('bDetail').innerHTML = botDetail;
 
+    const recapState = !d.qwert.live ? 'OFFLINE' : d.bot.recapPaused ? 'PAUSED' : d.bot.recapInProgress ? 'GENERATING' : 'RUNNING';
+    $('recapState').textContent = recapState;
+    $('recapState').className = `value ${!d.qwert.live ? 'warn' : d.bot.recapPaused ? 'warn' : 'good'}`;
+    $('recapLogging').textContent = d.bot.loggingMessages ? 'ACTIVE' : 'IDLE';
+    $('recapLogging').className = `value ${d.bot.loggingMessages ? 'good' : 'warn'}`;
+    $('recapNext').textContent = d.bot.nextRecapAt ? countdown(d.bot.nextRecapAt - Date.now()) : '—';
+    $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${d.bot.twitchEventsInWindow || 0} event`;
+
     $('dbStatus').textContent = d.database.connected ? 'CONNECTED' : 'OFFLINE';
     $('dbStatus').className = `value ${d.database.connected ? 'good' : 'bad'}`;
     $('dbDetail').textContent = d.database.connected ? 'Persistent storage ready' : 'Check MONGODB_URI / Atlas network access';
@@ -99,7 +107,8 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   loggedIn = true;
   $('login').style.display = 'none';
   $('protected').style.display = 'block';
-  $('recapControls').style.display = 'block';
+  $('openLoginBtn').hidden = true;
+  $('readonlyBadge').hidden = true;
   $('password').value = '';
   $('loginMsg').textContent = '';
   if (loadLore) await lore.loadMemory();
@@ -110,13 +119,27 @@ async function showAuthenticatedUi({ loadLore = true } = {}) {
   requestAnimationFrame(() => requestAnimationFrame(ensureTwitchChatLoaded));
 }
 
+function enterReadOnlyMode() {
+  loggedIn = false;
+  renderLogs.onVisibilityChange(false);
+  $('protected').style.display = 'none';
+  $('login').style.display = 'none';
+  $('openLoginBtn').hidden = false;
+  $('readonlyBadge').hidden = false;
+  $('password').value = '';
+  $('loginMsg').textContent = '';
+  void status();
+}
+
 function showLogin(message = '') {
   loggedIn = false;
   renderLogs.onVisibilityChange(false);
   $('protected').style.display = 'none';
-  $('recapControls').style.display = 'none';
+  $('openLoginBtn').hidden = true;
+  $('readonlyBadge').hidden = false;
   $('login').style.display = 'block';
   $('loginMsg').textContent = message;
+  void status();
   setTimeout(() => $('password').focus(), 0);
 }
 
@@ -145,6 +168,8 @@ async function restoreSession() {
 }
 
 $('loginBtn').onclick = doLogin;
+$('closeLoginBtn').onclick = enterReadOnlyMode;
+$('openLoginBtn').onclick = () => showLogin();
 $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
 window.addEventListener('dashboard-auth-expired', () => showLogin('MOD session expired. Please log in again.'));
 $('chatToggle').onclick = () => setChatOpen(!$('chatSidebar').classList.contains('open'));
