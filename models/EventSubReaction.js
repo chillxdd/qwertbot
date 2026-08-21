@@ -1,8 +1,9 @@
 const mongoose = require('mongoose');
 
 const actionSchema = new mongoose.Schema({
-  type: { type: String, enum: ['chat_message', 'custom_command', 'twitch_shoutout'], required: true },
+  type: { type: String, enum: ['chat_message', 'custom_command', 'twitch_announcement', 'twitch_shoutout'], required: true },
   value: { type: String, default: '' },
+  color: { type: String, enum: ['primary', 'blue', 'green', 'orange', 'purple'], default: 'primary' },
   delaySeconds: { type: Number, default: 0, min: 0, max: 300 },
   enabled: { type: Boolean, default: true }
 }, { _id: false });

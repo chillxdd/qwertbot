@@ -88,6 +88,16 @@ const customCommandSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  sendAs: {
+    type: String,
+    enum: ['chat', 'announcement'],
+    default: 'chat'
+  },
+  announcementColor: {
+    type: String,
+    enum: ['primary', 'blue', 'green', 'orange', 'purple'],
+    default: 'primary'
+  },
   userLevel: {
     type: String,
     enum: ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'],

@@ -52,6 +52,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
   function actionLabel(type) {
     if (type === 'chat_message') return 'Chat Message';
     if (type === 'custom_command') return 'Run Custom Command';
+    if (type === 'twitch_announcement') return 'Twitch Announcement';
     if (type === 'twitch_shoutout') return 'Twitch Shoutout';
     return type;
   }
@@ -65,6 +66,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
         <select class="event-action-type">
           <option value="chat_message">Chat Message</option>
           <option value="custom_command">Run Custom Command</option>
+          <option value="twitch_announcement">Twitch Announcement</option>
           <option value="twitch_shoutout">Twitch Shoutout</option>
         </select>
       </label>
@@ -73,6 +75,13 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
       </label>
       <label class="event-action-value-wrap">Value
         <input class="event-action-value" maxlength="500" value="${esc(action.value || '')}">
+        <select class="event-action-color" aria-label="Announcement color">
+          <option value="primary">Primary</option>
+          <option value="purple">Purple</option>
+          <option value="blue">Blue</option>
+          <option value="green">Green</option>
+          <option value="orange">Orange</option>
+        </select>
       </label>
       <div class="event-action-order-buttons">
         <button class="secondary event-action-up" type="button" title="Move up">↑</button>
@@ -82,11 +91,15 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     const typeEl = row.querySelector('.event-action-type');
     const valueWrap = row.querySelector('.event-action-value-wrap');
     const valueEl = row.querySelector('.event-action-value');
+    const colorEl = row.querySelector('.event-action-color');
     typeEl.value = action.type || 'chat_message';
+    colorEl.value = action.color || 'primary';
     const update = () => {
       const type = typeEl.value;
       valueWrap.hidden = type === 'twitch_shoutout';
+      colorEl.hidden = type !== 'twitch_announcement';
       if (type === 'chat_message') valueEl.placeholder = 'Example: Thanks for the raid, $(raider)!';
+      else if (type === 'twitch_announcement') valueEl.placeholder = 'Example: Welcome in, $(raider)!';
       else if (type === 'custom_command') valueEl.placeholder = 'Example: !so $(raider)';
     };
     typeEl.addEventListener('change', update);
@@ -108,6 +121,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     return [...actionsEl.querySelectorAll('.event-reaction-action-row')].map((row) => ({
       type: row.querySelector('.event-action-type').value,
       value: row.querySelector('.event-action-value').value.trim(),
+      color: row.querySelector('.event-action-color').value || 'primary',
       delaySeconds: Number(row.querySelector('.event-action-delay').value || 0),
       enabled: row.querySelector('.event-action-enabled-input').checked
     }));

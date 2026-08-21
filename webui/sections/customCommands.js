@@ -58,6 +58,14 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     return $('customResponseMode').value || 'equal';
   }
 
+  function updateSendAsUi() {
+    const sendAs = $('customSendAs').value || 'chat';
+    $('customAnnouncementColorWrap').hidden = sendAs !== 'announcement';
+    $('customSendAsHelp').textContent = sendAs === 'announcement'
+      ? 'Announcement sends the selected response using Twitch's highlighted announcement banner. The bot account must be a moderator and authorized for announcements.'
+      : 'Chat Message sends a normal bot message.';
+  }
+
   function updateResponseModeUi() {
     const mode = responseMode();
     const help = $('customResponseModeHelp');
@@ -230,6 +238,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customUseCooldownResponse').checked = Boolean(command?.cooldownResponse);
     $('customCooldownResponseWrap').hidden = !$('customUseCooldownResponse').checked;
     $('customResponseMode').value = command?.responseMode || 'equal';
+    $('customSendAs').value = command?.sendAs || 'chat';
+    $('customAnnouncementColor').value = command?.announcementColor || 'primary';
     updateCooldownResponseCount();
     $('customEnabled').checked = command?.enabled !== false;
 
@@ -249,6 +259,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
     updateAddTriggerState();
     updateResponseModeUi();
+    updateSendAsUi();
     clearEditorMessages();
     editorEl.classList.add('open');
     if (typeof editorEl.showModal === 'function' && !editorEl.open) editorEl.showModal();
@@ -369,7 +380,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
               ${statusBadge(command)}
             </div>
             <div class="custom-trigger-chip-list">${triggerChips}</div>
-            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · Counter: ${esc(command.counter)}</div>
+            <div class="detail">${triggers.length} ${triggerWord} · UL: ${esc(userLevel)} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary custom-edit-btn" type="button">Edit</button>
@@ -486,6 +497,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       cooldownResponse: $('customUseCooldownResponse').checked ? $('customCooldownResponse').value.trim() : '',
       enabled: $('customEnabled').checked,
       responseMode: responseMode(),
+      sendAs: $('customSendAs').value || 'chat',
+      announcementColor: $('customAnnouncementColor').value || 'primary',
       responseWeights,
       responseConditions,
       responses
@@ -662,6 +675,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   $('addCustomTriggerBtn').onclick = () => addTrigger();
   $('addCustomResponseBtn').onclick = () => addResponse('');
   $('customResponseMode').onchange = updateResponseModeUi;
+  $('customSendAs').onchange = updateSendAsUi;
   $('saveCustomCommandBtn').onclick = saveCommand;
   $('cancelCustomCommandBtn').onclick = closeEditor;
   $('closeCustomCommandEditorBtn').onclick = closeEditor;

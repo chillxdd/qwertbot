@@ -17,7 +17,8 @@ const EVENT_TYPES = [
   { type: 'stream.offline', label: 'Stream Offline', threshold: null }
 ];
 const EVENT_TYPE_SET = new Set(EVENT_TYPES.map((item) => item.type));
-const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_shoutout']);
+const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_announcement', 'twitch_shoutout']);
+const ANNOUNCEMENT_COLORS = new Set(['primary', 'blue', 'green', 'orange', 'purple']);
 const MAX_ACTIONS = 12;
 const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
 const MAX_ACTION_DELAY_SECONDS = 300;
@@ -68,6 +69,7 @@ function reactionToClient(item, automationSpacingSeconds = 0) {
     actions: Array.isArray(item.actions) ? item.actions.map((action) => ({
       type: action.type,
       value: String(action.value || ''),
+      color: ANNOUNCEMENT_COLORS.has(String(action.color || '').toLowerCase()) ? String(action.color).toLowerCase() : 'primary',
       delaySeconds: Number(action.delaySeconds || 0),
       enabled: action.enabled !== false
     })) : [],
@@ -104,10 +106,13 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
       throw new Error(`Action delay must be between 0 and ${MAX_ACTION_DELAY_SECONDS} seconds.`);
     }
     const value = cleanText(raw.value, 500);
-    if ((type === 'chat_message' || type === 'custom_command') && !value) {
-      throw new Error(type === 'chat_message' ? 'Chat Message needs text.' : 'Custom Command needs a command such as !so $(raider).');
+    if ((type === 'chat_message' || type === 'custom_command' || type === 'twitch_announcement') && !value) {
+      if (type === 'chat_message') throw new Error('Chat Message needs text.');
+      if (type === 'twitch_announcement') throw new Error('Twitch Announcement needs text.');
+      throw new Error('Custom Command needs a command such as !so $(raider).');
     }
-    return { type, value, delaySeconds, enabled: raw.enabled !== false };
+    const color = ANNOUNCEMENT_COLORS.has(String(raw.color || '').toLowerCase()) ? String(raw.color).toLowerCase() : 'primary';
+    return { type, value, color, delaySeconds, enabled: raw.enabled !== false };
   });
   return {
     name,
@@ -135,7 +140,7 @@ function renderEventTemplate(template, type, event = {}) {
   return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
-function createEventSubReactionManager({ channelName, sendMessage, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null }) {
+function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
 
@@ -220,6 +225,15 @@ function createEventSubReactionManager({ channelName, sendMessage, getBotAccessT
       const message = renderEventTemplate(action.value, type, event).trim();
       if (message) {
         await sendMessage(normalizedChannel, message);
+        if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
+      }
+      return;
+    }
+    if (action.type === 'twitch_announcement') {
+      const message = renderEventTemplate(action.value, type, event).trim();
+      if (message) {
+        if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
+        await sendAnnouncement(message, { color: action.color || 'primary' });
         if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
       }
       return;

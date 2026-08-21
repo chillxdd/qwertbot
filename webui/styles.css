@@ -563,3 +563,8 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 .native-command-main{flex:1 1 auto;min-width:0}
 .native-command-card>.custom-command-actions{flex:0 0 auto;flex-wrap:nowrap;align-items:center}
 @media(max-width:600px){.native-command-card>.custom-command-actions{flex-wrap:wrap}}
+
+.custom-response-delivery-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--nb-border,#2a313d)}
+.custom-response-delivery-row select{margin-top:5px}
+.event-action-color{margin-top:7px!important}
+@media(max-width:680px){.custom-response-delivery-row{grid-template-columns:1fr}}

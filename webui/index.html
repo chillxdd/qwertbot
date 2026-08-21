@@ -250,6 +250,26 @@
               <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
             </div>
           </div>
+          <div class="custom-response-delivery-row">
+            <div>
+              <label class="prompt-label" for="customSendAs">Send As</label>
+              <select id="customSendAs">
+                <option value="chat">Chat Message</option>
+                <option value="announcement">Announcement</option>
+              </select>
+            </div>
+            <div id="customAnnouncementColorWrap" hidden>
+              <label class="prompt-label" for="customAnnouncementColor">Announcement Color</label>
+              <select id="customAnnouncementColor">
+                <option value="primary">Primary</option>
+                <option value="purple">Purple</option>
+                <option value="blue">Blue</option>
+                <option value="green">Green</option>
+                <option value="orange">Orange</option>
+              </select>
+            </div>
+          </div>
+          <div id="customSendAsHelp" class="detail">Chat Message sends a normal bot message.</div>
           <div class="custom-response-mode-wrap">
             <label class="prompt-label" for="customResponseMode">Mode</label>
             <select id="customResponseMode">
@@ -309,6 +329,7 @@
             <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding SqwertArmyBot and known utility bots. Example: <code>$(randomuser) has been selected!</code></div><div class="detail">Requires bot OAuth scope <code>moderator:read:chatters</code>.</div></div>
             <div class="custom-variable-row"><code>$(followage)</code> <span>or</span> <code>$followage</code><div class="detail">How long <code>$(touser)</code> has followed Qwert, formatted compactly for chat (for example <code>2 years, 3 months</code>, <code>18 days</code>, or <code>42 seconds</code>). With no command argument, this checks the viewer who triggered the command. Example: <code>Following for $(followage).</code></div></div>
             <div class="custom-variable-row"><code>$(followdate)</code> <span>or</span> <code>$followdate</code><div class="detail">UTC calendar date when <code>$(touser)</code> followed Qwert. Example: <code>Following since $(followdate).</code></div><div class="detail">Both follow variables use the existing broadcaster OAuth scope <code>moderator:read:followers</code>; no new authorization is required.</div></div>
+            <div class="custom-variable-row"><code>$(game)</code> <span>or</span> <code>$game</code><div class="detail">Twitch category currently being played, or the last category played, by <code>$(touser)</code>. With no command argument, this checks the viewer who triggered the command. Example: <code>They were last playing $(game).</code></div><div class="detail">No additional OAuth scope is required.</div></div>
             <div class="custom-variable-note detail">No eval is needed. Multiple response entries each keep their own 500-character allowance.</div>
           </div>
         </dialog>
@@ -560,8 +581,8 @@
             <div id="eventReactionActionHelp" class="detail"></div>
             <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Value</span><span>Order</span></div>
             <div id="eventReactionActions" class="event-reaction-actions"></div>
-            <div class="detail">Variables can be used in Chat Message and Run Custom Command values. Twitch Shoutout uses the EventSub actor automatically.</div>
-            <div class="detail">Run Custom Command uses the saved command response/variables, but EventSub sequencing controls timing: normal command probability, cooldowns, and response delay are bypassed for this system-triggered run. Twitch Shoutout requires the bot account to be a moderator and authorized with <code>moderator:manage:shoutouts</code>.</div>
+            <div class="detail">Variables can be used in Chat Message, Twitch Announcement, and Run Custom Command values. Twitch Shoutout uses the EventSub actor automatically.</div>
+            <div class="detail">Run Custom Command uses the saved command response/variables and delivery type, but EventSub sequencing controls timing: normal command probability, cooldowns, and response delay are bypassed for this system-triggered run. Twitch Announcement requires bot moderator access and <code>moderator:manage:announcements</code>. Twitch Shoutout requires bot moderator access and <code>moderator:manage:shoutouts</code>.</div>
           </div>
 
           <div class="custom-editor-actions">
@@ -586,7 +607,7 @@
             <div class="custom-variable-row"><code>$(level)</code><div class="detail">Hype Train level when supplied by the event.</div></div>
             <div class="custom-variable-row"><code>$(months)</code><div class="detail">Cumulative subscription months in a Resub Message event.</div></div>
             <div class="custom-variable-row"><code>$(event)</code><div class="detail">Friendly name of the EventSub event that fired, such as <code>Raid</code> or <code>Bits / Cheer</code>.</div></div>
-            <div class="custom-variable-note detail">Variables are available in Chat Message and Run Custom Command values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div>
+            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, and Run Custom Command values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div>
           </div>
         </dialog>
       </div>

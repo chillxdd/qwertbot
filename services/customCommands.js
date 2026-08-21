@@ -1,6 +1,7 @@
 const CustomCommand = require('../models/CustomCommand');
 const CustomCommandSettings = require('../models/CustomCommandSettings');
 const { getFollowInfo: getTwitchFollowInfo, formatFollowAge, formatFollowDate } = require('./twitchFollowers');
+const { getGameInfo: getTwitchGameInfo } = require('./twitchChannels');
 
 const MAX_COMMAND_NAME_LENGTH = 80;
 const MAX_TRIGGER_LENGTH = 120;
@@ -15,6 +16,8 @@ const RESERVED_COMMANDS = new Set(['!recap', '!startrecap', '!stoprecap', '!opto
 const OWN_RESPONSE_TTL_MS = 15000;
 const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
 const RESPONSE_MODES = ['equal', 'weighted', 'ifelse'];
+const SEND_AS_MODES = ['chat', 'announcement'];
+const ANNOUNCEMENT_COLORS = ['primary', 'blue', 'green', 'orange', 'purple'];
 
 function normalizeTrigger(triggerType, value) {
   let trigger = String(value || '').trim().replace(/\s+/g, ' ');
@@ -137,6 +140,13 @@ function validateAndNormalizeInput(input = {}) {
     if (responseConditions.some((value) => value.length > 80)) throw new Error('If/Else match words cannot exceed 80 characters.');
   }
 
+  const sendAs = SEND_AS_MODES.includes(String(input.sendAs || '').toLowerCase())
+    ? String(input.sendAs).toLowerCase()
+    : 'chat';
+  const announcementColor = ANNOUNCEMENT_COLORS.includes(String(input.announcementColor || '').toLowerCase())
+    ? String(input.announcementColor).toLowerCase()
+    : 'primary';
+
   const userLevel = USER_LEVELS.includes(String(input.userLevel || '').toLowerCase())
     ? String(input.userLevel).toLowerCase()
     : 'everyone';
@@ -173,6 +183,8 @@ function validateAndNormalizeInput(input = {}) {
     responseMode,
     responseWeights,
     responseConditions,
+    sendAs,
+    announcementColor,
     userLevel,
     probability,
     cooldownSeconds: Math.round(cooldownSeconds * 1000) / 1000,
@@ -197,6 +209,8 @@ function commandToClient(command) {
     responseMode: RESPONSE_MODES.includes(command.responseMode) ? command.responseMode : 'equal',
     responseWeights: Array.isArray(command.responseWeights) ? command.responseWeights : [],
     responseConditions: Array.isArray(command.responseConditions) ? command.responseConditions : [],
+    sendAs: SEND_AS_MODES.includes(command.sendAs) ? command.sendAs : 'chat',
+    announcementColor: ANNOUNCEMENT_COLORS.includes(command.announcementColor) ? command.announcementColor : 'primary',
     userLevel: USER_LEVELS.includes(command.userLevel) ? command.userLevel : 'everyone',
     probability: Number(command.probability ?? 100),
     cooldownSeconds: Number(command.cooldownSeconds ?? 0),
@@ -267,6 +281,7 @@ function renderResponse(template, context) {
   const count = String(context.count ?? 0);
   const followAge = String(context.followAge || '');
   const followDate = String(context.followDate || '');
+  const game = String(context.game || '');
 
   let output = String(template || '');
   output = output.replace(/\$\(random\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)(?:\s+(\d+))?\)/gi, (match, min, max, decimals) => {
@@ -290,7 +305,8 @@ function renderResponse(template, context) {
     ['$(query)', query], ['$query', query],
     ['$(count)', count], ['$count', count],
     ['$(followage)', followAge], ['$followage', followAge],
-    ['$(followdate)', followDate], ['$followdate', followDate]
+    ['$(followdate)', followDate], ['$followdate', followDate],
+    ['$(game)', game], ['$game', game]
   ];
 
   for (const [token, value] of pairs) output = replaceAllToken(output, token, value);
@@ -300,6 +316,18 @@ function renderResponse(template, context) {
 
 function templateNeedsFollowInfo(template) {
   return /\$\(follow(?:age|date)\)|\$follow(?:age|date)\b/i.test(String(template || ''));
+}
+
+function templateNeedsGameInfo(template) {
+  return /\$\(game\)|\$game\b/i.test(String(template || ''));
+}
+
+async function resolveGameContext({ template, query, displayName, getGameInfo = getTwitchGameInfo }) {
+  if (!templateNeedsGameInfo(template)) return { game: '' };
+  const target = firstTarget(query, displayName);
+  const info = await getGameInfo({ viewerLogin: target });
+  if (!info?.foundUser) throw new Error(`Twitch user ${target} was not found.`);
+  return { game: String(info.gameName || 'no category') };
 }
 
 async function resolveFollowContext({ template, query, displayName, getFollowInfo = getTwitchFollowInfo }) {
@@ -371,7 +399,7 @@ function meetsUserLevel(tags = {}, required = 'everyone') {
   return hierarchy[actual] >= hierarchy[requiredLevel];
 }
 
-function createCustomCommandManager({ channelName, sendMessage, getRandomChatters = null, getFollowInfo = getTwitchFollowInfo }) {
+function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement = null, getRandomChatters = null, getFollowInfo = getTwitchFollowInfo, getGameInfo = getTwitchGameInfo }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   let globalCooldownSeconds = DEFAULT_GLOBAL_COOLDOWN_SECONDS;
@@ -625,6 +653,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       }
 
       let followContext = { followAge: '', followDate: '' };
+      let gameContext = { game: '' };
       try {
         followContext = await resolveFollowContext({
           template: cooldownTemplate,
@@ -632,9 +661,15 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
           displayName,
           getFollowInfo
         });
+        gameContext = await resolveGameContext({
+          template: cooldownTemplate,
+          query: match.query,
+          displayName,
+          getGameInfo
+        });
       } catch (err) {
-        console.error('[Custom Commands] Could not resolve follow variable for cooldown response:', err.message || err);
-        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'follow_lookup_error' };
+        console.error('[Custom Commands] Could not resolve Twitch variable for cooldown response:', err.message || err);
+        return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'twitch_lookup_error' };
       }
 
       const renderedCooldown = renderResponse(cooldownTemplate, {
@@ -642,7 +677,8 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
         query: match.query,
         count: Number(command.counter || 0),
         randomUsers,
-        ...followContext
+        ...followContext,
+        ...gameContext
       });
       if (!renderedCooldown) {
         return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'cooldown' };
@@ -716,6 +752,7 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     }
 
     let followContext = { followAge: '', followDate: '' };
+    let gameContext = { game: '' };
     try {
       followContext = await resolveFollowContext({
         template,
@@ -723,14 +760,20 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
         displayName,
         getFollowInfo
       });
+      gameContext = await resolveGameContext({
+        template,
+        query: match.query,
+        displayName,
+        getGameInfo
+      });
     } catch (err) {
-      console.error('[Custom Commands] Could not resolve follow variable:', err.message || err);
+      console.error('[Custom Commands] Could not resolve Twitch variable:', err.message || err);
       return {
         matched: true,
         triggerType: matchedTrigger.triggerType,
         trigger: matchedTrigger.trigger,
         responded: false,
-        reason: 'follow_lookup_error'
+        reason: 'twitch_lookup_error'
       };
     }
 
@@ -780,7 +823,8 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
       query: match.query,
       count: updated.counter,
       randomUsers,
-      ...followContext
+      ...followContext,
+      ...gameContext
     });
 
     if (!rendered) {
@@ -792,7 +836,13 @@ function createCustomCommandManager({ channelName, sendMessage, getRandomChatter
     let result;
     let sent = false;
     try {
-      result = await sendMessage(normalizedChannel, rendered);
+      const sendAs = SEND_AS_MODES.includes(updated.sendAs) ? updated.sendAs : 'chat';
+      if (sendAs === 'announcement') {
+        if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
+        result = await sendAnnouncement(rendered, { color: updated.announcementColor || 'primary' });
+      } else {
+        result = await sendMessage(normalizedChannel, rendered);
+      }
       sent = true;
     } catch (err) {
       await CustomCommand.updateOne(
@@ -849,6 +899,8 @@ module.exports = {
   RESERVED_COMMANDS,
   USER_LEVELS,
   RESPONSE_MODES,
+  SEND_AS_MODES,
+  ANNOUNCEMENT_COLORS,
   createCustomCommandManager,
   normalizeTrigger,
   normalizeResponseCondition,
@@ -861,5 +913,7 @@ module.exports = {
   chooseResponseTemplate,
   normalizeIfElseWord,
   templateNeedsFollowInfo,
-  resolveFollowContext
+  resolveFollowContext,
+  templateNeedsGameInfo,
+  resolveGameContext
 };

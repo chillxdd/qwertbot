@@ -17,6 +17,7 @@ const { createBotPersonalityManager } = require('./services/botPersonality');
 const { getRenderedNativeResponse } = require('./services/nativeCommandResponses');
 const { purgeExpiredOptedOutProfiles } = require('./services/viewerProfiles');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
+const { REQUIRED_ANNOUNCEMENT_SCOPE, sendChatAnnouncement } = require('./services/twitchAnnouncements');
 const {
   getAccessToken,
   getStoredAuth,
@@ -53,7 +54,7 @@ const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
-const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_CHATTERS_SCOPE];
+const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_ANNOUNCEMENT_SCOPE, REQUIRED_CHATTERS_SCOPE];
 const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
@@ -199,6 +200,7 @@ automationSpacingManager = createAutomationSpacingManager({ channelName });
 customCommandManager = createCustomCommandManager({
   channelName,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  sendAnnouncement: (message, options) => sendChatAnnouncement(message, options),
   getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
 });
 
@@ -215,6 +217,7 @@ chatTimerManager = createChatTimerManager({
 eventSubReactionManager = createEventSubReactionManager({
   channelName,
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  sendAnnouncement: (message, options) => sendChatAnnouncement(message, options),
   getBotAccessToken,
   getCustomCommandManager: () => customCommandManager,
   noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve(),
