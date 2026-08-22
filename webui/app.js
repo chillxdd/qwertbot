@@ -53,6 +53,17 @@ const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
 void messaging;
 
+
+function formatServiceUptime(ms) {
+  const totalMinutes = Math.max(0, Math.floor(Number(ms || 0) / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 async function status() {
   try {
     const d = await (await fetch('/status', { cache: 'no-store' })).json();
@@ -63,11 +74,12 @@ async function status() {
 
     $('bStatus').textContent = d.bot.online ? 'ONLINE' : 'OFFLINE';
     $('bStatus').className = `value ${d.bot.online ? 'good' : 'bad'}`;
-    let botDetail = d.bot.loggingMessages ? `Logging ${d.bot.messagesInWindow} message(s) + ${d.bot.twitchEventsInWindow || 0} Twitch event(s) for hourly recap` : 'Not logging recap messages';
-    if (d.bot.recapPaused) botDetail = `Recaps PAUSED - ${d.bot.messagesInWindow} message(s) preserved`;
-    if (d.bot.recapInProgress) botDetail += '<br>Recap generation in progress';
-    else if (d.bot.nextRecapAt) botDetail += `<br>Next recap in ${countdown(d.bot.nextRecapAt - Date.now())}`;
-    $('bDetail').innerHTML = loggedIn ? botDetail : '';
+    const monitoredUpSince = Number(d.bot.uptime?.upSince || 0);
+    const showMonitoredUptime = Number.isFinite(monitoredUpSince) && monitoredUpSince > 0 && monitoredUpSince <= Date.now();
+    $('botUptime').hidden = !showMonitoredUptime;
+    $('botUptime').textContent = showMonitoredUptime ? `Up for ${formatServiceUptime(Date.now() - monitoredUpSince)}` : '';
+    // Keep Bot Status identical in mod and read-only views. Recap details live in AI Recap.
+    $('bDetail').textContent = '';
 
     const recapState = !d.qwert.live ? 'OFFLINE' : d.bot.recapPaused ? 'PAUSED' : d.bot.recapInProgress ? 'GENERATING' : 'RUNNING';
     $('recapState').textContent = recapState;
@@ -107,7 +119,9 @@ async function status() {
       oauth.updateStatus(d);
     }
   } catch (_) {
-    if (loggedIn) $('bDetail').textContent = 'Status request failed';
+    $('botUptime').hidden = true;
+    $('botUptime').textContent = '';
+    $('bDetail').textContent = '';
   }
 }
 
