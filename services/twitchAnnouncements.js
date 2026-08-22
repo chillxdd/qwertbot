@@ -1,8 +1,11 @@
-const { getStoredAuth, getValidAccessToken } = require('./twitchAuth');
+const { getStoredAuth } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
+const { getAppAccessToken } = require('./twitchChat');
 
 const TWITCH_ANNOUNCEMENTS_URL = 'https://api.twitch.tv/helix/chat/announcements';
 const REQUIRED_ANNOUNCEMENT_SCOPE = 'moderator:manage:announcements';
+const REQUIRED_BOT_ANNOUNCEMENT_SCOPES = [REQUIRED_ANNOUNCEMENT_SCOPE, 'user:bot'];
+const REQUIRED_BROADCASTER_ANNOUNCEMENT_SCOPES = ['channel:bot'];
 const ANNOUNCEMENT_COLORS = new Set(['primary', 'blue', 'green', 'orange', 'purple']);
 
 function getClientId() {
@@ -21,22 +24,32 @@ async function sendChatAnnouncement(message, { color = 'primary' } = {}) {
   if (!text) throw new Error('Cannot send an empty Twitch announcement.');
   if (text.length > 500) throw new Error(`Twitch announcement is ${text.length} characters; maximum is 500.`);
 
-  const [botAuth, broadcasterAuth, token] = await Promise.all([
+  const [botAuth, broadcasterAuth] = await Promise.all([
     getStoredAuth(),
-    getStoredBroadcasterAuth(),
-    getValidAccessToken({ allowRefresh: true })
+    getStoredBroadcasterAuth()
   ]);
 
   const moderatorId = String(botAuth?.twitchUserId || '').trim();
   const broadcasterId = String(broadcasterAuth?.twitchUserId || '').trim();
-  if (!moderatorId || !broadcasterId || !token) {
+  if (!moderatorId || !broadcasterId) {
     throw new Error('Bot/broadcaster OAuth is not ready for Twitch announcements.');
   }
-  if (!Array.isArray(botAuth?.scopes) || !botAuth.scopes.includes(REQUIRED_ANNOUNCEMENT_SCOPE)) {
-    const error = new Error(`Twitch announcements require bot OAuth scope ${REQUIRED_ANNOUNCEMENT_SCOPE}.`);
+
+  const botScopes = Array.isArray(botAuth?.scopes) ? botAuth.scopes : [];
+  const broadcasterScopes = Array.isArray(broadcasterAuth?.scopes) ? broadcasterAuth.scopes : [];
+  const botMissingScopes = REQUIRED_BOT_ANNOUNCEMENT_SCOPES.filter((scope) => !botScopes.includes(scope));
+  const broadcasterMissingScopes = REQUIRED_BROADCASTER_ANNOUNCEMENT_SCOPES.filter((scope) => !broadcasterScopes.includes(scope));
+
+  if (botMissingScopes.length || broadcasterMissingScopes.length) {
+    const parts = [];
+    if (botMissingScopes.length) parts.push(`bot missing ${botMissingScopes.join(', ')}`);
+    if (broadcasterMissingScopes.length) parts.push(`broadcaster missing ${broadcasterMissingScopes.join(', ')}`);
+    const error = new Error(`Twitch announcement App Access Token mode is not ready: ${parts.join('; ')}.`);
     error.reauthorizationRequired = true;
     throw error;
   }
+
+  const token = await getAppAccessToken();
 
   const url = new URL(TWITCH_ANNOUNCEMENTS_URL);
   url.searchParams.set('broadcaster_id', broadcasterId);
@@ -51,7 +64,8 @@ async function sendChatAnnouncement(message, { color = 'primary' } = {}) {
     },
     body: JSON.stringify({
       message: text,
-      color: normalizeAnnouncementColor(color)
+      color: normalizeAnnouncementColor(color),
+      for_source_only: true
     })
   });
 
@@ -61,11 +75,13 @@ async function sendChatAnnouncement(message, { color = 'primary' } = {}) {
     throw new Error(`Twitch announcement failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
   }
 
-  return { method: 'announcement_api', color: normalizeAnnouncementColor(color) };
+  return { method: 'announcement_app_api', color: normalizeAnnouncementColor(color) };
 }
 
 module.exports = {
   REQUIRED_ANNOUNCEMENT_SCOPE,
+  REQUIRED_BOT_ANNOUNCEMENT_SCOPES,
+  REQUIRED_BROADCASTER_ANNOUNCEMENT_SCOPES,
   normalizeAnnouncementColor,
   sendChatAnnouncement
 };
