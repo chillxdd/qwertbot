@@ -112,7 +112,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
 
   function updateAddActionState() {
     $('addEventReactionActionBtn').disabled = actionsEl.children.length >= limits.maxActions;
-    $('eventReactionActionHelp').textContent = `${actionsEl.children.length}/${limits.maxActions} actions. Delay is applied before each action. The first action can be 0 seconds.`;
+    $('eventReactionActionHelp').textContent = `${actionsEl.children.length}/${limits.maxActions} actions. Each delay runs before its action; the first can be 0 seconds.`;
   }
 
   function addAction(action) { if (actionsEl.children.length >= limits.maxActions) return; actionsEl.appendChild(actionRow(action)); updateAddActionState(); }
@@ -184,14 +184,14 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
       const holdLabel = Number(r.holdSeconds) > 0 ? `${Number(r.holdSeconds)}s post-hold` : 'global post-hold';
       return `<div class="custom-command-card event-reaction-card" data-id="${esc(r.id)}">
         <div class="custom-command-card-main">
-          <div class="custom-command-title"><strong>${esc(r.name)}</strong><span class="custom-command-state ${r.enabled?'enabled':'disabled'}">${r.enabled?'Enabled':'Disabled'}</span></div>
+          <div class="custom-command-title-row"><strong class="custom-command-name">${esc(r.name)}</strong><span class="custom-command-state ${r.enabled?'enabled':'disabled'}">${r.enabled?'Enabled':'Disabled'}</span></div>
           <div class="detail">${esc(typeMeta(r.eventType).label)}${esc(threshold)} · ${enabledActions} action${enabledActions===1?'':'s'} · ${esc(holdLabel)}</div>
           <div class="detail">Updated ${esc(formatDate(r.updatedAt) || '—')}</div>
         </div>
-        <div class="custom-command-card-actions">
+        <div class="custom-command-actions">
           <button class="secondary event-reaction-edit" type="button">Edit</button>
           <button class="secondary event-reaction-toggle" type="button">${r.enabled?'Disable':'Enable'}</button>
-          <button class="secondary event-reaction-delete" type="button">Delete</button>
+          <button class="danger event-reaction-delete" type="button">Delete</button>
         </div>
       </div>`;
     }).join('') : '<div class="detail empty-list-message">No EventSub reactions found.</div>';

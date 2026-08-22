@@ -185,7 +185,6 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .commands-subsection-nav{grid-template-columns:repeat(4,minmax(0,1fr))}
 .event-reaction-info-card{margin:14px 0 16px;padding:13px 14px;background:#121216;border:1px solid #303039;border-radius:7px}
 .event-reaction-info-card strong{display:block;margin-bottom:4px;color:#fff}
-.event-reaction-card .custom-command-card-actions{flex-wrap:wrap;justify-content:flex-end}
 .event-reaction-dialog{width:min(980px,calc(100vw - 40px))}
 .event-reaction-basics-grid{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(190px,1fr) minmax(170px,.8fr) minmax(150px,.7fr);gap:12px;align-items:end}
 .event-reaction-basics-grid label{margin:0}
