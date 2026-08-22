@@ -76,8 +76,11 @@ async function status() {
     $('bStatus').className = `value ${d.bot.online ? 'good' : 'bad'}`;
     const monitoredUpSince = Number(d.bot.uptime?.upSince || 0);
     const showMonitoredUptime = Number.isFinite(monitoredUpSince) && monitoredUpSince > 0 && monitoredUpSince <= Date.now();
-    $('botUptime').hidden = !showMonitoredUptime;
-    $('botUptime').textContent = showMonitoredUptime ? `Up for ${formatServiceUptime(Date.now() - monitoredUpSince)}` : '';
+    const botUptimeEl = $('botUptime');
+    if (botUptimeEl) {
+      botUptimeEl.hidden = !showMonitoredUptime;
+      botUptimeEl.textContent = showMonitoredUptime ? `Up for ${formatServiceUptime(Date.now() - monitoredUpSince)}` : '';
+    }
     // Keep Bot Status identical in mod and read-only views. Recap details live in AI Recap.
     $('bDetail').textContent = '';
 
@@ -119,9 +122,13 @@ async function status() {
       oauth.updateStatus(d);
     }
   } catch (_) {
-    $('botUptime').hidden = true;
-    $('botUptime').textContent = '';
-    $('bDetail').textContent = '';
+    const botUptimeEl = $('botUptime');
+    if (botUptimeEl) {
+      botUptimeEl.hidden = true;
+      botUptimeEl.textContent = '';
+    }
+    const botDetailEl = $('bDetail');
+    if (botDetailEl) botDetailEl.textContent = '';
   }
 }
 
@@ -411,6 +418,8 @@ function enterReadOnlyMode() {
   $('loginMsg').textContent = '';
   void status();
   void loadReadOnlyCommands();
+  // Chat is part of the public dashboard too; load it once the login overlay is gone.
+  requestAnimationFrame(() => requestAnimationFrame(ensureTwitchChatLoaded));
 }
 
 function showLogin(message = '') {
