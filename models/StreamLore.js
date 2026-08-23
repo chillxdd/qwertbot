@@ -1,13 +1,12 @@
 const mongoose = require('mongoose');
 
-const streamLoreObservationSchema = new mongoose.Schema({
+const learnedLoreObservationSchema = new mongoose.Schema({
   text: { type: String, required: true, maxlength: 400 },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
   firstObservedAt: { type: Date, default: Date.now },
   lastObservedAt: { type: Date, default: Date.now },
-  status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
-  reviewedAt: { type: Date, default: null }
+  enabled: { type: Boolean, default: false }
 }, { _id: true });
 
 const streamLoreSchema = new mongoose.Schema({
@@ -24,15 +23,7 @@ const streamLoreSchema = new mongoose.Schema({
     default: '',
     maxlength: 12000
   },
-  aiText: {
-    type: String,
-    default: '',
-    maxlength: 12000
-  },
-  aiObservations: {
-    type: [streamLoreObservationSchema],
-    default: []
-  }
+  learnedObservations: { type: [learnedLoreObservationSchema], default: [] }
 }, {
   timestamps: true
 });

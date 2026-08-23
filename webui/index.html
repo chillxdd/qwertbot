@@ -716,7 +716,7 @@
       <div id="streamLoreView" class="subsection-view open">
       <div class="memory-block">
         <h4>Stream Specific Lore</h4>
-        <div class="detail">Lore written manually by Qwert/mods for recurring callbacks, nicknames, running jokes, or other background that helps the AI interpret current chat.</div>
+        <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
         <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
         <div class="memory-actions">
           <button id="saveLoreBtn">Save Lore</button>
@@ -725,20 +725,11 @@
         <div id="loreCount" class="detail">0/12000 characters</div>
         <div id="loreMsg" class="detail"></div>
       </div>
-      <div class="memory-block">
-        <h4>AI Lore Observations</h4>
-        <div class="detail">AI can suggest durable channel lore from meaningful chat. Every observation requires moderator approval before it can become lore.</div>
-        <div id="aiLoreObservations" class="ai-lore-observations"></div>
-        <div id="aiLoreObservationMsg" class="detail"></div>
-        <label class="prompt-label" for="aiStreamLore">Approved AI Lore</label>
-        <div class="detail">Approved observations live here separately from the lore written manually above. Both are available as background context to the recap AI and tagged questions.</div>
-        <textarea id="aiStreamLore" maxlength="12000" placeholder="Approved AI observations will be added here..."></textarea>
-        <div class="memory-actions">
-          <button id="saveAiLoreBtn">Save AI Lore</button>
-          <button id="undoAiLoreBtn" class="secondary" type="button">Undo Changes</button>
-        </div>
-        <div id="aiLoreCount" class="detail">0/12000 characters</div>
-        <div id="aiLoreMsg" class="detail"></div>
+      <div class="memory-block learned-lore-block">
+        <div class="custom-response-heading"><strong>AI-Learned Stream Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
+        <div class="detail">AI-made observations are never added to active lore automatically. Check <strong>Use</strong> to approve one, uncheck it to keep it without using it, or Unlearn it to delete it.</div>
+        <div id="streamLoreObservations" class="viewer-profile-facts stream-lore-observations"></div>
+        <div id="streamLoreObservationsMsg" class="detail"></div>
       </div>
       </div>
 

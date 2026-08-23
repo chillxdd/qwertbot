@@ -432,7 +432,7 @@ ${config.personality}
 
 ${currentStreamContext}
 
-STREAM-SPECIFIC LORE (saved or approved by the broadcaster/mods; background context only):
+STREAM-SPECIFIC LORE (saved by the broadcaster/mods; background context only):
 ${streamLore || '(none saved)'}
 
 CURRENT-STREAM SESSION MEMORY (temporary same-stream evidence; may include completed hourly memory blocks and recent meaningful chat):

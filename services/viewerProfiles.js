@@ -296,6 +296,18 @@ async function setFactEnabled(channelName, profileId, factId, enabled) {
   return serializeProfile(doc);
 }
 
+async function deleteViewerFact(channelName, profileId, factId) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
+  if (!doc) throw new Error('Viewer profile not found.');
+  if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
+  const fact = doc.facts.id(factId);
+  if (!fact) throw new Error('Viewer fact not found.');
+  fact.deleteOne();
+  await doc.save();
+  return serializeProfile(doc);
+}
+
 async function deleteViewerProfile(channelName, profileId) {
   const channel = normalizeChannelName(channelName);
   const existing = await ViewerProfile.findOne({ channelName: channel, _id: profileId }).lean();
@@ -438,6 +450,7 @@ module.exports = {
   getViewerProfile,
   saveViewerProfile,
   setFactEnabled,
+  deleteViewerFact,
   deleteViewerProfile,
   setViewerProfileOptOut,
   recordViewerCommandUsage,

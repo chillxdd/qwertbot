@@ -144,10 +144,13 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .viewer-profile-toggle-grid{margin:8px 0 14px}
 .viewer-profile-dialog textarea{min-height:110px}
 .viewer-profile-facts{display:flex;flex-direction:column;gap:8px;margin-top:8px;max-height:320px;overflow:auto;padding-right:4px}
-.viewer-profile-fact{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;background:#0e0e10;border:1px solid #2a2a30;border-radius:6px;padding:10px}
+.viewer-profile-fact{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:start;background:#0e0e10;border:1px solid #2a2a30;border-radius:6px;padding:10px}
 .viewer-profile-fact.disabled{opacity:.55}
 .viewer-profile-fact .inline-check{margin-top:2px}
 .viewer-profile-fact-copy{min-width:0;overflow-wrap:anywhere}
+.viewer-profile-fact .danger{padding:6px 9px;min-width:auto;align-self:start}
+.learned-lore-block{margin-top:14px}
+.stream-lore-observations{max-height:360px}
 
 @media(max-width:760px){.viewer-profile-settings-card,.viewer-profile-form-grid{grid-template-columns:1fr}.custom-command-editor.open{inset:10px;width:calc(100vw - 20px);max-height:calc(100vh - 20px);padding:14px}.custom-command-editor.open .custom-editor-header{top:-14px;padding-top:14px}.custom-command-editor.open .custom-editor-actions{bottom:-14px;padding-bottom:14px}}
 @media(max-width:600px){.memory-subsection-nav{grid-template-columns:1fr}}
@@ -582,9 +585,3 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 .personality-cooldown-field .duration-field input{width:110px;max-width:110px;margin:5px 0}
 @media(max-width:600px){.duration-field input{width:100px;max-width:100px}.custom-global-cooldown-input-row .duration-field input{width:88px;max-width:88px}}
 
-.ai-lore-observations{display:flex;flex-direction:column;gap:8px;margin:10px 0 12px}
-.ai-lore-observation{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;background:#0e0e10;border:1px solid #2a2a30;border-radius:6px;padding:10px}
-.ai-lore-observation-copy{min-width:0;overflow-wrap:anywhere;flex:1}
-.ai-lore-observation-actions{display:flex;gap:7px;flex-wrap:wrap;flex:0 0 auto}
-.ai-lore-observation-actions button{margin:0}
-@media(max-width:700px){.ai-lore-observation{flex-direction:column}.ai-lore-observation-actions{width:100%}}

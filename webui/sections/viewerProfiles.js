@@ -115,6 +115,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
           <div>${esc(fact.text)}</div>
           <div class="detail">${esc(fact.confidence || 'medium')} confidence · observed ${Number(fact.evidenceCount || 1)}x${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
         </div>
+        <button class="danger viewer-profile-fact-unlearn" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Unlearn</button>
       </div>`).join('') : '<div class="detail custom-empty-state">No AI-learned observations yet.</div>';
 
     $('viewerProfileFacts').querySelectorAll('.viewer-profile-fact-toggle').forEach((toggle) => {
@@ -132,6 +133,24 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
         if (index >= 0) profiles[index] = d.profile;
         renderFacts(d.profile);
         renderList();
+      };
+    });
+    $('viewerProfileFacts').querySelectorAll('.viewer-profile-fact-unlearn').forEach((button) => {
+      button.onclick = async () => {
+        if (!editingId) return;
+        const row = button.closest('.viewer-profile-fact');
+        if (!window.confirm('Unlearn this AI observation? This permanently deletes it from the viewer profile.')) return;
+        button.disabled = true;
+        const d = await postJson('/viewer-profiles/fact-unlearn', { profileId: editingId, factId: row.dataset.factId });
+        if (!d.success) {
+          button.disabled = false;
+          return setDialogMessage(d.error || 'Could not unlearn fact.', true);
+        }
+        const index = profiles.findIndex((item) => item.id === editingId);
+        if (index >= 0) profiles[index] = d.profile;
+        renderFacts(d.profile);
+        renderList();
+        setDialogMessage('Observation unlearned.');
       };
     });
   }

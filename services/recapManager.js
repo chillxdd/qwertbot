@@ -767,8 +767,7 @@ function createRecapManager({
         } catch (settingsErr) {
           console.error('[Viewer Profiles] Could not load viewer-profile settings for hourly learning:', settingsErr?.message || settingsErr);
         }
-        const loreLearningEnabled = true;
-        if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled || loreLearningEnabled) {
+        if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled || currentStreamId) {
           try {
             const generatedAtMs = Date.now();
             const sourceTimes = [
@@ -787,7 +786,7 @@ function createRecapManager({
               streamTiming: { windowStartedAtMs, generatedAtMs },
               config: sessionMemoryConfig,
               viewerLearningEnabled: viewerProfileSettings.automaticLearningEnabled,
-              loreLearningEnabled
+              streamLoreLearningEnabled: true
             });
             if (memoryBlock && sessionMemoryConfig.enabled) {
               await saveSessionMemoryBlock({
@@ -806,12 +805,9 @@ function createRecapManager({
               });
               console.log(`[Viewer Profiles] Hourly learning processed ${memoryBlock.viewerUpdates.length} candidate viewer update(s); applied ${profileResult.applied}, skipped ${profileResult.skipped}.`);
             }
-            if (memoryBlock?.loreObservations?.length && loreLearningEnabled) {
-              const loreResult = await applyStreamLoreObservations({
-                channelName,
-                observations: memoryBlock.loreObservations
-              });
-              console.log(`[Stream Lore] Hourly learning processed ${memoryBlock.loreObservations.length} candidate lore observation(s); queued/updated ${loreResult.applied}, skipped ${loreResult.skipped}.`);
+            if (memoryBlock?.streamLoreObservations?.length) {
+              const loreResult = await applyStreamLoreObservations(channelName, memoryBlock.streamLoreObservations);
+              console.log(`[Stream Lore] Hourly learning processed ${memoryBlock.streamLoreObservations.length} candidate lore observation(s); applied ${loreResult.applied}, skipped ${loreResult.skipped}. All new observations remain pending until approved.`);
             }
           } catch (memoryErr) {
             console.error('[Session Memory/Viewer Profiles/Stream Lore] Hourly intelligence generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
