@@ -169,9 +169,13 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           replyParentMessageId: tags.id || tags['message-id'] || ''
         });
         if (personalityResult?.matched) {
-          // A tagged AI question is still organic viewer chat, even when the
-          // current audience setting prevents the bot from answering it.
-          recapManager.recordChatMessage({ displayName, rawMessage });
+          // Tagged questions are normally organic viewer chat and remain part of
+          // recap/session-memory source. Explicit prompt-injection attempts are
+          // intentionally excluded so malicious instruction text cannot poison
+          // later AI context after the direct attack has already been blocked.
+          if (personalityResult?.reason !== 'prompt_injection_blocked') {
+            recapManager.recordChatMessage({ displayName, rawMessage });
+          }
           return;
         }
       } catch (err) {

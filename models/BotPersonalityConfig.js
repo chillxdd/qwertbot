@@ -45,6 +45,11 @@ const botPersonalityConfigSchema = new mongoose.Schema({
     maxRetries: { type: Number, min: 0, max: 2, default: 2 },
     failureResponse: { type: String, default: 'Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.', maxlength: 500 }
   },
+  securityRefusalResponse: {
+    type: String,
+    default: 'Cute. Chat does not get to rewrite my instructions or make me reveal them. Ask me an actual question.',
+    maxlength: 500
+  },
   sessionMemory: {
     enabled: { type: Boolean, default: true },
     recentDetailedHours: { type: Number, min: 1, max: 8, default: 2 },

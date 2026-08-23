@@ -1,5 +1,6 @@
 const ViewerProfile = require('../models/ViewerProfile');
 const ViewerProfileSettings = require('../models/ViewerProfileSettings');
+const { containsPromptInjectionLanguage } = require('./promptSecurity');
 
 const MAX_ALIASES = 12;
 const MAX_PINNED_NOTES = 4000;
@@ -434,7 +435,7 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
 
     for (const observation of Array.isArray(rawUpdate?.observations) ? rawUpdate.observations : []) {
       const text = normalizeFactText(observation?.fact || observation?.text);
-      if (!text) continue;
+      if (!text || containsPromptInjectionLanguage(text)) continue;
       const match = findSimilarFact(profile.facts, text);
       const supportCount = Math.max(1, Math.min(4, Number(observation?.supportCount || 1)));
       const kind = ['fact', 'preference', 'habit', 'behavior'].includes(observation?.kind) ? observation.kind : 'fact';

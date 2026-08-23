@@ -1,4 +1,5 @@
 const StreamLore = require('../models/StreamLore');
+const { containsPromptInjectionLanguage } = require('./promptSecurity');
 
 const MAX_STREAM_LORE_LENGTH = 12000;
 const MAX_LEARNED_LORE = 80;
@@ -96,7 +97,7 @@ async function applyStreamLoreObservations(channelName, observations = []) {
 
   for (const raw of Array.isArray(observations) ? observations : []) {
     const text = normalizeObservationText(raw?.fact || raw?.text || raw?.observation);
-    if (!text) { skipped++; continue; }
+    if (!text || containsPromptInjectionLanguage(text)) { skipped++; continue; }
     const match = findSimilarObservation(doc.learnedObservations, text);
     const now = new Date();
     const supportCount = Math.max(1, Math.min(6, Number(raw?.supportCount || 1)));

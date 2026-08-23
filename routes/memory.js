@@ -81,6 +81,7 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
         modsBypassCooldown: req.body?.modsBypassCooldown,
         cooldownResponse: req.body?.cooldownResponse,
         aiRetry: req.body?.aiRetry,
+        securityRefusalResponse: req.body?.securityRefusalResponse,
         sessionMemory: req.body?.sessionMemory
       });
       console.log(`[Tagged Questions] Settings saved (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);

@@ -15,6 +15,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityCooldownResponse').maxLength = 500;
   $('botPersonalityRetryCount').max = 2;
   $('botPersonalityFailureResponse').maxLength = 500;
+  $('botPersonalitySecurityRefusalResponse').maxLength = 500;
 
   function selectMemoryView(view) {
     const selected = ['lore', 'personality', 'profiles'].includes(view) ? view : 'lore';
@@ -236,6 +237,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
       $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
       setAiRetrySettings(d.aiRetry || {});
+      $('botPersonalitySecurityRefusalResponse').value = d.securityRefusalResponse || 'Cute. Chat does not get to rewrite my instructions or make me reveal them. Ask me an actual question.';
       setSessionMemorySettings(d.sessionMemory || {});
       syncCooldownResponseVisibility();
       updatePersonalityCount();
@@ -270,6 +272,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
         modsBypassCooldown: $('botPersonalityModsBypassCooldown').checked,
         cooldownResponse: $('botPersonalityUseCooldownResponse').checked ? $('botPersonalityCooldownResponse').value.trim() : '',
         aiRetry: getAiRetrySettings(),
+        securityRefusalResponse: $('botPersonalitySecurityRefusalResponse').value.trim(),
         sessionMemory: getSessionMemorySettings()
       });
       if (!d.success) {
@@ -284,6 +287,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
       $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
       setAiRetrySettings(d.aiRetry || {});
+      $('botPersonalitySecurityRefusalResponse').value = d.securityRefusalResponse || 'Cute. Chat does not get to rewrite my instructions or make me reveal them. Ask me an actual question.';
       setSessionMemorySettings(d.sessionMemory || {});
       syncCooldownResponseVisibility();
       updatePersonalityCount();
