@@ -9,6 +9,15 @@ const viewerFactSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: true }
 }, { _id: true });
 
+
+const viewerCommandUsageSchema = new mongoose.Schema({
+  command: { type: String, required: true, lowercase: true, trim: true, maxlength: 80 },
+  count: { type: Number, min: 1, default: 1 },
+  offlineCount: { type: Number, min: 0, default: 0 },
+  firstUsedAt: { type: Date, default: Date.now },
+  lastUsedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const viewerProfileSchema = new mongoose.Schema({
   channelName: { type: String, required: true, lowercase: true, trim: true, index: true },
   username: { type: String, required: true, lowercase: true, trim: true },
@@ -23,6 +32,7 @@ const viewerProfileSchema = new mongoose.Schema({
   aliases: { type: [String], default: [] },
   pinnedNotes: { type: String, default: '', maxlength: 4000 },
   facts: { type: [viewerFactSchema], default: [] },
+  commandUsage: { type: [viewerCommandUsageSchema], default: [] },
   enabled: { type: Boolean, default: true },
   learningEnabled: { type: Boolean, default: true },
   firstSeenAt: { type: Date, default: Date.now },

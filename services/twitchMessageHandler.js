@@ -1,8 +1,9 @@
-const { setViewerProfileOptOut } = require('./viewerProfiles');
+const { setViewerProfileOptOut, recordViewerCommandUsage } = require('./viewerProfiles');
 
 const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
+const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap']);
 
 function getCommandName(message) {
   return String(message || '').trim().split(/\s+/)[0].toLowerCase();
@@ -49,13 +50,31 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     });
   }
 
-  function queuePotentialFakeCommand({ username, displayName, rawMessage }) {
+
+  function recordCommandBehavior({ channel, username, displayName, tags = {}, rawMessage, streamLive = false }) {
+    const command = getCommandName(rawMessage);
+    if (!command.startsWith('!') || PROFILE_COMMAND_EXCLUSIONS.has(command) || command.startsWith('!poke')) return;
+    void recordViewerCommandUsage(channel, {
+      username,
+      displayName,
+      twitchUserId: tags['user-id'] || '',
+      command,
+      streamLive
+    }).catch((err) => {
+      console.error(`[Viewer Profiles] Could not record command usage ${command} for ${displayName}:`, err?.message || err);
+    });
+  }
+
+  function queuePotentialFakeCommand({ channel, username, displayName, tags, rawMessage, streamLive }) {
     pendingBangMessageId++;
     const pending = {
       id: pendingBangMessageId,
       username: String(username || '').toLowerCase().trim(),
       displayName,
       rawMessage,
+      channel,
+      tags,
+      streamLive,
       createdAt: Date.now(),
       timer: null
     };
@@ -97,6 +116,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const candidate = pendingBangMessages[candidateIndex];
     clearTimeout(candidate.timer);
     pendingBangMessages.splice(candidateIndex, 1);
+    recordCommandBehavior(candidate);
     console.log(`[Recap] Nightbot responded to ${candidate.rawMessage}; command excluded from recap logs.`);
   }
 
@@ -104,6 +124,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const recapManager = getRecapManager();
     if (!recapManager) return;
 
+    const streamLive = Boolean(recapManager.getStatus?.().streamLive);
     const rawMessage = String(message || '').trim();
     const lowerMsg = rawMessage.toLowerCase();
     const username = String(tags.username || '').toLowerCase().trim();
@@ -203,6 +224,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       }
 
       if (lowerMsg === '!recap' || lowerMsg.startsWith('!recap ')) {
+        recordCommandBehavior({ channel, username, displayName, tags, rawMessage, streamLive });
         await recapManager.handleRecapCommand({ channel, displayName });
       }
       return;
@@ -216,6 +238,8 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           // Inline triggers are still normal viewer chat, so preserve the source message.
           if (customResult.triggerType === 'inline') {
             recapManager.recordChatMessage({ displayName, rawMessage });
+          } else if (customResult.triggerType === 'command') {
+            recordCommandBehavior({ channel, username, displayName, tags, rawMessage, streamLive });
           }
           return;
         }
@@ -227,7 +251,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     }
 
     if (rawMessage.startsWith('!')) {
-      queuePotentialFakeCommand({ username, displayName, rawMessage });
+      queuePotentialFakeCommand({ channel, username, displayName, tags, rawMessage, streamLive });
       return;
     }
 
