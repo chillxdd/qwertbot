@@ -581,3 +581,4 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 .event-reaction-action-row .duration-unit,.event-reaction-basics-grid .duration-unit{padding-top:5px}
 .personality-cooldown-field .duration-field input{width:110px;max-width:110px;margin:5px 0}
 @media(max-width:600px){.duration-field input{width:100px;max-width:100px}.custom-global-cooldown-input-row .duration-field input{width:88px;max-width:88px}}
+

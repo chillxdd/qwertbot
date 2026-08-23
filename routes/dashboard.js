@@ -112,6 +112,7 @@ function registerDashboardRoutes(app, options) {
       console.error('[OAuth] Could not load Twitch authorization status:', err.message || err);
     }
 
+
     res.json({
       success: true,
       qwert: {
