@@ -1,297 +1,321 @@
-export function initEventSubReactionsSection({ $, esc, postJson }) {
-  let reactions = [];
-  let eventTypes = [];
-  let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300 };
-  let automationSpacingSeconds = 0;
-  let editingId = null;
-  let page = 1;
-  let loaded = false;
-  const editor = $('eventReactionEditor');
-  const variablesDialog = $('eventReactionVariablesDialog');
-  const actionsEl = $('eventReactionActions');
-  const PAGE_SIZE_STORAGE_KEY = 'qwertbot.eventSubReactions.pageSize';
-  const SORT_STORAGE_KEY = 'qwertbot.eventSubReactions.sort';
-  const VALID_PAGE_SIZES = new Set([10, 25, 50]);
+const EventSubReaction = require('../models/EventSubReaction');
+const { MAX_AUTOMATION_SPACING_SECONDS } = require('./automationSpacing');
+const { beginEventReaction, endEventReaction, getEventReactionHoldStatus } = require('./eventReactionHold');
+const { getStoredAuth } = require('./twitchAuth');
+const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
 
-  function typeMeta(type) { return eventTypes.find((item) => item.type === type) || { type, label: type, threshold: null }; }
-  function setMsg(text, bad = false) { const el=$('eventReactionsMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
-  function setEditorMsg(text, bad = false) { const el=$('eventReactionEditorMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
-  function formatDate(value) { if (!value) return ''; const d=new Date(value); return Number.isNaN(d.getTime())?'':d.toLocaleString(); }
-  function updateHoldUi() {
-    const holdEl = $('eventReactionHold');
-    holdEl.max = String(limits.maxHoldSeconds);
-    holdEl.placeholder = 'Use global Automation Spacing';
-  }
+const EVENT_TYPES = [
+  { type: 'channel.subscribe', label: 'Subscription', threshold: null },
+  { type: 'channel.subscription.message', label: 'Resub Message', threshold: 'Cumulative Months' },
+  { type: 'channel.subscription.gift', label: 'Gift Subs', threshold: 'Gift Count' },
+  { type: 'channel.cheer', label: 'Bits / Cheer', threshold: 'Bits' },
+  { type: 'channel.follow', label: 'Follow', threshold: null },
+  { type: 'channel.raid', label: 'Raid', threshold: 'Raid Viewers' },
+  { type: 'channel.hype_train.begin', label: 'Hype Train Start', threshold: 'Level' },
+  { type: 'channel.hype_train.end', label: 'Hype Train End', threshold: 'Level' },
+  { type: 'stream.online', label: 'Stream Online', threshold: null },
+  { type: 'stream.offline', label: 'Stream Offline', threshold: null }
+];
+const EVENT_TYPE_SET = new Set(EVENT_TYPES.map((item) => item.type));
+const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_announcement', 'twitch_shoutout']);
+const ANNOUNCEMENT_COLORS = new Set(['primary', 'blue', 'green', 'orange', 'purple']);
+const MAX_ACTIONS = 12;
+const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
+const MAX_ACTION_DELAY_SECONDS = 300;
 
-  function validateHold() {
-    const raw = $('eventReactionHold').value.trim();
-    if (!raw) return '';
-    const hold = Number(raw);
-    const spacing = Math.max(0, Number(automationSpacingSeconds) || 0);
-    if (!Number.isFinite(hold) || hold < 0 || hold > limits.maxHoldSeconds) {
-      return `Post-Reaction Hold must be blank or between 0 and ${limits.maxHoldSeconds} seconds.`;
-    }
-    if (hold < spacing) {
-      return `Automation Spacing is currently ${spacing} seconds. Leave Post-Reaction Hold blank to use global spacing, or enter ${spacing} seconds or more.`;
-    }
-    return '';
-  }
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function cleanText(value, max = 500) { return Array.from(String(value || '').trim()).slice(0, max).join(''); }
 
-  function renderTypeOptions() {
-    $('eventReactionType').innerHTML = eventTypes.map((item) => `<option value="${esc(item.type)}">${esc(item.label)}</option>`).join('');
-  }
-
-  function updateThresholdUi() {
-    const meta = typeMeta($('eventReactionType').value);
-    const wrap = $('eventReactionMinimumWrap');
-    wrap.hidden = !meta.threshold;
-    $('eventReactionMinimumLabel').textContent = meta.threshold ? `Minimum ${meta.threshold}` : 'Minimum';
-    $('eventReactionMinimum').placeholder = meta.threshold ? `0 = any ${meta.threshold.toLowerCase()}` : '0';
-  }
-
-  function actionLabel(type) {
-    if (type === 'chat_message') return 'Chat Message';
-    if (type === 'custom_command') return 'Run Custom Command';
-    if (type === 'twitch_announcement') return 'Twitch Announcement';
-    if (type === 'twitch_shoutout') return 'Twitch Shoutout';
-    return type;
-  }
-
-  function actionRow(action = { type: 'chat_message', value: '', delaySeconds: 0, enabled: true }) {
-    const row = document.createElement('div');
-    row.className = 'event-reaction-action-row';
-    row.innerHTML = `
-      <label class="inline-check event-action-enabled"><input class="event-action-enabled-input" type="checkbox" ${action.enabled === false ? '' : 'checked'}> Use</label>
-      <label>Action
-        <select class="event-action-type">
-          <option value="chat_message">Chat Message</option>
-          <option value="custom_command">Run Custom Command</option>
-          <option value="twitch_announcement">Twitch Announcement</option>
-          <option value="twitch_shoutout">Twitch Shoutout</option>
-        </select>
-      </label>
-      <label>Delay
-        <div class="duration-field"><input class="event-action-delay" type="number" min="0" max="${limits.maxActionDelaySeconds}" step="0.1" value="${Number(action.delaySeconds || 0)}"><span class="duration-unit">seconds</span></div>
-      </label>
-      <label class="event-action-value-wrap">Value
-        <input class="event-action-value" maxlength="500" value="${esc(action.value || '')}">
-        <select class="event-action-color" aria-label="Announcement color">
-          <option value="primary">Primary</option>
-          <option value="purple">Purple</option>
-          <option value="blue">Blue</option>
-          <option value="green">Green</option>
-          <option value="orange">Orange</option>
-        </select>
-      </label>
-      <div class="event-action-order-buttons">
-        <button class="secondary event-action-up" type="button" title="Move up">↑</button>
-        <button class="secondary event-action-down" type="button" title="Move down">↓</button>
-        <button class="secondary event-action-remove" type="button">Remove</button>
-      </div>`;
-    const typeEl = row.querySelector('.event-action-type');
-    const valueWrap = row.querySelector('.event-action-value-wrap');
-    const valueEl = row.querySelector('.event-action-value');
-    const colorEl = row.querySelector('.event-action-color');
-    typeEl.value = action.type || 'chat_message';
-    colorEl.value = action.color || 'primary';
-    const update = () => {
-      const type = typeEl.value;
-      valueWrap.hidden = type === 'twitch_shoutout';
-      colorEl.hidden = type !== 'twitch_announcement';
-      if (type === 'chat_message') valueEl.placeholder = 'Example: Thanks for the raid, $(raider)!';
-      else if (type === 'twitch_announcement') valueEl.placeholder = 'Example: Welcome in, $(raider)!';
-      else if (type === 'custom_command') valueEl.placeholder = 'Example: !so $(raider)';
+function eventActor(event = {}, type = '') {
+  if (type === 'channel.raid') {
+    return {
+      login: String(event.from_broadcaster_user_login || '').trim(),
+      name: String(event.from_broadcaster_user_name || event.from_broadcaster_user_login || 'raider').trim(),
+      userId: String(event.from_broadcaster_user_id || '').trim()
     };
-    typeEl.addEventListener('change', update);
-    row.querySelector('.event-action-up').onclick = () => { const prev=row.previousElementSibling; if (prev) actionsEl.insertBefore(row, prev); };
-    row.querySelector('.event-action-down').onclick = () => { const next=row.nextElementSibling; if (next) actionsEl.insertBefore(next, row); };
-    row.querySelector('.event-action-remove').onclick = () => { row.remove(); updateAddActionState(); };
-    update();
-    return row;
   }
-
-  function updateAddActionState() {
-    $('addEventReactionActionBtn').disabled = actionsEl.children.length >= limits.maxActions;
-    $('eventReactionActionHelp').textContent = `${actionsEl.children.length}/${limits.maxActions} actions. Each delay runs before its action; the first can be 0 seconds.`;
-  }
-
-  function addAction(action) { if (actionsEl.children.length >= limits.maxActions) return; actionsEl.appendChild(actionRow(action)); updateAddActionState(); }
-
-  function readActions() {
-    return [...actionsEl.querySelectorAll('.event-reaction-action-row')].map((row) => ({
-      type: row.querySelector('.event-action-type').value,
-      value: row.querySelector('.event-action-value').value.trim(),
-      color: row.querySelector('.event-action-color').value || 'primary',
-      delaySeconds: Number(row.querySelector('.event-action-delay').value || 0),
-      enabled: row.querySelector('.event-action-enabled-input').checked
-    }));
-  }
-
-  function openEditor(reaction = null) {
-    editingId = reaction?.id || null;
-    $('eventReactionEditorTitle').textContent = reaction ? 'Edit EventSub Reaction' : 'Add EventSub Reaction';
-    $('eventReactionName').value = reaction?.name || '';
-    $('eventReactionEnabled').checked = reaction?.enabled !== false;
-    $('eventReactionType').value = reaction?.eventType || (eventTypes.some((item)=>item.type==='channel.raid') ? 'channel.raid' : eventTypes[0]?.type || '');
-    $('eventReactionMinimum').value = reaction?.minimumValue ?? 0;
-    $('eventReactionHold').value = Number(reaction?.holdSeconds) > 0 ? String(reaction.holdSeconds) : '';
-    updateHoldUi();
-    actionsEl.replaceChildren();
-    const actionValues = reaction?.actions?.length ? reaction.actions : [{ type:'chat_message', value:'', delaySeconds:0, enabled:true }];
-    actionValues.forEach(addAction);
-    updateThresholdUi();
-    updateAddActionState();
-    setEditorMsg('');
-    editor.classList.add('open');
-    if (typeof editor.showModal === 'function' && !editor.open) editor.showModal(); else editor.setAttribute('open','');
-    $('eventReactionName').focus();
-  }
-
-  function closeEditor() {
-    editingId = null;
-    editor.classList.remove('open');
-    if (editor.open && typeof editor.close === 'function') editor.close(); else editor.removeAttribute('open');
-    setEditorMsg('');
-  }
-
-  function filteredSorted() {
-    const q = $('eventReactionSearch').value.trim().toLowerCase();
-    const sort = $('eventReactionSort').value;
-    let items = reactions.filter((r) => {
-      if (!q) return true;
-      const blob = [r.name, typeMeta(r.eventType).label, r.eventType, ...(r.actions||[]).map((a)=>`${actionLabel(a.type)} ${a.value}`)].join(' ').toLowerCase();
-      return blob.includes(q);
-    });
-    items = [...items].sort((a,b) => {
-      if (sort === 'name_asc') return a.name.localeCompare(b.name);
-      if (sort === 'name_desc') return b.name.localeCompare(a.name);
-      if (sort === 'updated_desc') return new Date(b.updatedAt||0)-new Date(a.updatedAt||0);
-      if (sort === 'event_asc') return typeMeta(a.eventType).label.localeCompare(typeMeta(b.eventType).label);
-      return new Date(a.createdAt||0)-new Date(b.createdAt||0);
-    });
-    return items;
-  }
-
-  function render() {
-    const items = filteredSorted();
-    const pageSize = Number($('eventReactionPageSize').value || 10);
-    const pages = Math.max(1, Math.ceil(items.length / pageSize));
-    page = Math.max(1, Math.min(page, pages));
-    const visible = items.slice((page-1)*pageSize, page*pageSize);
-    $('eventReactionList').innerHTML = visible.length ? visible.map((r) => {
-      const enabledActions = (r.actions||[]).filter((a)=>a.enabled!==false).length;
-      const threshold = r.minimumValue > 0 && typeMeta(r.eventType).threshold ? ` · min ${r.minimumValue} ${typeMeta(r.eventType).threshold.toLowerCase()}` : '';
-      const holdLabel = Number(r.holdSeconds) > 0 ? `${Number(r.holdSeconds)}s post-hold` : 'global post-hold';
-      return `<div class="custom-command-card event-reaction-card" data-id="${esc(r.id)}">
-        <div class="custom-command-card-main">
-          <div class="custom-command-title-row"><strong class="custom-command-name">${esc(r.name)}</strong><span class="custom-command-state ${r.enabled?'enabled':'disabled'}">${r.enabled?'Enabled':'Disabled'}</span></div>
-          <div class="detail">${esc(typeMeta(r.eventType).label)}${esc(threshold)} · ${enabledActions} action${enabledActions===1?'':'s'} · ${esc(holdLabel)}</div>
-          <div class="detail">Updated ${esc(formatDate(r.updatedAt) || '—')}</div>
-        </div>
-        <div class="custom-command-actions">
-          <button class="secondary event-reaction-edit" type="button">Edit</button>
-          <button class="secondary event-reaction-toggle" type="button">${r.enabled?'Disable':'Enable'}</button>
-          <button class="danger event-reaction-delete" type="button">Delete</button>
-        </div>
-      </div>`;
-    }).join('') : '<div class="detail empty-list-message">No EventSub reactions found.</div>';
-    $('eventReactionPageLabel').textContent = `Page ${page} of ${pages}`;
-    $('eventReactionPrevPage').disabled = page <= 1;
-    $('eventReactionNextPage').disabled = page >= pages;
-    $('eventReactionPagination').hidden = items.length === 0;
-
-    $('eventReactionList').querySelectorAll('.event-reaction-card').forEach((card) => {
-      const reaction = reactions.find((r)=>r.id===card.dataset.id); if (!reaction) return;
-      card.querySelector('.event-reaction-edit').onclick = () => openEditor(reaction);
-      card.querySelector('.event-reaction-toggle').onclick = async () => {
-        const d = await postJson('/eventsub-reactions/toggle', { id: reaction.id, enabled: !reaction.enabled });
-        if (!d.success) return setMsg(d.error || 'Could not update reaction.', true);
-        await load();
-      };
-      card.querySelector('.event-reaction-delete').onclick = async () => {
-        if (!confirm(`Delete “${reaction.name}”?`)) return;
-        const d = await postJson('/eventsub-reactions/delete', { id: reaction.id });
-        if (!d.success) return setMsg(d.error || 'Could not delete reaction.', true);
-        await load();
-      };
-    });
-  }
-
-  async function load() {
-    const d = await postJson('/eventsub-reactions/list', {});
-    if (!d.success) { setMsg(d.error || 'Could not load EventSub reactions.', true); return; }
-    reactions = d.reactions || [];
-    eventTypes = d.eventTypes || [];
-    limits = { ...limits, ...(d.limits||{}) };
-    automationSpacingSeconds = Math.max(0, Number(d.automationSpacingSeconds) || 0);
-    renderTypeOptions();
-    updateHoldUi();
-    loaded = true;
-    render();
-    setMsg('');
-  }
-
-  window.addEventListener('qwertbot:automation-spacing-changed', (event) => {
-    automationSpacingSeconds = Math.max(0, Number(event.detail?.minimumSpacingSeconds) || 0);
-    updateHoldUi();
-    if (editor.open) {
-      const error = validateHold();
-      setEditorMsg(error, Boolean(error));
-    }
-  });
-  $('eventReactionType').addEventListener('change', updateThresholdUi);
-  $('eventReactionHold').addEventListener('input', () => {
-    const raw = $('eventReactionHold').value.trim();
-    if (!raw) return setEditorMsg('');
-    const error = validateHold();
-    setEditorMsg(error, Boolean(error));
-  });
-  $('addEventReactionActionBtn').onclick = () => addAction({ type:'chat_message', value:'', delaySeconds:0, enabled:true });
-  $('showEventReactionVariablesBtn').onclick = () => { if (typeof variablesDialog.showModal === 'function') variablesDialog.showModal(); else variablesDialog.setAttribute('open', ''); };
-  $('closeEventReactionVariablesBtn').onclick = () => { if (typeof variablesDialog.close === 'function') variablesDialog.close(); else variablesDialog.removeAttribute('open'); };
-  variablesDialog.addEventListener('click', (event) => { if (event.target === variablesDialog && typeof variablesDialog.close === 'function') variablesDialog.close(); });
-  $('addEventReactionBtn').onclick = () => openEditor();
-  $('closeEventReactionEditorBtn').onclick = closeEditor;
-  $('cancelEventReactionBtn').onclick = closeEditor;
-  editor.addEventListener('click', (e)=>{ if (e.target===editor && !variablesDialog.open) closeEditor(); });
-  editor.addEventListener('cancel', (event)=>{ event.preventDefault(); if (!variablesDialog.open) closeEditor(); });
-  $('refreshEventReactionsBtn').onclick = load;
-  $('eventReactionSearch').addEventListener('input', ()=>{ page=1; render(); });
-  try {
-    const savedSort = localStorage.getItem(SORT_STORAGE_KEY);
-    if (savedSort && [...$('eventReactionSort').options].some((opt)=>opt.value===savedSort)) $('eventReactionSort').value = savedSort;
-    const savedPageSize = Number(localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
-    if (VALID_PAGE_SIZES.has(savedPageSize)) $('eventReactionPageSize').value = String(savedPageSize);
-  } catch {}
-  $('eventReactionSort').addEventListener('change', ()=>{ page=1; try { localStorage.setItem(SORT_STORAGE_KEY, $('eventReactionSort').value); } catch {} render(); });
-  $('eventReactionPageSize').addEventListener('change', ()=>{ page=1; try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, $('eventReactionPageSize').value); } catch {} render(); });
-  $('eventReactionPrevPage').onclick = ()=>{ page=Math.max(1,page-1); render(); };
-  $('eventReactionNextPage').onclick = ()=>{ page+=1; render(); };
-
-  $('saveEventReactionBtn').onclick = async () => {
-    setEditorMsg('');
-    const holdError = validateHold();
-    if (holdError) return setEditorMsg(holdError, true);
-    const payload = {
-      id: editingId,
-      name: $('eventReactionName').value.trim(),
-      enabled: $('eventReactionEnabled').checked,
-      eventType: $('eventReactionType').value,
-      minimumValue: Number($('eventReactionMinimum').value || 0),
-      holdSeconds: $('eventReactionHold').value.trim() === '' ? null : Number($('eventReactionHold').value),
-      actions: readActions()
-    };
-    const d = await postJson('/eventsub-reactions/save', payload);
-    if (!d.success) return setEditorMsg(d.error || 'Could not save reaction.', true);
-    closeEditor();
-    await load();
-  };
-
   return {
-    onVisibilityChange(visible) {
-      if (!visible) { if (variablesDialog.open && typeof variablesDialog.close === 'function') variablesDialog.close(); if (editor.open) closeEditor(); return; }
-      if (!loaded) void load();
-    },
-    load
+    login: String(event.user_login || '').trim(),
+    name: String(event.user_name || event.user_login || (event.is_anonymous ? 'Anonymous' : 'viewer')).trim(),
+    userId: String(event.user_id || '').trim()
   };
 }
+
+function numericEventValue(type, event = {}) {
+  switch (type) {
+    case 'channel.subscription.message': return Number(event.cumulative_months || 0);
+    case 'channel.subscription.gift': return Number(event.total || 0);
+    case 'channel.cheer': return Number(event.bits || 0);
+    case 'channel.raid': return Number(event.viewers || 0);
+    case 'channel.hype_train.begin':
+    case 'channel.hype_train.end': return Number(event.level || 0);
+    default: return 0;
+  }
+}
+
+function reactionToClient(item, automationSpacingSeconds = 0) {
+  const spacingSeconds = Math.max(0, Number(automationSpacingSeconds) || 0);
+  const storedHoldSeconds = Number(item.holdSeconds);
+  const clientHoldSeconds = Number.isFinite(storedHoldSeconds) && storedHoldSeconds > 0 && storedHoldSeconds >= spacingSeconds
+    ? storedHoldSeconds
+    : null;
+  return {
+    id: String(item._id),
+    name: item.name,
+    eventType: item.eventType,
+    enabled: item.enabled !== false,
+    minimumValue: Number(item.minimumValue || 0),
+    holdSeconds: clientHoldSeconds,
+    actions: Array.isArray(item.actions) ? item.actions.map((action) => ({
+      type: action.type,
+      value: String(action.value || ''),
+      color: ANNOUNCEMENT_COLORS.has(String(action.color || '').toLowerCase()) ? String(action.color).toLowerCase() : 'primary',
+      delaySeconds: Number(action.delaySeconds || 0),
+      enabled: action.enabled !== false
+    })) : [],
+    createdAt: item.createdAt || null,
+    updatedAt: item.updatedAt || null
+  };
+}
+
+function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
+  const name = cleanText(input.name, 80);
+  if (!name) throw new Error('Name is required.');
+  const eventType = String(input.eventType || '').trim();
+  if (!EVENT_TYPE_SET.has(eventType)) throw new Error('Choose a supported EventSub event.');
+  const minimumValue = Number(input.minimumValue || 0);
+  if (!Number.isFinite(minimumValue) || minimumValue < 0) throw new Error('Minimum value must be 0 or greater.');
+  const rawHoldSeconds = input.holdSeconds;
+  const useGlobalHold = rawHoldSeconds === null || rawHoldSeconds === undefined || rawHoldSeconds === '' || Number(rawHoldSeconds) === 0;
+  const holdSeconds = useGlobalHold ? null : Number(rawHoldSeconds);
+  if (holdSeconds !== null && (!Number.isFinite(holdSeconds) || holdSeconds < 0 || holdSeconds > MAX_HOLD_SECONDS)) {
+    throw new Error(`Post-reaction hold must be blank or between 0 and ${MAX_HOLD_SECONDS} seconds.`);
+  }
+  const spacingSeconds = Math.max(0, Number(automationSpacingSeconds) || 0);
+  if (holdSeconds !== null && holdSeconds < spacingSeconds) {
+    throw new Error(`Automation Spacing is currently ${spacingSeconds} seconds. Leave Post-Reaction Hold blank to use global spacing, or enter ${spacingSeconds} seconds or more.`);
+  }
+  const rawActions = Array.isArray(input.actions) ? input.actions : [];
+  if (!rawActions.length) throw new Error('Add at least one action.');
+  if (rawActions.length > MAX_ACTIONS) throw new Error(`A reaction can have at most ${MAX_ACTIONS} actions.`);
+  const actions = rawActions.map((raw) => {
+    const type = String(raw.type || '').trim();
+    if (!ACTION_TYPES.has(type)) throw new Error('Choose a supported reaction action.');
+    const delaySeconds = Number(raw.delaySeconds || 0);
+    if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || delaySeconds > MAX_ACTION_DELAY_SECONDS) {
+      throw new Error(`Action delay must be between 0 and ${MAX_ACTION_DELAY_SECONDS} seconds.`);
+    }
+    const value = cleanText(raw.value, 500);
+    if ((type === 'chat_message' || type === 'custom_command' || type === 'twitch_announcement') && !value) {
+      if (type === 'chat_message') throw new Error('Chat Message needs text.');
+      if (type === 'twitch_announcement') throw new Error('Twitch Announcement needs text.');
+      throw new Error('Custom Command needs a command such as !so $(raider).');
+    }
+    const color = ANNOUNCEMENT_COLORS.has(String(raw.color || '').toLowerCase()) ? String(raw.color).toLowerCase() : 'primary';
+    return { type, value, color, delaySeconds, enabled: raw.enabled !== false };
+  });
+  return {
+    name,
+    eventType,
+    enabled: input.enabled !== false,
+    minimumValue: Math.round(minimumValue * 1000) / 1000,
+    holdSeconds: holdSeconds === null ? null : Math.round(holdSeconds * 1000) / 1000,
+    actions
+  };
+}
+
+function renderEventTemplate(template, type, event = {}) {
+  const actor = eventActor(event, type);
+  const map = {
+    user: actor.name,
+    username: actor.login || actor.name,
+    raider: type === 'channel.raid' ? actor.name : actor.name,
+    viewers: Number(event.viewers || 0),
+    bits: Number(event.bits || 0),
+    gifts: Number(event.total || 0),
+    level: Number(event.level || 0),
+    months: Number(event.cumulative_months || 0),
+    event: EVENT_TYPES.find((item) => item.type === type)?.label || type
+  };
+  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
+}
+
+function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null }) {
+  const normalizedChannel = String(channelName || '').toLowerCase().trim();
+  let cache = [];
+
+  function currentAutomationSpacingSeconds() {
+    if (typeof getAutomationSpacingSeconds !== 'function') return 0;
+    const value = Number(getAutomationSpacingSeconds());
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
+
+  async function refreshCache() {
+    cache = await EventSubReaction.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
+    return cache;
+  }
+
+  async function initialize() {
+    await refreshCache();
+    console.log(`[EventSub Reactions] Loaded ${cache.length} reaction(s).`);
+  }
+
+  async function listReactions() {
+    await refreshCache();
+    const spacingSeconds = currentAutomationSpacingSeconds();
+    return cache.map((reaction) => reactionToClient(reaction, spacingSeconds));
+  }
+
+  async function saveReaction(input = {}) {
+    const normalized = normalizeReaction(input, currentAutomationSpacingSeconds());
+    const id = String(input.id || '').trim();
+    let saved;
+    if (id) {
+      saved = await EventSubReaction.findOneAndUpdate({ _id: id, channelName: normalizedChannel }, { $set: normalized }, { new: true, runValidators: true }).lean();
+      if (!saved) throw new Error('Reaction was not found.');
+    } else {
+      saved = (await EventSubReaction.create({ channelName: normalizedChannel, ...normalized })).toObject();
+    }
+    await refreshCache();
+    return reactionToClient(saved, currentAutomationSpacingSeconds());
+  }
+
+  async function deleteReaction(id) {
+    const deleted = await EventSubReaction.findOneAndDelete({ _id: id, channelName: normalizedChannel }).lean();
+    if (!deleted) throw new Error('Reaction was not found.');
+    await refreshCache();
+  }
+
+  async function setEnabled(id, enabled) {
+    const saved = await EventSubReaction.findOneAndUpdate({ _id: id, channelName: normalizedChannel }, { $set: { enabled: Boolean(enabled) } }, { new: true }).lean();
+    if (!saved) throw new Error('Reaction was not found.');
+    await refreshCache();
+    return reactionToClient(saved, currentAutomationSpacingSeconds());
+  }
+
+  async function sendTwitchShoutout(type, event) {
+    const actor = eventActor(event, type);
+    if (!actor.userId) throw new Error('This EventSub payload does not include a target broadcaster ID for shoutout.');
+    const [botAuth, broadcasterAuth, token] = await Promise.all([
+      getStoredAuth(),
+      getStoredBroadcasterAuth(),
+      getBotAccessToken()
+    ]);
+    const moderatorId = String(botAuth?.twitchUserId || '').trim();
+    const broadcasterId = String(broadcasterAuth?.twitchUserId || event?.broadcaster_user_id || event?.to_broadcaster_user_id || '').trim();
+    if (!moderatorId || !broadcasterId || !token) throw new Error('Bot/broadcaster OAuth is not ready for Twitch shoutouts.');
+    const url = new URL('https://api.twitch.tv/helix/chat/shoutouts');
+    url.searchParams.set('from_broadcaster_id', broadcasterId);
+    url.searchParams.set('to_broadcaster_id', actor.userId);
+    url.searchParams.set('moderator_id', moderatorId);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Client-Id': String(process.env.TWITCH_CLIENT_ID || '').trim() }
+    });
+    if (!response.ok) {
+      let detail = '';
+      try { detail = (await response.json())?.message || ''; } catch (_) {}
+      throw new Error(`Twitch shoutout failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+    }
+  }
+
+  async function runAction(action, type, event) {
+    if (action.delaySeconds > 0) await sleep(action.delaySeconds * 1000);
+    if (action.type === 'chat_message') {
+      const message = renderEventTemplate(action.value, type, event).trim();
+      if (message) {
+        await sendMessage(normalizedChannel, message);
+        if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
+      }
+      return;
+    }
+    if (action.type === 'twitch_announcement') {
+      const message = renderEventTemplate(action.value, type, event).trim();
+      if (message) {
+        if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
+        await sendAnnouncement(message, { color: action.color || 'primary' });
+        if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
+      }
+      return;
+    }
+    if (action.type === 'custom_command') {
+      const manager = getCustomCommandManager?.();
+      if (!manager) throw new Error('Custom Commands is not available.');
+      const rawMessage = renderEventTemplate(action.value, type, event).trim();
+      if (!rawMessage) return;
+      const actor = eventActor(event, type);
+      const result = await manager.handleMessage({
+        rawMessage,
+        displayName: actor.name || 'EventSub',
+        tags: { badges: { broadcaster: '1' }, mod: true, subscriber: true },
+        systemInvocation: true
+      });
+      if (!result?.matched) throw new Error(`Custom command did not match: ${rawMessage}`);
+      if (!result?.responded) throw new Error(`Custom command matched but did not respond (${result?.reason || 'unknown reason'}).`);
+      if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
+      return;
+    }
+    if (action.type === 'twitch_shoutout') {
+      await sendTwitchShoutout(type, event);
+      if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
+    }
+  }
+
+  async function runReaction(reaction, type, event) {
+    beginEventReaction();
+    console.log(`[EventSub Reactions] Starting ${reaction.name} for ${type}.`);
+    try {
+      for (const action of reaction.actions || []) {
+        if (action.enabled === false) continue;
+        try {
+          await runAction(action, type, event);
+        } catch (err) {
+          console.error(`[EventSub Reactions] ${reaction.name} action ${action.type} failed:`, err?.message || err);
+        }
+      }
+    } finally {
+      const configuredHold = Number(reaction.holdSeconds);
+      const spacingSeconds = currentAutomationSpacingSeconds();
+      const effectiveHoldSeconds = Math.max(
+        spacingSeconds,
+        Number.isFinite(configuredHold) && configuredHold > 0 ? configuredHold : 0
+      );
+      endEventReaction(effectiveHoldSeconds);
+      const holdSource = Number.isFinite(configuredHold) && configuredHold > 0 ? 'custom' : 'global Automation Spacing';
+      console.log(`[EventSub Reactions] Finished ${reaction.name}; recaps/timers held for ${effectiveHoldSeconds}s (${holdSource}).`);
+    }
+  }
+
+  async function handleEvent(type, event = {}) {
+    if (!EVENT_TYPE_SET.has(type)) return;
+    const candidates = cache.filter((reaction) => reaction.enabled !== false && reaction.eventType === type);
+    for (const reaction of candidates) {
+      const minimum = Number(reaction.minimumValue || 0);
+      if (minimum > 0 && numericEventValue(type, event) < minimum) continue;
+      void runReaction(reaction, type, event);
+    }
+  }
+
+  return {
+    initialize,
+    listReactions,
+    saveReaction,
+    deleteReaction,
+    setEnabled,
+    handleEvent,
+    refreshCache,
+    getHoldStatus: getEventReactionHoldStatus,
+    getAutomationSpacingSeconds: currentAutomationSpacingSeconds,
+    eventTypes: EVENT_TYPES
+  };
+}
+
+module.exports = {
+  EVENT_TYPES,
+  MAX_ACTIONS,
+  MAX_HOLD_SECONDS,
+  MAX_ACTION_DELAY_SECONDS,
+  createEventSubReactionManager,
+  renderEventTemplate,
+  numericEventValue
+};

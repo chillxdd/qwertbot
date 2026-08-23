@@ -137,7 +137,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     $('eventReactionHold').value = Number(reaction?.holdSeconds) > 0 ? String(reaction.holdSeconds) : '';
     updateHoldUi();
     actionsEl.replaceChildren();
-    const actionValues = reaction?.actions?.length ? reaction.actions : [{ type:'chat_message', value:'Thanks for the raid, $(raider)!', delaySeconds:0, enabled:true }];
+    const actionValues = reaction?.actions?.length ? reaction.actions : [{ type:'chat_message', value:'', delaySeconds:0, enabled:true }];
     actionValues.forEach(addAction);
     updateThresholdUi();
     updateAddActionState();
