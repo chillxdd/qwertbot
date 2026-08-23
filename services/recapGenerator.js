@@ -111,10 +111,10 @@ function formatStreamLore(streamLore = '') {
   const lore = String(streamLore || '').trim();
 
   if (!lore) {
-    return `STREAM-SPECIFIC LORE:\nNo manually supplied stream-specific lore is currently saved.`;
+    return `STREAM-SPECIFIC LORE:\nNo approved stream-specific lore is currently saved.`;
   }
 
-  return `STREAM-SPECIFIC LORE (MANUALLY SUPPLIED BY QWERT/MOD):\n${lore}\n\nSTREAM LORE RULES:\n- This lore is persistent context supplied by Qwert/mods to explain names, callbacks, recurring jokes, relationships between recurring bits, or other channel-specific references.\n- Use it only when it helps interpret CURRENT chat or VERIFIED TWITCH EVENTS.\n- Lore may explain what a current reference means, but it does NOT prove that a lore event happened again in the current recap window.\n- Do not present lore as a current-hour event unless current chat or verified Twitch events support that it happened now.\n- Do not force lore into the recap when current chat does not make it relevant.\n- If current source material conflicts with lore, trust the current source material.`;
+  return `STREAM-SPECIFIC LORE (APPROVED BACKGROUND CONTEXT):\n${lore}\n\nSTREAM LORE RULES:\n- This lore is persistent context supplied or approved by Qwert/mods to explain names, callbacks, recurring jokes, relationships between recurring bits, or other channel-specific references.\n- Use it only when it helps interpret CURRENT chat or VERIFIED TWITCH EVENTS.\n- Lore may explain what a current reference means, but it does NOT prove that a lore event happened again in the current recap window.\n- Do not present lore as a current-hour event unless current chat or verified Twitch events support that it happened now.\n- Do not force lore into the recap when current chat does not make it relevant.\n- If current source material conflicts with lore, trust the current source material.`;
 }
 
 function formatStreamTiming(streamTiming = {}) {

@@ -101,9 +101,9 @@ function truncateText(text, maxLength) {
   return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], twitchEvents = [], streamLore = '', streamTiming = {}, publicRecap = '', config = {}, viewerLearningEnabled = false }) {
+async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], twitchEvents = [], streamLore = '', streamTiming = {}, publicRecap = '', config = {}, viewerLearningEnabled = false, loreLearningEnabled = false }) {
   const normalizedConfig = normalizeSessionMemoryConfig(config);
-  if (!normalizedConfig.enabled && !viewerLearningEnabled) return null;
+  if (!normalizedConfig.enabled && !viewerLearningEnabled && !loreLearningEnabled) return null;
 
   const sourceChat = Array.isArray(chatLogs) ? chatLogs.filter(Boolean) : [];
   const sourceEvents = Array.isArray(twitchEvents) ? twitchEvents : [];
@@ -125,9 +125,25 @@ async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], 
 - Do not store sensitive/private personal data, health information, religion, politics, sexuality, legal names, contact details, precise locations, financial information, or anything that would be creepy/invasive to retain.
 - Avoid one-off moods, temporary activities, throwaway opinions, sarcasm, guesses, and ephemeral facts.
 - viewerUpdates should be empty when nothing durable is worth remembering.` : '';
-  const jsonShape = viewerLearningEnabled
-    ? '{"detailedSummary":"...","compactSummary":"...","topics":["..."],"people":["..."],"viewerUpdates":[{"username":"chat username exactly as shown","displayName":"display name","observations":[{"fact":"durable concise fact","confidence":"low|medium|high"}]}]}'
-    : '{"detailedSummary":"...","compactSummary":"...","topics":["..."],"people":["..."]}';
+  const loreLearningRules = loreLearningEnabled ? `
+- For loreObservations, suggest only durable CHANNEL-SPECIFIC lore that would help interpret future streams: recurring nicknames, callbacks, running jokes, meanings of recurring phrases, stable community customs, or relationships between recurring channel bits.
+- Learn lore candidates from SOURCE CHAT only. Stream Lore may be used only to avoid duplicates; never create a candidate from existing lore, title/category metadata, public recap text, or verified Twitch events.
+- Every lore observation is only a suggestion for moderator approval. Do not assume it will be accepted.
+- Do not suggest one-off stream events, current game progress, temporary plans, ordinary reactions, generic facts, or viewer-specific personal profile facts as lore.
+- Do not suggest sensitive/private personal data, health information, religion, politics, sexuality, legal names, contact details, precise locations, financial information, or invasive personal details.
+- Prefer concise standalone statements that will still make sense months later.
+- Do not suggest anything already clearly present in STREAM-SPECIFIC LORE.
+- loreObservations should be empty when nothing durable and channel-specific is worth proposing.` : '';
+
+  const jsonParts = [
+    '"detailedSummary":"..."',
+    '"compactSummary":"..."',
+    '"topics":["..."]',
+    '"people":["..."]'
+  ];
+  if (viewerLearningEnabled) jsonParts.push('"viewerUpdates":[{"username":"chat username exactly as shown","displayName":"display name","observations":[{"fact":"durable concise fact","confidence":"low|medium|high"}]}]');
+  if (loreLearningEnabled) jsonParts.push('"loreObservations":[{"text":"durable channel lore candidate","confidence":"low|medium|high"}]');
+  const jsonShape = `{${jsonParts.join(',')}}`;
 
   const prompt = `You are building TEMPORARY CURRENT-STREAM MEMORY for a Twitch chat bot in GeneralQwert's channel. This memory exists only until the stream ends and is used to answer viewer questions later in the same stream.
 
@@ -163,7 +179,7 @@ RULES:
 - detailedSummary must be at most ${MAX_DETAILED_SUMMARY_LENGTH} characters.
 - compactSummary must be at most ${MAX_COMPACT_SUMMARY_LENGTH} characters and should act like an index of the most important facts/topics in this block.
 - topics should contain short retrieval keywords/phrases.
-- people should contain viewer/streamer names explicitly relevant to retained facts.${viewerLearningRules}
+- people should contain viewer/streamer names explicitly relevant to retained facts.${viewerLearningRules}${loreLearningRules}
 - Return valid JSON only, no markdown fences.
 
 JSON SHAPE:
@@ -192,6 +208,13 @@ ${jsonShape}`;
       })).filter((update) => update.username && update.observations.length)
     : [];
 
+  const loreObservations = loreLearningEnabled && Array.isArray(parsed?.loreObservations)
+    ? parsed.loreObservations.slice(0, 20).map((observation) => ({
+        text: truncateText(observation?.text || observation?.fact || '', 400),
+        confidence: ['low', 'medium', 'high'].includes(observation?.confidence) ? observation.confidence : 'medium'
+      })).filter((observation) => observation.text)
+    : [];
+
   return {
     startedAtMs,
     endedAtMs,
@@ -199,7 +222,8 @@ ${jsonShape}`;
     compactSummary: compactSummary || detailedSummary,
     topics: normalizeList(parsed?.topics),
     people: normalizeList(parsed?.people),
-    viewerUpdates
+    viewerUpdates,
+    loreObservations
   };
 }
 

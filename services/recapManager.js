@@ -8,7 +8,7 @@ const {
   saveActiveRecapState,
   clearStreamRecapsByChannel
 } = require('./streamRecapHistory');
-const { getStreamLore } = require('./streamLore');
+const { getStreamLore, applyStreamLoreObservations } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
 const { generateSessionMemoryBlock, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, applyViewerProfileUpdates } = require('./viewerProfiles');
@@ -702,7 +702,7 @@ function createRecapManager({
 
       try {
         const loreRecord = await getStreamLore(channelName);
-        streamLore = String(loreRecord?.text || '');
+        streamLore = String(loreRecord?.effectiveText || loreRecord?.text || '');
         if (streamLore) console.log(`[Recap] Loaded ${streamLore.length} characters of stream-specific lore from MongoDB.`);
       } catch (loreErr) {
         console.error('[Recap] Could not load stream-specific lore. Continuing without it:', loreErr.message || loreErr);
@@ -767,7 +767,8 @@ function createRecapManager({
         } catch (settingsErr) {
           console.error('[Viewer Profiles] Could not load viewer-profile settings for hourly learning:', settingsErr?.message || settingsErr);
         }
-        if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled) {
+        const loreLearningEnabled = true;
+        if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled || loreLearningEnabled) {
           try {
             const generatedAtMs = Date.now();
             const sourceTimes = [
@@ -785,7 +786,8 @@ function createRecapManager({
               publicRecap: recapSummaryBody,
               streamTiming: { windowStartedAtMs, generatedAtMs },
               config: sessionMemoryConfig,
-              viewerLearningEnabled: viewerProfileSettings.automaticLearningEnabled
+              viewerLearningEnabled: viewerProfileSettings.automaticLearningEnabled,
+              loreLearningEnabled
             });
             if (memoryBlock && sessionMemoryConfig.enabled) {
               await saveSessionMemoryBlock({
@@ -804,8 +806,15 @@ function createRecapManager({
               });
               console.log(`[Viewer Profiles] Hourly learning processed ${memoryBlock.viewerUpdates.length} candidate viewer update(s); applied ${profileResult.applied}, skipped ${profileResult.skipped}.`);
             }
+            if (memoryBlock?.loreObservations?.length && loreLearningEnabled) {
+              const loreResult = await applyStreamLoreObservations({
+                channelName,
+                observations: memoryBlock.loreObservations
+              });
+              console.log(`[Stream Lore] Hourly learning processed ${memoryBlock.loreObservations.length} candidate lore observation(s); queued/updated ${loreResult.applied}, skipped ${loreResult.skipped}.`);
+            }
           } catch (memoryErr) {
-            console.error('[Session Memory/Viewer Profiles] Hourly intelligence generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
+            console.error('[Session Memory/Viewer Profiles/Stream Lore] Hourly intelligence generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
           }
         }
       }

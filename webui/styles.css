@@ -582,3 +582,9 @@ button.chat-edge-toggle:active:not(:disabled){transform:translateY(-50%)}
 .personality-cooldown-field .duration-field input{width:110px;max-width:110px;margin:5px 0}
 @media(max-width:600px){.duration-field input{width:100px;max-width:100px}.custom-global-cooldown-input-row .duration-field input{width:88px;max-width:88px}}
 
+.ai-lore-observations{display:flex;flex-direction:column;gap:8px;margin:10px 0 12px}
+.ai-lore-observation{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;background:#0e0e10;border:1px solid #2a2a30;border-radius:6px;padding:10px}
+.ai-lore-observation-copy{min-width:0;overflow-wrap:anywhere;flex:1}
+.ai-lore-observation-actions{display:flex;gap:7px;flex-wrap:wrap;flex:0 0 auto}
+.ai-lore-observation-actions button{margin:0}
+@media(max-width:700px){.ai-lore-observation{flex-direction:column}.ai-lore-observation-actions{width:100%}}

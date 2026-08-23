@@ -87,7 +87,7 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
     try {
       if (getDatabaseConnected()) {
         const loreRecord = await getStreamLore(channelName);
-        streamLore = String(loreRecord?.text || '');
+        streamLore = String(loreRecord?.effectiveText || loreRecord?.text || '');
       }
     } catch (loreErr) {
       console.error('[Recap] Could not load stream-specific lore for WebUI current-window test:', loreErr.message || loreErr);

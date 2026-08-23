@@ -1,4 +1,4 @@
-const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore } = require('../services/streamLore');
+const { MAX_STREAM_LORE_LENGTH, MAX_AI_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore, saveAiStreamLore, reviewStreamLoreObservation } = require('../services/streamLore');
 const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, setFactEnabled, deleteViewerProfile } = require('../services/viewerProfiles');
 
 function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
@@ -8,7 +8,7 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     }
     try {
       const lore = await getStreamLore(channelName);
-      return res.json({ success: true, text: lore.text, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH });
+      return res.json({ success: true, text: lore.text, aiText: lore.aiText, pendingObservations: lore.pendingObservations, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH, maxAiLength: MAX_AI_STREAM_LORE_LENGTH });
     } catch (err) {
       console.error('[Memory] Could not load stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: 'Could not load stream-specific lore.' });
@@ -30,6 +30,38 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     } catch (err) {
       console.error('[Memory] Could not save stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
+    }
+  });
+
+
+  app.post('/stream-lore/ai-save', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    const text = typeof req.body.text === 'string' ? req.body.text : '';
+    if (text.length > MAX_AI_STREAM_LORE_LENGTH) {
+      return res.status(400).json({ success: false, error: `Approved AI lore is too long. Maximum is ${MAX_AI_STREAM_LORE_LENGTH} characters.` });
+    }
+    try {
+      const lore = await saveAiStreamLore(channelName, text);
+      console.log(`[Memory] Approved AI lore saved (${lore.aiText.length} characters).`);
+      return res.json({ success: true, aiText: lore.aiText, pendingObservations: lore.pendingObservations, updatedAt: lore.updatedAt, maxAiLength: MAX_AI_STREAM_LORE_LENGTH });
+    } catch (err) {
+      console.error('[Memory] Could not save approved AI lore:', err.message || err);
+      return res.status(500).json({ success: false, error: err.message || 'Could not save approved AI lore.' });
+    }
+  });
+
+  app.post('/stream-lore/observation-review', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) {
+      return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    }
+    try {
+      const lore = await reviewStreamLoreObservation(channelName, req.body?.id, req.body?.action);
+      return res.json({ success: true, aiText: lore.aiText, pendingObservations: lore.pendingObservations, updatedAt: lore.updatedAt, maxAiLength: MAX_AI_STREAM_LORE_LENGTH });
+    } catch (err) {
+      console.error('[Memory] Could not review AI lore observation:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not review AI lore observation.' });
     }
   });
 

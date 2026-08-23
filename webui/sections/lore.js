@@ -3,7 +3,10 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   const personalityNameMaxLength = Number(maxBotPersonalityNameLength) || 80;
   const personalityMaxLength = Number(maxBotPersonalityLength) || 12000;
   const sessionMemoryPromptMaxLength = 6000;
+  let aiLoreMaxLength = 12000;
+  let pendingLoreObservations = [];
   $('streamLore').maxLength = maxLength;
+  $('aiStreamLore').maxLength = aiLoreMaxLength;
   $('botPersonalityName').maxLength = personalityNameMaxLength;
   $('botPersonality').maxLength = personalityMaxLength;
   $('sessionMemoryPromptInstructions').maxLength = sessionMemoryPromptMaxLength;
@@ -33,8 +36,40 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     if (viewerProfiles?.onVisibilityChange) viewerProfiles.onVisibilityChange(profilesSelected);
   }
 
+  function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+
   function updateCount() {
     $('loreCount').textContent = `${$('streamLore').value.length}/${maxLength} characters`;
+  }
+
+  function updateAiLoreCount() {
+    $('aiLoreCount').textContent = `${$('aiStreamLore').value.length}/${aiLoreMaxLength} characters`;
+  }
+
+  function renderLoreObservations() {
+    const list = Array.isArray(pendingLoreObservations) ? pendingLoreObservations : [];
+    $('aiLoreObservations').innerHTML = list.length ? list.map((item) => `
+      <div class="ai-lore-observation" data-observation-id="${esc(item.id)}">
+        <div class="ai-lore-observation-copy">
+          <div>${esc(item.text)}</div>
+          <div class="detail">${esc(item.confidence || 'medium')} confidence · observed ${Math.max(1, Number(item.evidenceCount || 1))}x</div>
+        </div>
+        <div class="ai-lore-observation-actions">
+          <button class="ai-lore-approve-btn" type="button">Approve</button>
+          <button class="secondary ai-lore-reject-btn" type="button">Reject</button>
+        </div>
+      </div>`).join('') : '<div class="detail">No AI lore observations awaiting approval.</div>';
+
+    $('aiLoreObservations').querySelectorAll('.ai-lore-approve-btn, .ai-lore-reject-btn').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.ai-lore-observation');
+        if (!row?.dataset?.observationId) return;
+        const action = button.classList.contains('ai-lore-approve-btn') ? 'approve' : 'reject';
+        await reviewLoreObservation(row.dataset.observationId, action);
+      };
+    });
   }
 
   function updatePersonalityCount() {
@@ -107,8 +142,16 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
         return;
       }
       $('streamLore').value = d.text || '';
+      aiLoreMaxLength = Number(d.maxAiLength) || 12000;
+      $('aiStreamLore').maxLength = aiLoreMaxLength;
+      $('aiStreamLore').value = d.aiText || '';
+      pendingLoreObservations = Array.isArray(d.pendingObservations) ? d.pendingObservations : [];
       updateCount();
+      updateAiLoreCount();
+      renderLoreObservations();
       $('loreMsg').textContent = d.updatedAt ? '' : 'No lore saved yet.';
+      $('aiLoreMsg').textContent = '';
+      $('aiLoreObservationMsg').textContent = '';
     } catch (_) {
       $('loreMsg').textContent = 'Could not load lore.';
     }
@@ -130,6 +173,50 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('loreMsg').textContent = 'Could not save lore.';
     } finally {
       $('saveLoreBtn').disabled = false;
+    }
+  }
+
+
+  async function saveAiLore() {
+    try {
+      $('saveAiLoreBtn').disabled = true;
+      $('aiLoreMsg').textContent = 'Saving...';
+      const d = await postJson('/stream-lore/ai-save', { text: $('aiStreamLore').value });
+      if (!d.success) {
+        $('aiLoreMsg').textContent = d.error || 'Could not save approved AI lore.';
+        return;
+      }
+      aiLoreMaxLength = Number(d.maxAiLength) || aiLoreMaxLength;
+      $('aiStreamLore').maxLength = aiLoreMaxLength;
+      $('aiStreamLore').value = d.aiText || '';
+      pendingLoreObservations = Array.isArray(d.pendingObservations) ? d.pendingObservations : pendingLoreObservations;
+      updateAiLoreCount();
+      renderLoreObservations();
+      $('aiLoreMsg').textContent = d.aiText ? 'Saved.' : 'AI lore cleared.';
+    } catch (_) {
+      $('aiLoreMsg').textContent = 'Could not save approved AI lore.';
+    } finally {
+      $('saveAiLoreBtn').disabled = false;
+    }
+  }
+
+  async function reviewLoreObservation(id, action) {
+    try {
+      $('aiLoreObservationMsg').textContent = action === 'approve' ? 'Approving observation...' : 'Rejecting observation...';
+      const d = await postJson('/stream-lore/observation-review', { id, action });
+      if (!d.success) {
+        $('aiLoreObservationMsg').textContent = d.error || 'Could not review lore observation.';
+        return;
+      }
+      aiLoreMaxLength = Number(d.maxAiLength) || aiLoreMaxLength;
+      $('aiStreamLore').maxLength = aiLoreMaxLength;
+      $('aiStreamLore').value = d.aiText || '';
+      pendingLoreObservations = Array.isArray(d.pendingObservations) ? d.pendingObservations : [];
+      updateAiLoreCount();
+      renderLoreObservations();
+      $('aiLoreObservationMsg').textContent = action === 'approve' ? 'Observation approved and added to AI lore.' : 'Observation rejected.';
+    } catch (_) {
+      $('aiLoreObservationMsg').textContent = 'Could not review lore observation.';
     }
   }
 
@@ -256,8 +343,11 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
   $('viewerProfilesViewTab').onclick = () => selectMemoryView('profiles');
   $('streamLore').oninput = updateCount;
+  $('aiStreamLore').oninput = updateAiLoreCount;
   $('saveLoreBtn').onclick = saveLore;
   $('undoLoreBtn').onclick = loadLore;
+  $('saveAiLoreBtn').onclick = saveAiLore;
+  $('undoAiLoreBtn').onclick = loadLore;
   $('botPersonality').oninput = updatePersonalityCount;
   $('botPersonalityUseCooldownResponse').onchange = syncCooldownResponseVisibility;
   $('botPersonalityRetryEnabled').onchange = syncAiRetryControls;
@@ -268,6 +358,8 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('saveBotPersonalityBtn').onclick = saveBotPersonality;
   $('undoBotPersonalityBtn').onclick = loadBotPersonality;
   updateCount();
+  updateAiLoreCount();
+  renderLoreObservations();
   updatePersonalityCount();
   updateSessionMemoryPromptCount();
   syncCooldownResponseVisibility();

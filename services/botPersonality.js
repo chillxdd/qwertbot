@@ -373,7 +373,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     if (typeof getStreamLore === 'function') {
       try {
         const loreRecord = await getStreamLore(normalizedChannel);
-        streamLore = String(loreRecord?.text || '').trim();
+        streamLore = String(loreRecord?.effectiveText || loreRecord?.text || '').trim();
       } catch (err) {
         console.error('[Tagged Questions] Could not load stream lore for tagged question:', err?.message || err);
       }
@@ -432,7 +432,7 @@ ${config.personality}
 
 ${currentStreamContext}
 
-STREAM-SPECIFIC LORE (saved by the broadcaster/mods; background context only):
+STREAM-SPECIFIC LORE (saved or approved by the broadcaster/mods; background context only):
 ${streamLore || '(none saved)'}
 
 CURRENT-STREAM SESSION MEMORY (temporary same-stream evidence; may include completed hourly memory blocks and recent meaningful chat):
