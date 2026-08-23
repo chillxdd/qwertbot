@@ -274,11 +274,32 @@ function randomNumberInclusive(min, max, decimalPlaces = 0) {
   return (scaled / scale).toFixed(decimals);
 }
 
+function ordinalize(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? '');
+
+  const integer = Math.trunc(number);
+  const absolute = Math.abs(integer);
+  const mod100 = absolute % 100;
+  const mod10 = absolute % 10;
+  const suffix = mod100 >= 11 && mod100 <= 13
+    ? 'th'
+    : mod10 === 1
+      ? 'st'
+      : mod10 === 2
+        ? 'nd'
+        : mod10 === 3
+          ? 'rd'
+          : 'th';
+  return `${integer}${suffix}`;
+}
+
 function renderResponse(template, context) {
   const user = String(context.user || 'viewer');
   const query = String(context.query || '');
   const toUser = firstTarget(query, user);
   const count = String(context.count ?? 0);
+  const counter = ordinalize(context.count ?? 0);
   const followAge = String(context.followAge || '');
   const followDate = String(context.followDate || '');
   const game = String(context.game || '');
@@ -303,6 +324,7 @@ function renderResponse(template, context) {
     ['$(user)', user], ['$user', user],
     ['$(touser)', toUser], ['$touser', toUser],
     ['$(query)', query], ['$query', query],
+    ['$(counter)', counter], ['$counter', counter],
     ['$(count)', count], ['$count', count],
     ['$(followage)', followAge], ['$followage', followAge],
     ['$(followdate)', followDate], ['$followdate', followDate],
@@ -921,6 +943,7 @@ module.exports = {
   normalizeTrigger,
   normalizeResponseCondition,
   renderResponse,
+  ordinalize,
   randomIntegerInclusive,
   randomNumberInclusive,
   MAX_RANDOM_DECIMAL_PLACES,

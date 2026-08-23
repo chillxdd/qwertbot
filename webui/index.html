@@ -334,6 +334,7 @@
             <div class="custom-variable-row"><code>$(touser)</code> <span>or</span> <code>$touser</code><div class="detail">First argument after the trigger, with a leading @ removed; falls back to the triggering viewer. Example: <code>!bonk @Qwert</code> + <code>Bonked $(touser)!</code> → <code>Bonked Qwert!</code></div></div>
             <div class="custom-variable-row"><code>$(query)</code> <span>or</span> <code>$query</code><div class="detail">Everything after the trigger. Example: <code>!say hello there</code> + <code>You said: $(query)</code> → <code>You said: hello there</code></div></div>
             <div class="custom-variable-row"><code>$(count)</code> <span>or</span> <code>$count</code><div class="detail">Persistent counter after a successful trigger increments it. Example: <code>Hydration #$(count)</code> → <code>Hydration #42</code></div></div>
+            <div class="custom-variable-row"><code>$(counter)</code> <span>or</span> <code>$counter</code><div class="detail">The same persistent counter with an ordinal suffix. Examples: <code>$(counter)</code> → <code>1st</code>, <code>2nd</code>, <code>3rd</code>, <code>11th</code>, <code>22nd</code>.</div></div>
             <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Without DEC it returns a whole integer. Optional DEC sets decimal places from 0–5. Example: <code>$(random 1 10 5)</code> → <code>3.14159</code>.</div></div>
             <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding SqwertArmyBot and known utility bots. Example: <code>$(randomuser) has been selected!</code></div></div>
             <div class="custom-variable-row"><code>$(followage)</code> <span>or</span> <code>$followage</code><div class="detail">How long <code>$(touser)</code> has followed Qwert, formatted compactly for chat (for example <code>2 years, 3 months</code>, <code>18 days</code>, or <code>42 seconds</code>). With no command argument, this checks the viewer who triggered the command. Example: <code>Following for $(followage).</code></div></div>
@@ -498,7 +499,7 @@
             <div class="custom-variable-help-body">
               <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Optional DEC sets 0–5 decimal places; omitted DEC keeps whole-integer behavior.</div></div>
               <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots.</div></div>
-              <div class="custom-variable-note detail">Timer responses have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, and <code>$(count)</code> are unavailable.</div>
+              <div class="custom-variable-note detail">Timer responses have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, <code>$(count)</code>, and <code>$(counter)</code> are unavailable.</div>
             </div>
           </dialog>
 
