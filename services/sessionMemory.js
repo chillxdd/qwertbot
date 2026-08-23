@@ -101,6 +101,25 @@ function truncateText(text, maxLength) {
   return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
+function isRoutineEventSubObservation(text) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!value) return false;
+
+  const routineTelemetryPatterns = [
+    /\bsubscribed(?:\s+to\s+qwert)?(?:\s+at)?\s+tier\s*[123]\b/,
+    /\bresubscribed\b/,
+    /\bcumulative\s+months?\b/,
+    /\bgifted\s+\d*\s*(?:sub(?:scription)?s?)\b/,
+    /\bcheered\s+\d*\s*bits?\b/,
+    /\bfollowed\s+qwert\b/,
+    /\braided\s+qwert(?:\s+with\s+\d+\s+viewers?)?\b/,
+    /\bhype\s+train\s+(?:began|started|ended)\b/,
+    /\bqwert\s+went\s+(?:live|offline)\b/
+  ];
+
+  return routineTelemetryPatterns.some((pattern) => pattern.test(value));
+}
+
 async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], twitchEvents = [], streamLore = '', streamTiming = {}, publicRecap = '', config = {}, viewerLearningEnabled = false, streamLoreLearningEnabled = false }) {
   const normalizedConfig = normalizeSessionMemoryConfig(config);
   if (!normalizedConfig.enabled && !viewerLearningEnabled && !streamLoreLearningEnabled) return null;
@@ -119,18 +138,26 @@ async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], 
   const extraInstructions = normalizedConfig.promptInstructions || '(none)';
 
   const viewerLearningRules = viewerLearningEnabled ? `
-- For viewerUpdates, only include durable viewer-specific information that would still be useful in future streams.
+- For viewerUpdates, include durable viewer-specific information that could genuinely help the bot recognize or understand that viewer in future streams.
 - Only learn a fact from something the viewer says about themselves, or from a clearly established recurring interaction involving them. Do not treat another chatter's claim about a person as truth.
 - Learn viewer profile facts from SOURCE CHAT only. Never create viewer facts from Stream Lore, title/category metadata, public recap text, or verified Twitch events.
+- Routine Twitch telemetry is NEVER a viewer-profile fact: subscriptions/resubs, cumulative subscription months, follows, raids, cheers/Bits, gifted subs, Hype Trains, and stream online/offline status must not become viewer observations.
+- Do not require repetition for a clearly self-stated durable preference, recurring hobby, stable community role, or established personal callback. One clear self-stated durable fact may be proposed at low or medium confidence; repeated evidence may raise confidence.
+- Recurring interaction patterns may also be proposed when SOURCE CHAT shows them clearly enough to be useful later.
 - Do not store sensitive/private personal data, health information, religion, politics, sexuality, legal names, contact details, precise locations, financial information, or anything that would be creepy/invasive to retain.
 - Avoid one-off moods, temporary activities, throwaway opinions, sarcasm, guesses, and ephemeral facts.
+- Prefer a few useful candidates over being so conservative that active chatters never accumulate any profile context.
 - viewerUpdates should be empty when nothing durable is worth remembering.` : '';
   const streamLoreLearningRules = streamLoreLearningEnabled ? `
-- For streamLoreObservations, suggest only durable CHANNEL-SPECIFIC lore that may help in future streams: recurring jokes, nicknames, terminology, traditions, callbacks, or stable community conventions.
+- For streamLoreObservations, suggest only CHANNEL-SPECIFIC context that may help interpret future streams: recurring jokes, nicknames, terminology, traditions, callbacks, running bits, or emerging community conventions.
 - Learn stream lore from SOURCE CHAT only. Never generate lore observations from the existing Stream Lore, metadata, public recap, or verified Twitch events.
+- Routine Twitch telemetry is NEVER stream lore: subscriptions/resubs, cumulative subscription months, follows, raids, cheers/Bits, gifted subs, Hype Trains, and stream online/offline status must not become lore observations.
+- Do not require proof across multiple streams before proposing something. A candidate may be proposed when the current chat window contains at least two distinct supporting messages/interactions, or when chat clearly refers to something as an already-established callback, nickname, tradition, or running joke.
+- Use low confidence for a plausible emerging pattern, medium for clearly repeated/established context, and high only when chat makes the convention unusually explicit and unambiguous.
+- Prefer a small number of useful observations over being overly conservative. Moderator approval is required before learned lore is used, so propose genuinely useful candidates rather than waiting for near-certainty.
 - Do not suggest one-off events, current gameplay outcomes, temporary plans, ordinary chatter, generic facts about games, or speculative interpretations.
-- Preserve uncertainty. If a recurring meaning is not clear enough to be useful later, omit it.
-- streamLoreObservations should be empty when nothing durable is worth proposing.` : '';
+- Preserve uncertainty. If the meaning is too vague to help interpret a future reference, omit it.
+- streamLoreObservations should be empty when nothing durable or meaningfully reusable is worth proposing.` : '';
   const jsonFields = [
     '"detailedSummary":"..."',
     '"compactSummary":"..."',
@@ -200,7 +227,7 @@ ${jsonShape}`;
         observations: (Array.isArray(update?.observations) ? update.observations : []).slice(0, 12).map((observation) => ({
           fact: truncateText(observation?.fact || observation?.text || '', 400),
           confidence: ['low', 'medium', 'high'].includes(observation?.confidence) ? observation.confidence : 'medium'
-        })).filter((observation) => observation.fact)
+        })).filter((observation) => observation.fact && !isRoutineEventSubObservation(observation.fact))
       })).filter((update) => update.username && update.observations.length)
     : [];
 
@@ -208,7 +235,7 @@ ${jsonShape}`;
     ? parsed.streamLoreObservations.slice(0, 20).map((observation) => ({
         fact: truncateText(observation?.fact || observation?.text || observation?.observation || '', 400),
         confidence: ['low', 'medium', 'high'].includes(observation?.confidence) ? observation.confidence : 'medium'
-      })).filter((observation) => observation.fact)
+      })).filter((observation) => observation.fact && !isRoutineEventSubObservation(observation.fact))
     : [];
 
   return {
