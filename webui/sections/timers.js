@@ -2,7 +2,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const maxTimerNameLength = Number(config.maxTimerNameLength || 80);
   const minIntervalSeconds = Number(config.minIntervalSeconds || 30);
   const maxIntervalSeconds = Number(config.maxIntervalSeconds || 86400);
-  const maxResponses = Number(config.maxResponses || 25);
+  const maxResponses = Number(config.maxResponses || 25); // backend limit; shown as actions in the UI
   const maxResponseLength = Number(config.maxResponseLength || 500);
   const maxStartDelaySeconds = Number(config.maxStartDelaySeconds || 86400);
   const maxJitterSeconds = Number(config.maxJitterSeconds || 86400);
@@ -92,9 +92,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     const history = Array.isArray(timer.history) ? [...timer.history].reverse() : [];
     if (!history.length) return '<div class="detail">No successful fires recorded yet.</div>';
     return history.slice(0, 10).map((entry) => {
-      const responseNumber = Number(entry.responseIndex) >= 0 ? `response #${Number(entry.responseIndex) + 1}` : 'response';
+      const responseNumber = Number(entry.responseIndex) >= 0 ? `action #${Number(entry.responseIndex) + 1}` : 'action';
+      const actionType = entry.actionType === 'twitch_announcement' ? `Announcement (${entry.actionColor || 'primary'})` : 'Chat Message';
       const reason = entry.reason === 'manual' ? 'manual Fire Now' : 'scheduled';
-      return `<div class="detail">${esc(formatDate(entry.firedAt))} — ${esc(responseNumber)} · ${esc(reason)}</div>`;
+      return `<div class="detail">${esc(formatDate(entry.firedAt))} — ${esc(responseNumber)} · ${esc(actionType)} · ${esc(reason)}</div>`;
     }).join('');
   }
 
@@ -174,10 +175,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
             <strong class="custom-command-name">${esc(timer.name || 'Timer')}</strong>
             <span class="custom-command-state ${timer.enabled ? 'enabled' : 'disabled'}">${timer.enabled ? 'Enabled' : 'Disabled'}</span>
           </div>
-          <div class="detail">Every ${esc(formatInterval(timer.intervalSeconds))}${jitter} · ${esc(priorityLabel(timer.priority))} priority · ${responseCount} response${responseCount === 1 ? '' : 's'} · ${esc(modeLabel(timer.responseMode))}</div>
+          <div class="detail">Every ${esc(formatInterval(timer.intervalSeconds))}${jitter} · ${esc(priorityLabel(timer.priority))} priority · ${responseCount} action${responseCount === 1 ? '' : 's'} · ${esc(modeLabel(timer.responseMode))}</div>
           <div class="detail">${esc(overrideText)} · ${esc(activityText)}</div>
           <div class="detail">Last fired: ${esc(formatDate(timer.lastFiredAt))} · ${esc(nextLabel)}: ${esc(formatDate(timer.nextRetryAt || timer.nextDueAt))}${esc(waiting)}</div>
-          <div class="detail">Times fired: ${Number(timer.timesFired || 0)}${timer.lastResponse ? ` · Last response: ${esc(timer.lastResponse)}` : ''}</div>
+          <div class="detail">Times fired: ${Number(timer.timesFired || 0)}${timer.lastResponse ? ` · Last action: ${esc(timer.lastResponse)}` : ''}</div>
           <details class="timer-history"><summary>Recent fire history</summary>${renderHistory(timer)}</details>
         </div>
         <div class="custom-command-actions timer-card-actions">
@@ -241,11 +242,28 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     }
   }
 
-  function makeResponseRow(value = '', weight = 1) {
+  function makeResponseRow(value = '', weight = 1, actionType = 'chat_message', actionColor = 'primary') {
     const row = document.createElement('div');
     row.className = 'custom-response-row timer-response-row';
     row.innerHTML = `
-      <textarea class="custom-response-input timer-response-input" maxlength="${maxResponseLength}" placeholder="Timer response"></textarea>
+      <div class="custom-response-rule-row timer-action-type-row">
+        <label>Action
+          <select class="timer-action-type">
+            <option value="chat_message">Chat Message</option>
+            <option value="twitch_announcement">Twitch Announcement</option>
+          </select>
+        </label>
+        <label class="timer-action-color-wrap">Announcement Color
+          <select class="timer-action-color">
+            <option value="primary">Primary</option>
+            <option value="purple">Purple</option>
+            <option value="blue">Blue</option>
+            <option value="green">Green</option>
+            <option value="orange">Orange</option>
+          </select>
+        </label>
+      </div>
+      <textarea class="custom-response-input timer-response-input" maxlength="${maxResponseLength}" placeholder="Action message"></textarea>
       <div class="custom-response-rule-row timer-weight-row">
         <label>Weight
           <input class="timer-response-weight" type="number" min="0.001" step="0.001" value="1">
@@ -257,13 +275,25 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       </div>`;
     const input = row.querySelector('.timer-response-input');
     const weightInput = row.querySelector('.timer-response-weight');
+    const typeInput = row.querySelector('.timer-action-type');
+    const colorInput = row.querySelector('.timer-action-color');
+    const colorWrap = row.querySelector('.timer-action-color-wrap');
     const count = row.querySelector('.timer-response-count');
     input.value = value;
     weightInput.value = Number(weight) > 0 ? Number(weight) : 1;
+    typeInput.value = actionType === 'twitch_announcement' ? 'twitch_announcement' : 'chat_message';
+    colorInput.value = ['primary', 'purple', 'blue', 'green', 'orange'].includes(actionColor) ? actionColor : 'primary';
+    const syncType = () => {
+      const announcement = typeInput.value === 'twitch_announcement';
+      colorWrap.hidden = !announcement;
+      input.placeholder = announcement ? 'Announcement message' : 'Chat message';
+    };
     const updateCount = () => { count.textContent = `${Array.from(input.value).length}/${maxResponseLength}`; };
     input.oninput = updateCount;
+    typeInput.onchange = syncType;
     row.querySelector('.timer-remove-response').onclick = () => { row.remove(); syncResponseMode(); };
     updateCount();
+    syncType();
     responsesEl.appendChild(row);
     syncResponseMode();
   }
@@ -271,8 +301,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   function syncResponseMode() {
     const weighted = $('timerResponseMode').value === 'weighted';
     $('timerResponseModeHelp').textContent = weighted
-      ? 'Specified Weight chooses responses proportionally. Example: weights 1, 2, and 7 are approximately 10%, 20%, and 70%.'
-      : 'Equal Odds randomly chooses between all responses.';
+      ? 'Specified Weight chooses actions proportionally. Example: weights 1, 2, and 7 are approximately 10%, 20%, and 70%.'
+      : 'Equal Odds randomly chooses between all actions.';
     responsesEl.querySelectorAll('.timer-weight-row').forEach((el) => { el.hidden = !weighted; });
   }
 
@@ -314,7 +344,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       $('timerEnabled').checked = timer.enabled !== false;
       responsesEl.innerHTML = '';
       const responses = Array.isArray(timer.responses) && timer.responses.length ? timer.responses : [''];
-      responses.forEach((response, index) => makeResponseRow(response, timer.responseWeights?.[index] ?? 1));
+      responses.forEach((response, index) => makeResponseRow(response, timer.responseWeights?.[index] ?? 1, timer.actionTypes?.[index] || 'chat_message', timer.actionColors?.[index] || 'primary'));
       syncResponseMode();
     }
     editorEl.classList.add('open');
@@ -332,7 +362,9 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   function collectResponses() {
     return [...responsesEl.querySelectorAll('.timer-response-row')].map((row) => ({
       response: row.querySelector('.timer-response-input').value.trim(),
-      weight: Number(row.querySelector('.timer-response-weight').value)
+      weight: Number(row.querySelector('.timer-response-weight').value),
+      actionType: row.querySelector('.timer-action-type').value,
+      actionColor: row.querySelector('.timer-action-color').value
     }));
   }
 
@@ -373,9 +405,9 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
 
     const rows = collectResponses();
     const nonblank = rows.filter((row) => row.response);
-    if (!nonblank.length) return setResponseMessage('Add at least one response.', true);
-    if (nonblank.length > maxResponses) return setResponseMessage(`A timer can have at most ${maxResponses} responses.`, true);
-    if (nonblank.some((row) => Array.from(row.response).length > maxResponseLength)) return setResponseMessage(`Each response can contain at most ${maxResponseLength} characters.`, true);
+    if (!nonblank.length) return setResponseMessage('Add at least one action.', true);
+    if (nonblank.length > maxResponses) return setResponseMessage(`A timer can have at most ${maxResponses} actions.`, true);
+    if (nonblank.some((row) => Array.from(row.response).length > maxResponseLength)) return setResponseMessage(`Each action message can contain at most ${maxResponseLength} characters.`, true);
 
     const responseMode = $('timerResponseMode').value === 'weighted' ? 'weighted' : 'equal';
     if (responseMode === 'weighted' && nonblank.some((row) => !Number.isFinite(row.weight) || row.weight <= 0)) {
@@ -396,6 +428,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
         responses: nonblank.map((row) => row.response),
         responseMode,
         responseWeights: nonblank.map((row) => responseMode === 'weighted' ? row.weight : 1),
+        actionTypes: nonblank.map((row) => row.actionType),
+        actionColors: nonblank.map((row) => row.actionColor),
         enabled: $('timerEnabled').checked
       });
       if (!d.success) throw new Error(d.error || 'Could not save timer.');
@@ -435,7 +469,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     try {
       const d = await postJson('/timers/preview', { id: timer.id });
       if (!d.success) throw new Error(d.error || 'Could not preview timer.');
-      $('timerPreviewBody').innerHTML = `<div><strong>${esc(timer.name)}</strong></div><div class="detail">Rendered response #${Number(d.preview?.responseIndex ?? 0) + 1}</div><div class="timer-preview-text">${esc(d.preview?.rendered || '')}</div>`;
+      $('timerPreviewBody').innerHTML = `<div><strong>${esc(timer.name)}</strong></div><div class="detail">Rendered action #${Number(d.preview?.responseIndex ?? 0) + 1} · ${d.preview?.actionType === 'twitch_announcement' ? `Announcement (${esc(d.preview?.actionColor || 'primary')})` : 'Chat Message'}</div><div class="timer-preview-text">${esc(d.preview?.rendered || '')}</div>`;
       $('timerPreviewDialog').showModal();
     } catch (err) {
       setListMessage(err.message || 'Could not preview timer.', true);
@@ -500,7 +534,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   $('addTimerBtn').onclick = () => openEditor();
   $('refreshTimersBtn').onclick = loadTimers;
   $('addTimerResponseBtn').onclick = () => {
-    if (responsesEl.querySelectorAll('.timer-response-row').length >= maxResponses) return setResponseMessage(`A timer can have at most ${maxResponses} responses.`, true);
+    if (responsesEl.querySelectorAll('.timer-response-row').length >= maxResponses) return setResponseMessage(`A timer can have at most ${maxResponses} actions.`, true);
     setResponseMessage('');
     makeResponseRow();
   };

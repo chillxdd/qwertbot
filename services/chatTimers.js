@@ -8,6 +8,8 @@ const MAX_TIMER_RESPONSES = 25;
 const MAX_TIMER_RESPONSE_LENGTH = 500;
 const TIMER_RESPONSE_MODES = ['equal', 'weighted'];
 const TIMER_PRIORITIES = ['high', 'normal', 'low'];
+const TIMER_ACTION_TYPES = ['chat_message', 'twitch_announcement'];
+const TIMER_ANNOUNCEMENT_COLORS = ['primary', 'purple', 'blue', 'green', 'orange'];
 const MAX_START_DELAY_SECONDS = 86400;
 const MAX_JITTER_SECONDS = 86400;
 const MAX_MINIMUM_CHAT_MESSAGES = 100000;
@@ -83,10 +85,10 @@ function normalizeInput(input = {}, settings = {}) {
     ? input.responses.map((value) => String(value || '').trim()).filter(Boolean)
     : [];
   if (responses.length < 1 || responses.length > MAX_TIMER_RESPONSES) {
-    throw new Error(`Add between 1 and ${MAX_TIMER_RESPONSES} timer responses.`);
+    throw new Error(`Add between 1 and ${MAX_TIMER_RESPONSES} timer actions.`);
   }
   if (responses.some((value) => value.length > MAX_TIMER_RESPONSE_LENGTH)) {
-    throw new Error(`Each timer response can contain at most ${MAX_TIMER_RESPONSE_LENGTH} characters.`);
+    throw new Error(`Each timer action message can contain at most ${MAX_TIMER_RESPONSE_LENGTH} characters.`);
   }
 
   const responseMode = TIMER_RESPONSE_MODES.includes(String(input.responseMode || '').toLowerCase())
@@ -100,6 +102,15 @@ function normalizeInput(input = {}, settings = {}) {
     return value;
   });
 
+  const actionTypes = responses.map((_, index) => {
+    const value = String(input.actionTypes?.[index] || 'chat_message').toLowerCase();
+    return TIMER_ACTION_TYPES.includes(value) ? value : 'chat_message';
+  });
+  const actionColors = responses.map((_, index) => {
+    const value = String(input.actionColors?.[index] || 'primary').toLowerCase();
+    return TIMER_ANNOUNCEMENT_COLORS.includes(value) ? value : 'primary';
+  });
+
   return {
     name,
     intervalSeconds: Math.round(intervalSeconds * 1000) / 1000,
@@ -111,6 +122,8 @@ function normalizeInput(input = {}, settings = {}) {
     responses,
     responseMode,
     responseWeights,
+    actionTypes,
+    actionColors,
     enabled: input.enabled !== false
   };
 }
@@ -221,7 +234,7 @@ async function renderTimerResponse(template, getRandomChatters) {
   return Array.from(output).slice(0, MAX_TIMER_RESPONSE_LENGTH).join('').trim();
 }
 
-function createChatTimerManager({ channelName, sendMessage, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null }) {
+function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = null, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   let settings = {
@@ -380,6 +393,8 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
       responses: Array.isArray(timer.responses) ? timer.responses : [],
       responseMode: TIMER_RESPONSE_MODES.includes(timer.responseMode) ? timer.responseMode : 'equal',
       responseWeights: Array.isArray(timer.responseWeights) ? timer.responseWeights : [],
+      actionTypes: Array.isArray(timer.actionTypes) ? timer.actionTypes : [],
+      actionColors: Array.isArray(timer.actionColors) ? timer.actionColors : [],
       enabled: timer.enabled !== false,
       scheduleStreamId: String(timer.scheduleStreamId || ''),
       lastFiredAt: timer.lastFiredAt || null,
@@ -420,7 +435,9 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
   async function updateSuccessfulFire(timer, selection, rendered, reason = 'scheduled') {
     const now = new Date();
     const nextDueAt = new Date(calculateNextDueAt(timer, now.getTime()));
-    const historyEntry = { firedAt: now, responseIndex: selection.index, response: rendered, reason };
+    const actionType = TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message';
+    const actionColor = TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary';
+    const historyEntry = { firedAt: now, responseIndex: selection.index, response: rendered, actionType, actionColor, reason };
     const currentHistory = Array.isArray(timer.history) ? timer.history : [];
     const nextHistory = [...currentHistory, historyEntry].slice(-HISTORY_LIMIT);
     const patch = {
@@ -437,7 +454,7 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
     Object.assign(timer, patch);
     await persistSchedulePatch(timer._id, patch);
     activityDirty = false;
-    console.log(`[Timers] Sent ${timer.name} -> response ${selection.index + 1}/${timer.responses.length} (${selection.mode}); next eligibility ${nextDueAt.toISOString()}.`);
+    console.log(`[Timers] Sent ${timer.name} -> action ${selection.index + 1}/${timer.responses.length} (${selection.mode}); next eligibility ${nextDueAt.toISOString()}.`);
   }
 
   async function scheduleFailure(timer, err) {
@@ -470,13 +487,20 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
 
   async function sendSelected(timer, { reason = 'scheduled', affectSchedule = true } = {}) {
     const selection = chooseResponse(timer);
-    if (!selection.template) throw new Error(`${timer.name} has no selectable response.`);
+    if (!selection.template) throw new Error(`${timer.name} has no selectable action.`);
     const rendered = await renderTimerResponse(selection.template, getRandomChatters);
-    if (!rendered) throw new Error(`${timer.name} rendered an empty response.`);
-    noteOwnResponse(rendered);
-    await sendMessage(normalizedChannel, rendered);
+    if (!rendered) throw new Error(`${timer.name} rendered an empty action message.`);
+    const actionType = TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message';
+    const actionColor = TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary';
+    if (actionType === 'twitch_announcement') {
+      if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not configured for timers.');
+      await sendAnnouncement(rendered, { color: actionColor });
+    } else {
+      noteOwnResponse(rendered);
+      await sendMessage(normalizedChannel, rendered);
+    }
     if (affectSchedule) await updateSuccessfulFire(timer, selection, rendered, reason);
-    return { rendered, responseIndex: selection.index, responseMode: selection.mode };
+    return { rendered, responseIndex: selection.index, responseMode: selection.mode, actionType, actionColor };
   }
 
   async function runScheduledTimer(timer) {
@@ -667,9 +691,9 @@ function createChatTimerManager({ channelName, sendMessage, getStreamStatus = nu
   async function previewTimer(id) {
     const timer = await findTimerOrThrow(id);
     const selection = chooseResponse(timer);
-    if (!selection.template) throw new Error('Timer has no selectable response.');
+    if (!selection.template) throw new Error('Timer has no selectable action.');
     const rendered = await renderTimerResponse(selection.template, getRandomChatters);
-    return { rendered, responseIndex: selection.index, responseMode: selection.mode };
+    return { rendered, responseIndex: selection.index, responseMode: selection.mode, actionType: TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message', actionColor: TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary' };
   }
 
   async function testTimer(id) {
@@ -718,5 +742,7 @@ module.exports = {
   DEFAULT_GLOBAL_START_DELAY_SECONDS,
   TIMER_RESPONSE_MODES,
   TIMER_PRIORITIES,
+  TIMER_ACTION_TYPES,
+  TIMER_ANNOUNCEMENT_COLORS,
   createChatTimerManager
 };

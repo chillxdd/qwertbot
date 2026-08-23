@@ -253,10 +253,6 @@
         <div class="custom-editor-block">
           <div class="custom-response-heading">
             <strong>Responses</strong>
-            <div class="custom-response-heading-actions">
-              <button id="showCustomVariablesBtn" class="secondary" type="button">Variables</button>
-              <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
-            </div>
           </div>
           <div class="custom-response-delivery-row">
             <div>
@@ -290,6 +286,10 @@
           </div>
           <div id="customResponseHelp" class="detail"></div>
           <div id="customCommandResponses"></div>
+          <div class="custom-response-bottom-actions">
+            <button id="showCustomVariablesBtn" class="secondary" type="button">Variables</button>
+            <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
+          </div>
           <div id="customResponseMsg" class="detail custom-field-message"></div>
         </div>
 
@@ -464,11 +464,7 @@
 
           <div class="custom-editor-block">
             <div class="custom-response-heading">
-              <strong>Responses</strong>
-              <div class="custom-response-heading-actions">
-                <button id="showTimerVariablesBtn" class="secondary" type="button">Variables</button>
-                <button id="addTimerResponseBtn" class="secondary" type="button">Add Response</button>
-              </div>
+              <strong>Actions</strong>
             </div>
             <div class="custom-response-mode-wrap">
               <label class="prompt-label" for="timerResponseMode">Mode</label>
@@ -476,9 +472,13 @@
                 <option value="equal">Equal Odds</option>
                 <option value="weighted">Specified Weight</option>
               </select>
-              <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+              <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all actions.</div>
             </div>
             <div id="timerResponses"></div>
+            <div class="custom-response-bottom-actions">
+              <button id="showTimerVariablesBtn" class="secondary" type="button">Variables</button>
+              <button id="addTimerResponseBtn" class="secondary" type="button">Add Action</button>
+            </div>
             <div id="timerResponseMsg" class="detail custom-field-message"></div>
           </div>
 
@@ -499,7 +499,7 @@
             <div class="custom-variable-help-body">
               <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Optional DEC sets 0–5 decimal places; omitted DEC keeps whole-integer behavior.</div></div>
               <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots.</div></div>
-              <div class="custom-variable-note detail">Timer responses have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, <code>$(count)</code>, and <code>$(counter)</code> are unavailable.</div>
+              <div class="custom-variable-note detail">Timer actions have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, <code>$(count)</code>, and <code>$(counter)</code> are unavailable.</div>
             </div>
           </dialog>
 
@@ -583,14 +583,14 @@
           <div class="custom-editor-block">
             <div class="custom-trigger-heading">
               <strong>Actions</strong>
-              <div class="custom-response-heading-actions">
-                <button id="showEventReactionVariablesBtn" class="secondary" type="button">Variables</button>
-                <button id="addEventReactionActionBtn" class="secondary" type="button">Add Action</button>
-              </div>
             </div>
             <div id="eventReactionActionHelp" class="detail"></div>
             <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Value</span><span>Order</span></div>
             <div id="eventReactionActions" class="event-reaction-actions"></div>
+            <div class="custom-response-bottom-actions">
+              <button id="showEventReactionVariablesBtn" class="secondary" type="button">Variables</button>
+              <button id="addEventReactionActionBtn" class="secondary" type="button">Add Action</button>
+            </div>
             <div class="detail">Use variables in Chat Message, Twitch Announcement, and Run Custom Command values. Twitch Shoutout automatically uses the event actor.</div>
             <div class="detail">Run Custom Command uses the saved response, variables, and delivery type. Reaction sequencing controls when actions run.</div>
           </div>

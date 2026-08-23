@@ -4,6 +4,8 @@ const timerHistorySchema = new mongoose.Schema({
   firedAt: { type: Date, required: true },
   responseIndex: { type: Number, default: -1 },
   response: { type: String, default: '' },
+  actionType: { type: String, enum: ['chat_message', 'twitch_announcement'], default: 'chat_message' },
+  actionColor: { type: String, enum: ['primary', 'purple', 'blue', 'green', 'orange'], default: 'primary' },
   reason: { type: String, enum: ['scheduled', 'manual'], default: 'scheduled' }
 }, { _id: false });
 
@@ -63,7 +65,7 @@ const chatTimerSchema = new mongoose.Schema({
       validator(values) {
         return Array.isArray(values) && values.length >= 1 && values.length <= 25 && values.every((value) => typeof value === 'string' && value.trim().length >= 1 && value.length <= 500);
       },
-      message: 'A timer must have 1-25 responses, each between 1 and 500 characters.'
+      message: 'A timer must have 1-25 actions, each with a message between 1 and 500 characters.'
     }
   },
   responseMode: {
@@ -73,6 +75,14 @@ const chatTimerSchema = new mongoose.Schema({
   },
   responseWeights: {
     type: [Number],
+    default: []
+  },
+  actionTypes: {
+    type: [String],
+    default: []
+  },
+  actionColors: {
+    type: [String],
     default: []
   },
   enabled: {
