@@ -51,7 +51,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
   }
 
 
-  function recordCommandBehavior({ channel, username, displayName, tags = {}, rawMessage, streamLive = false }) {
+  function recordCommandBehavior({ channel, username, displayName, tags = {}, rawMessage, streamLive = false, recognized = true }) {
     const command = getCommandName(rawMessage);
     if (!command.startsWith('!') || PROFILE_COMMAND_EXCLUSIONS.has(command) || command.startsWith('!poke')) return;
     void recordViewerCommandUsage(channel, {
@@ -59,7 +59,8 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       displayName,
       twitchUserId: tags['user-id'] || '',
       command,
-      streamLive
+      streamLive,
+      recognized
     }).catch((err) => {
       console.error(`[Viewer Profiles] Could not record command usage ${command} for ${displayName}:`, err?.message || err);
     });
@@ -81,6 +82,9 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
     pending.timer = setTimeout(() => {
       removePendingBangMessage(pending.id);
+      // Nobody handled this bang command inside the response window, so count
+      // it as an unrecognized/fake command behavior before preserving it as chat.
+      recordCommandBehavior({ ...pending, recognized: false });
       recordPending(pending);
     }, NIGHTBOT_RESPONSE_WINDOW);
 
@@ -95,6 +99,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       if (now - candidate.createdAt > NIGHTBOT_RESPONSE_WINDOW) {
         clearTimeout(candidate.timer);
         pendingBangMessages.splice(i, 1);
+        recordCommandBehavior({ ...candidate, recognized: false });
         recordPending(candidate);
       }
     }

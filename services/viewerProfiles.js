@@ -7,6 +7,9 @@ const MAX_FACTS = 60;
 const MAX_FACT_LENGTH = 400;
 const MAX_COMMAND_USAGE = 30;
 const COMMAND_CONTEXT_MIN_COUNT = 3;
+const FAKE_COMMAND_BEHAVIOR_MIN_USES = 5;
+const FAKE_COMMAND_BEHAVIOR_MIN_DISTINCT = 2;
+const FAKE_COMMAND_BEHAVIOR_FACT = 'Frequently uses fake or unrecognized !commands in chat.';
 const OPT_OUT_RETENTION_DAYS = 30;
 const OPT_OUT_RETENTION_MS = OPT_OUT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
@@ -67,6 +70,8 @@ function serializeProfile(doc) {
       command: String(entry.command || ''),
       count: Math.max(1, Number(entry.count || 1)),
       offlineCount: Math.max(0, Number(entry.offlineCount || 0)),
+      recognizedCount: Math.max(0, Number(entry.recognizedCount || 0)) || (Math.max(0, Number(entry.unrecognizedCount || 0)) === 0 ? Math.max(1, Number(entry.count || 1)) : 0),
+      unrecognizedCount: Math.max(0, Number(entry.unrecognizedCount || 0)),
       firstUsedAt: entry.firstUsedAt || null,
       lastUsedAt: entry.lastUsedAt || null
     })),
@@ -75,6 +80,9 @@ function serializeProfile(doc) {
       text: String(fact.text || ''),
       confidence: normalizeConfidence(fact.confidence),
       evidenceCount: Math.max(1, Number(fact.evidenceCount || 1)),
+      kind: ['fact', 'preference', 'habit', 'behavior'].includes(fact.kind) ? fact.kind : 'fact',
+      source: fact.source === 'deterministic' ? 'deterministic' : 'ai',
+      evidenceSummary: String(fact.evidenceSummary || ''),
       firstObservedAt: fact.firstObservedAt || null,
       lastObservedAt: fact.lastObservedAt || null,
       enabled: fact.enabled !== false
@@ -223,7 +231,50 @@ function normalizeCommandName(value) {
   return token;
 }
 
-async function recordViewerCommandUsage(channelName, { username, displayName, twitchUserId = '', command, streamLive = false } = {}) {
+function getUnrecognizedCommandStats(profile) {
+  const entries = Array.isArray(profile?.commandUsage) ? profile.commandUsage : [];
+  const unrecognized = entries.map((entry) => ({
+    command: String(entry.command || '').toLowerCase(),
+    count: Math.max(0, Number(entry.unrecognizedCount || 0))
+  })).filter((entry) => entry.command && entry.count > 0);
+  return {
+    total: unrecognized.reduce((sum, entry) => sum + entry.count, 0),
+    distinct: unrecognized.length,
+    top: unrecognized.sort((a, b) => b.count - a.count).slice(0, 5)
+  };
+}
+
+function upsertFakeCommandBehaviorFact(profile, now = new Date()) {
+  if (!profile || !Array.isArray(profile.facts)) return;
+  const stats = getUnrecognizedCommandStats(profile);
+  if (stats.total < FAKE_COMMAND_BEHAVIOR_MIN_USES || stats.distinct < FAKE_COMMAND_BEHAVIOR_MIN_DISTINCT) return;
+  const confidence = stats.total >= 15 && stats.distinct >= 5 ? 'high' : 'medium';
+  const evidenceSummary = `${stats.total} unrecognized !command uses across ${stats.distinct} distinct commands`;
+  let fact = profile.facts.find((item) => item.source === 'deterministic' && String(item.text || '') === FAKE_COMMAND_BEHAVIOR_FACT);
+  if (fact) {
+    fact.kind = 'behavior';
+    fact.source = 'deterministic';
+    fact.confidence = confidence;
+    fact.evidenceCount = Math.max(Math.max(1, Number(fact.evidenceCount || 1)), stats.total);
+    fact.evidenceSummary = evidenceSummary;
+    fact.lastObservedAt = now;
+    return;
+  }
+  if (profile.facts.length >= MAX_FACTS) return;
+  profile.facts.push({
+    text: FAKE_COMMAND_BEHAVIOR_FACT,
+    kind: 'behavior',
+    source: 'deterministic',
+    confidence,
+    evidenceCount: stats.total,
+    evidenceSummary,
+    firstObservedAt: now,
+    lastObservedAt: now,
+    enabled: true
+  });
+}
+
+async function recordViewerCommandUsage(channelName, { username, displayName, twitchUserId = '', command, streamLive = false, recognized = true } = {}) {
   const channel = normalizeChannelName(channelName);
   const normalizedUsername = normalizeUsername(username);
   const normalizedDisplayName = normalizeDisplayName(displayName) || normalizedUsername;
@@ -263,7 +314,15 @@ async function recordViewerCommandUsage(channelName, { username, displayName, tw
 
   let usage = profile.commandUsage.find((entry) => String(entry.command || '').toLowerCase() === normalizedCommand);
   if (usage) {
-    usage.count = Math.max(1, Number(usage.count || 1)) + 1;
+    const previousCount = Math.max(1, Number(usage.count || 1));
+    let recognizedCount = Math.max(0, Number(usage.recognizedCount || 0));
+    let unrecognizedCount = Math.max(0, Number(usage.unrecognizedCount || 0));
+    if (recognizedCount + unrecognizedCount === 0) recognizedCount = previousCount;
+    usage.count = previousCount + 1;
+    if (recognized) recognizedCount++;
+    else unrecognizedCount++;
+    usage.recognizedCount = recognizedCount;
+    usage.unrecognizedCount = unrecognizedCount;
     if (!streamLive) usage.offlineCount = Math.max(0, Number(usage.offlineCount || 0)) + 1;
     usage.lastUsedAt = now;
   } else {
@@ -275,13 +334,17 @@ async function recordViewerCommandUsage(channelName, { username, displayName, tw
       command: normalizedCommand,
       count: 1,
       offlineCount: streamLive ? 0 : 1,
+      recognizedCount: recognized ? 1 : 0,
+      unrecognizedCount: recognized ? 0 : 1,
       firstUsedAt: now,
       lastUsedAt: now
     });
   }
 
+  upsertFakeCommandBehaviorFact(profile, now);
+
   await profile.save();
-  return { recorded: true };
+  return { recorded: true, recognized: Boolean(recognized) };
 }
 
 async function setFactEnabled(channelName, profileId, factId, enabled) {
@@ -373,13 +436,20 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
       const text = normalizeFactText(observation?.fact || observation?.text);
       if (!text) continue;
       const match = findSimilarFact(profile.facts, text);
+      const supportCount = Math.max(1, Math.min(4, Number(observation?.supportCount || 1)));
+      const kind = ['fact', 'preference', 'habit', 'behavior'].includes(observation?.kind) ? observation.kind : 'fact';
       if (match) {
-        match.evidenceCount = Math.max(1, Number(match.evidenceCount || 1)) + 1;
+        match.evidenceCount = Math.max(1, Number(match.evidenceCount || 1)) + supportCount;
         match.lastObservedAt = new Date();
         const incoming = normalizeConfidence(observation?.confidence);
         if (incoming === 'high' || (incoming === 'medium' && match.confidence === 'low')) match.confidence = incoming;
+        if (match.source !== 'deterministic') {
+          match.kind = kind;
+          match.source = 'ai';
+          match.evidenceSummary = `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} in the latest learning window.`;
+        }
       } else if (profile.facts.length < MAX_FACTS) {
-        profile.facts.push({ text, confidence: normalizeConfidence(observation?.confidence), evidenceCount: 1, firstObservedAt: new Date(), lastObservedAt: new Date(), enabled: true });
+        profile.facts.push({ text, kind, source: 'ai', confidence: normalizeConfidence(observation?.confidence), evidenceCount: supportCount, evidenceSummary: `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} in the learning window.`, firstObservedAt: new Date(), lastObservedAt: new Date(), enabled: true });
       }
     }
 
@@ -416,24 +486,32 @@ function formatViewerProfilesForPrompt(profiles = []) {
   if (!active.length) return '';
   return active.map((profile) => {
     const facts = (profile.facts || []).filter((fact) => fact.enabled !== false).slice(0, 20);
-    const commandUsage = (profile.commandUsage || [])
-      .filter((entry) => Number(entry.count || 0) >= COMMAND_CONTEXT_MIN_COUNT)
-      .sort((a, b) => Number(b.count || 0) - Number(a.count || 0))
+    const commandUsage = (profile.commandUsage || []).map((entry) => {
+      const total = Math.max(1, Number(entry.count || 1));
+      const unrecognizedCount = Math.max(0, Number(entry.unrecognizedCount || 0));
+      const recognizedCount = Math.max(0, Number(entry.recognizedCount || 0)) || (unrecognizedCount === 0 ? total : 0);
+      return { ...entry, recognizedCount, unrecognizedCount };
+    });
+    const recognizedHabits = commandUsage
+      .filter((entry) => entry.recognizedCount >= COMMAND_CONTEXT_MIN_COUNT)
+      .sort((a, b) => b.recognizedCount - a.recognizedCount)
       .slice(0, 8);
+    const fakeEntries = commandUsage.filter((entry) => entry.unrecognizedCount > 0).sort((a, b) => b.unrecognizedCount - a.unrecognizedCount);
+    const fakeTotal = fakeEntries.reduce((sum, entry) => sum + entry.unrecognizedCount, 0);
+    const fakeDistinct = fakeEntries.length;
     return [
       `VIEWER PROFILE — ${profile.displayName || profile.username} (@${profile.username})`,
       profile.aliases?.length ? `Aliases: ${profile.aliases.join(', ')}` : '',
-      profile.pinnedNotes ? `Moderator-pinned notes:
-${profile.pinnedNotes}` : '',
-      facts.length ? `AI-learned observations:
-${facts.map((fact) => `- ${fact.text} [${fact.confidence}; observed ${fact.evidenceCount}x]`).join('\n')}` : '',
-      commandUsage.length ? `Observed command habits:
-${commandUsage.map((entry) => {
-        const count = Math.max(1, Number(entry.count || 1));
+      profile.pinnedNotes ? `Moderator-pinned notes:\n${profile.pinnedNotes}` : '',
+      facts.length ? `Learned observations:\n${facts.map((fact) => `- ${fact.text} [${fact.kind || 'fact'}; ${fact.confidence}; evidence ${fact.evidenceCount}x; ${fact.source || 'ai'}]`).join('\n')}` : '',
+      recognizedHabits.length ? `Observed recognized-command habits:\n${recognizedHabits.map((entry) => {
         const offlineCount = Math.max(0, Number(entry.offlineCount || 0));
-        const offline = offlineCount ? `; ${offlineCount} while Qwert was offline` : '';
-        return `- ${entry.command}: ${count} uses${offline}`;
-      }).join('\n')}` : ''
+        const offline = offlineCount ? `; ${offlineCount} total command uses while Qwert was offline` : '';
+        return `- ${entry.command}: ${entry.recognizedCount} recognized uses${offline}`;
+      }).join('\n')}` : '',
+      fakeTotal >= FAKE_COMMAND_BEHAVIOR_MIN_USES && fakeDistinct >= FAKE_COMMAND_BEHAVIOR_MIN_DISTINCT
+        ? `Observed fake/unrecognized command behavior:\n- ${fakeTotal} unrecognized !command uses across ${fakeDistinct} distinct commands${fakeEntries.length ? `; examples: ${fakeEntries.slice(0, 5).map((entry) => `${entry.command} (${entry.unrecognizedCount})`).join(', ')}` : ''}`
+        : ''
     ].filter(Boolean).join('\n');
   }).join('\n\n');
 }

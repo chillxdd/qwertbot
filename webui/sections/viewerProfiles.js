@@ -113,7 +113,8 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
         <label class="inline-check"><input class="viewer-profile-fact-toggle" type="checkbox" ${fact.enabled === false ? '' : 'checked'} ${profile?.optedOut === true ? 'disabled' : ''}> Use</label>
         <div class="viewer-profile-fact-copy">
           <div>${esc(fact.text)}</div>
-          <div class="detail">${esc(fact.confidence || 'medium')} confidence · observed ${Number(fact.evidenceCount || 1)}x${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          <div class="detail">${esc(fact.kind || 'fact')} · ${fact.source === 'deterministic' ? 'deterministic' : 'AI'} · ${esc(fact.confidence || 'medium')} confidence · evidence ${Number(fact.evidenceCount || 1)}x${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          ${fact.evidenceSummary ? `<div class="detail">${esc(fact.evidenceSummary)}</div>` : ''}
         </div>
         <button class="danger viewer-profile-fact-unlearn" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Unlearn</button>
       </div>`).join('') : '<div class="detail custom-empty-state">No AI-learned observations yet.</div>';

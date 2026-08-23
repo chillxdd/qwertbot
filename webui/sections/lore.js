@@ -107,7 +107,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
         <label class="inline-check"><input class="stream-lore-observation-toggle" type="checkbox" ${observation.enabled === true ? 'checked' : ''}> Use</label>
         <div class="viewer-profile-fact-copy">
           <div>${String(observation.text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')}</div>
-          <div class="detail">${String(observation.confidence || 'medium')} confidence · observed ${Math.max(1, Number(observation.evidenceCount || 1))}x${observation.lastObservedAt ? ` · last ${new Date(observation.lastObservedAt).toLocaleDateString()}` : ''}</div>
+          <div class="detail">${String(observation.confidence || 'medium')} confidence · evidence ${Math.max(1, Number(observation.evidenceCount || 1))}x${observation.lastObservedAt ? ` · last ${new Date(observation.lastObservedAt).toLocaleDateString()}` : ''}</div>
         </div>
         <button class="danger stream-lore-observation-unlearn" type="button">Unlearn</button>
       </div>`).join('') : '<div class="detail custom-empty-state">No AI-learned stream lore observations yet.</div>';

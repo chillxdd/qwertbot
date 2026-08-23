@@ -1,6 +1,7 @@
 const BotPersonalityConfig = require('../models/BotPersonalityConfig');
 const { normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getRelevantViewerProfiles, formatViewerProfilesForPrompt } = require('./viewerProfiles');
+const { requestGeminiText, isRetryableGeminiError } = require('./geminiClient');
 
 const MAX_BOT_PERSONALITY_NAME_LENGTH = 80;
 const MAX_BOT_PERSONALITY_LENGTH = 12000;
@@ -69,91 +70,9 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isRetryableGeminiError(err) {
-  if (err?.retryable === true) return true;
-  const status = Number(err?.status || 0);
-  if ([408, 429, 500, 502, 503, 504].includes(status)) return true;
-  const message = String(err?.message || '').toLowerCase();
-  return /high demand|temporar|rate limit|too many requests|timeout|timed out|service unavailable|network|fetch failed|connection reset|econnreset|eai_again/.test(message);
-}
-
 function isModOrBroadcaster(tags = {}) {
   const badges = tags.badges || {};
   return badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || badges.moderator === '1';
-}
-
-function extractGeminiText(data) {
-  let text = '';
-  if (Array.isArray(data?.steps)) {
-    for (const step of data.steps) {
-      if (step?.type !== 'model_output' || !Array.isArray(step.content)) continue;
-      for (const item of step.content) {
-        if (typeof item?.text === 'string') text += `${item.text} `;
-      }
-    }
-  }
-  if (!text && typeof data?.output_text === 'string') text = data.output_text;
-  if (!text && typeof data?.outputText === 'string') text = data.outputText;
-  if (!text && Array.isArray(data?.outputs)) {
-    for (const output of data.outputs) {
-      if (typeof output?.text === 'string') text += `${output.text} `;
-    }
-  }
-  return String(text || '').trim();
-}
-
-async function callGemini(prompt, timeoutMs = 8000) {
-  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || 8000));
-  let response;
-  try {
-    response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey
-      },
-      body: JSON.stringify({
-        model: 'gemini-3.5-flash-lite',
-        input: prompt
-      }),
-      signal: controller.signal
-    });
-  } catch (err) {
-    const wrapped = new Error(controller.signal.aborted ? 'Gemini request timed out.' : (err?.message || 'Gemini request failed.'));
-    wrapped.retryable = true;
-    throw wrapped;
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (_) {
-    const err = new Error(`Gemini returned invalid JSON. HTTP ${response.status}`);
-    err.status = response.status;
-    err.retryable = response.status >= 500;
-    throw err;
-  }
-
-  if (!response.ok) {
-    const err = new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
-    err.status = response.status;
-    err.retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
-    throw err;
-  }
-
-  const text = extractGeminiText(data);
-  if (!text) {
-    const err = new Error('Gemini returned no readable text.');
-    err.retryable = true;
-    throw err;
-  }
-  return text;
 }
 
 async function callGeminiWithRetries(prompt, retryConfig, onRetry) {
@@ -165,7 +84,7 @@ async function callGeminiWithRetries(prompt, retryConfig, onRetry) {
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (attempt > 0) {
-      const delayMs = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)];
+      const delayMs = Math.max(retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)], Number(lastError?.retryAfterMs || 0));
       if (Date.now() + delayMs >= deadline) break;
       if (typeof onRetry === 'function') onRetry({ attempt, maxRetries: maxAttempts - 1, delayMs, error: lastError });
       await sleep(delayMs);
@@ -174,7 +93,7 @@ async function callGeminiWithRetries(prompt, retryConfig, onRetry) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 1000) break;
     try {
-      return await callGemini(prompt, Math.min(8000, remainingMs));
+      return await requestGeminiText(prompt, { label: 'tagged-question', priority: 'high', timeoutMs: Math.min(8000, remainingMs), deadlineAt: deadline });
     } catch (err) {
       lastError = err;
       if (!retry.enabled || !isRetryableGeminiError(err)) break;

@@ -10,7 +10,7 @@ const {
 } = require('./streamRecapHistory');
 const { getStreamLore, applyStreamLoreObservations } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
-const { generateSessionMemoryBlock, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
+const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, applyViewerProfileUpdates } = require('./viewerProfiles');
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
@@ -768,49 +768,68 @@ function createRecapManager({
           console.error('[Viewer Profiles] Could not load viewer-profile settings for hourly learning:', settingsErr?.message || settingsErr);
         }
         if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled || currentStreamId) {
-          try {
-            const generatedAtMs = Date.now();
-            const sourceTimes = [
-              ...messageSnapshot.map((item) => Number(item?.timestamp || 0)),
-              ...contextSnapshot.map((item) => Number(item?.timestamp || 0)),
-              ...eventSnapshot.map((item) => Number(item?.timestamp || 0))
-            ].filter((value) => value > 0);
-            const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
-            const memoryChatLogs = sanitizeChatForGemini(chatLogs).logs;
-            const memoryBlock = await generateSessionMemoryBlock({
-              chatLogs: memoryChatLogs,
-              streamContexts: contextSnapshot,
-              twitchEvents: eventSnapshot,
-              streamLore,
-              publicRecap: recapSummaryBody,
-              streamTiming: { windowStartedAtMs, generatedAtMs },
-              config: sessionMemoryConfig,
-              viewerLearningEnabled: viewerProfileSettings.automaticLearningEnabled,
-              streamLoreLearningEnabled: true
-            });
-            if (memoryBlock && sessionMemoryConfig.enabled) {
-              await saveSessionMemoryBlock({
-                streamId: currentStreamId,
-                channelName,
-                startedAt: streamSessionStartedAt || null,
-                block: memoryBlock
-              });
-              console.log(`[Session Memory] Stored hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
-            }
-            if (memoryBlock?.viewerUpdates?.length && viewerProfileSettings.automaticLearningEnabled) {
-              const profileResult = await applyViewerProfileUpdates({
-                channelName,
+          const generatedAtMs = Date.now();
+          const sourceTimes = [
+            ...messageSnapshot.map((item) => Number(item?.timestamp || 0)),
+            ...contextSnapshot.map((item) => Number(item?.timestamp || 0)),
+            ...eventSnapshot.map((item) => Number(item?.timestamp || 0))
+          ].filter((value) => value > 0);
+          const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
+          const memoryChatLogs = sanitizeChatForGemini(chatLogs).logs;
+
+          if (sessionMemoryConfig.enabled) {
+            try {
+              const memoryBlock = await generateSessionMemoryBlock({
                 chatLogs: memoryChatLogs,
-                updates: memoryBlock.viewerUpdates
+                streamContexts: contextSnapshot,
+                twitchEvents: eventSnapshot,
+                streamLore,
+                publicRecap: recapSummaryBody,
+                streamTiming: { windowStartedAtMs, generatedAtMs },
+                config: sessionMemoryConfig
               });
-              console.log(`[Viewer Profiles] Hourly learning processed ${memoryBlock.viewerUpdates.length} candidate viewer update(s); applied ${profileResult.applied}, skipped ${profileResult.skipped}.`);
+              if (memoryBlock) {
+                await saveSessionMemoryBlock({
+                  streamId: currentStreamId,
+                  channelName,
+                  startedAt: streamSessionStartedAt || null,
+                  block: memoryBlock
+                });
+                console.log(`[Session Memory] Stored hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
+              }
+            } catch (memoryErr) {
+              console.error('[Session Memory] Hourly memory generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
             }
-            if (memoryBlock?.streamLoreObservations?.length) {
-              const loreResult = await applyStreamLoreObservations(channelName, memoryBlock.streamLoreObservations);
-              console.log(`[Stream Lore] Hourly learning processed ${memoryBlock.streamLoreObservations.length} candidate lore observation(s); applied ${loreResult.applied}, skipped ${loreResult.skipped}. All new observations remain pending until approved.`);
+          }
+
+          if (viewerProfileSettings.automaticLearningEnabled) {
+            try {
+              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: memoryChatLogs });
+              if (viewerUpdates.length) {
+                const profileResult = await applyViewerProfileUpdates({
+                  channelName,
+                  chatLogs: memoryChatLogs,
+                  updates: viewerUpdates
+                });
+                console.log(`[Viewer Profiles] Dedicated hourly learning processed ${viewerUpdates.length} candidate viewer update(s); applied ${profileResult.applied}, skipped ${profileResult.skipped}.`);
+              } else {
+                console.log('[Viewer Profiles] Dedicated hourly learning found no durable viewer observations.');
+              }
+            } catch (viewerErr) {
+              console.error('[Viewer Profiles] Dedicated hourly learning failed. Session memory and public recap remain successful:', viewerErr?.message || viewerErr);
             }
-          } catch (memoryErr) {
-            console.error('[Session Memory/Viewer Profiles/Stream Lore] Hourly intelligence generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
+          }
+
+          try {
+            const loreObservations = await generateStreamLoreObservations({ chatLogs: memoryChatLogs });
+            if (loreObservations.length) {
+              const loreResult = await applyStreamLoreObservations(channelName, loreObservations);
+              console.log(`[Stream Lore] Dedicated hourly learning processed ${loreObservations.length} candidate lore observation(s); applied ${loreResult.applied}, skipped ${loreResult.skipped}. All new observations remain pending until approved.`);
+            } else {
+              console.log('[Stream Lore] Dedicated hourly learning found no durable channel-lore candidates.');
+            }
+          } catch (loreErr) {
+            console.error('[Stream Lore] Dedicated hourly learning failed. Session memory and public recap remain successful:', loreErr?.message || loreErr);
           }
         }
       }

@@ -5,6 +5,7 @@ const path = require('path');
 const { createRecapManager, SUMMARY_PREFIX, TWITCH_MESSAGE_LIMIT } = require('./commands/recap');
 
 const { connectDatabase } = require('./services/database');
+const { getGeminiClientStatus } = require('./services/geminiClient');
 const { createModSessionManager } = require('./middleware/modSession');
 const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
 const { createCustomCommandManager } = require('./services/customCommands');
@@ -723,7 +724,9 @@ process.on('uncaughtException', (err) => {
 
 app.listen(PORT, () => {
   console.log(`[Startup] Web server running on port ${PORT}`);
-  console.log('[Startup] Gemini model: gemini-3.5-flash-lite');
+  const geminiStatus = getGeminiClientStatus();
+  console.log(`[Startup] Gemini model: ${geminiStatus.model}`);
+  console.log(`[Startup] Gemini global request spacing: ${geminiStatus.requestSpacingMs}ms (override with GEMINI_REQUEST_SPACING_MS).`);
   console.log(`[Startup] Twitch chat message limit: ${TWITCH_MESSAGE_LIMIT}`);
   console.log('[Recap] Automatic hourly recap mode enabled.');
   console.log('[Recap] First recap: 60 minutes.');

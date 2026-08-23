@@ -4,6 +4,9 @@ const viewerFactSchema = new mongoose.Schema({
   text: { type: String, required: true, maxlength: 400 },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
+  kind: { type: String, enum: ['fact', 'preference', 'habit', 'behavior'], default: 'fact' },
+  source: { type: String, enum: ['ai', 'deterministic'], default: 'ai' },
+  evidenceSummary: { type: String, default: '', maxlength: 500 },
   firstObservedAt: { type: Date, default: Date.now },
   lastObservedAt: { type: Date, default: Date.now },
   enabled: { type: Boolean, default: true }
@@ -14,6 +17,8 @@ const viewerCommandUsageSchema = new mongoose.Schema({
   command: { type: String, required: true, lowercase: true, trim: true, maxlength: 80 },
   count: { type: Number, min: 1, default: 1 },
   offlineCount: { type: Number, min: 0, default: 0 },
+  recognizedCount: { type: Number, min: 0, default: 0 },
+  unrecognizedCount: { type: Number, min: 0, default: 0 },
   firstUsedAt: { type: Date, default: Date.now },
   lastUsedAt: { type: Date, default: Date.now }
 }, { _id: false });

@@ -99,8 +99,9 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     if (!text) { skipped++; continue; }
     const match = findSimilarObservation(doc.learnedObservations, text);
     const now = new Date();
+    const supportCount = Math.max(1, Math.min(6, Number(raw?.supportCount || 1)));
     if (match) {
-      match.evidenceCount = Math.max(1, Number(match.evidenceCount || 1)) + 1;
+      match.evidenceCount = Math.max(1, Number(match.evidenceCount || 1)) + supportCount;
       match.lastObservedAt = now;
       const incoming = normalizeConfidence(raw?.confidence);
       if (incoming === 'high' || (incoming === 'medium' && match.confidence === 'low')) match.confidence = incoming;
@@ -111,7 +112,7 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     doc.learnedObservations.push({
       text,
       confidence: normalizeConfidence(raw?.confidence),
-      evidenceCount: 1,
+      evidenceCount: supportCount,
       firstObservedAt: now,
       lastObservedAt: now,
       enabled: false

@@ -1,3 +1,4 @@
+const { requestGeminiDataWithRetry } = require('./geminiClient');
 const { getRecapPromptConfig, getDefaultRecapPromptConfig } = require('./recapPromptConfig');
 
 const SUMMARY_PREFIX = 'Hourly Recap: ';
@@ -160,38 +161,16 @@ function formatPreviousRecaps(previousRecaps = []) {
   return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\n${lines.join('\n')}\n\nPREVIOUS RECAP RULES:\n- These earlier recaps are continuity context only. They are NOT evidence that anything happened again in the current hour.\n- Use them to recognize callbacks, recurring jokes, names, or ongoing themes and to avoid unnecessarily repeating old recap material.\n- Every factual claim in the CURRENT recap must still be supported by the CURRENT source chat or CURRENT verified Twitch events.\n- Do not carry an old event, result, opinion, relationship, or joke into the current recap unless the current source supports that it continued or returned.\n- If an older recap conflicts with the current source, trust the current source.\n- Do not waste space re-explaining old context unless it helps make a current-hour callback understandable.`;
 }
 
-async function sendGeminiPrompt(prompt) {
-  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-  if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
-
-  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify({
-      model: 'gemini-3.5-flash-lite',
-      input: prompt
-    })
+async function sendGeminiPrompt(prompt, { label = 'recap', maxRetries = 1 } = {}) {
+  return requestGeminiDataWithRetry(prompt, {
+    label,
+    priority: 'normal',
+    timeoutMs: 20000,
+    maxRetries,
+    onRetry: ({ attempt, maxRetries: retryLimit, delayMs, error }) => {
+      console.warn(`[Recap Gemini] ${label} temporary failure; retry ${attempt}/${retryLimit} in ${(delayMs / 1000).toFixed(1)}s: ${error?.message || error}`);
+    }
   });
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (err) {
-    throw new Error(`Gemini returned invalid JSON. HTTP ${response.status}`);
-  }
-
-  if (!response.ok) {
-    console.error('[Recap Gemini] API error:', JSON.stringify(data, null, 2));
-    const error = new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
-    error.status = response.status;
-    error.geminiData = data;
-    throw error;
-  }
-
-  return data;
 }
 
 function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, primaryInstructions = '') {
@@ -311,7 +290,7 @@ Before outputting, silently verify every causal link, specific noun/label, and i
 Output ONLY the revised recap.`;
 }
 async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, primaryInstructions = '') {
-  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, primaryInstructions));
+  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, primaryInstructions), { label: 'hourly-recap-primary', maxRetries: 1 });
 }
 
 async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, targetMin = 400, attempt = 1, acceptableMin = 380, expansionInstructions = '' }) {
@@ -321,7 +300,7 @@ async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts 
     prompt += `\n\nSTRICT RETRY REQUIREMENT:\n- The previous expansion was still too short.\n- Produce ${targetMin}-${SUMMARY_TEXT_LIMIT} characters whenever the supplied source contains enough supported material.\n- Do not stop below ${acceptableMin} characters unless reaching ${acceptableMin} would require filler, repetition, or unsupported claims.\n- Scan the source again for a DIFFERENT noteworthy supported detail that was omitted.\n- Output only the revised recap.`;
   }
 
-  return sendGeminiPrompt(prompt);
+  return sendGeminiPrompt(prompt, { label: `hourly-recap-expansion-${attempt}`, maxRetries: 0 });
 }
 
 function extractGeminiText(data) {
