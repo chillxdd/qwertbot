@@ -22,6 +22,26 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
 }
 
+function extractReplyContext(tags = {}) {
+  const parentMessageId = String(tags['reply-parent-msg-id'] || '').trim();
+  const parentBody = String(tags['reply-parent-msg-body'] || '').trim();
+  const parentDisplayName = String(
+    tags['reply-parent-display-name'] || tags['reply-parent-user-login'] || ''
+  ).trim();
+  const parentUserLogin = String(tags['reply-parent-user-login'] || '').trim();
+  const parentUserId = String(tags['reply-parent-user-id'] || '').trim();
+
+  if (!parentMessageId && !parentBody && !parentDisplayName && !parentUserLogin) return null;
+
+  return {
+    parentMessageId,
+    parentBody,
+    parentDisplayName,
+    parentUserLogin,
+    parentUserId
+  };
+}
+
 function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, getNativeCommandResponse = null, sendMessage, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
@@ -166,7 +186,10 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           rawMessage,
           displayName,
           tags,
-          replyParentMessageId: tags.id || tags['message-id'] || ''
+          // Reply to the viewer's current message, while separately passing the
+          // Twitch reply-parent metadata as conversational context for AskAI.
+          replyParentMessageId: tags.id || tags['message-id'] || '',
+          replyContext: extractReplyContext(tags)
         });
         if (personalityResult?.matched) {
           // Tagged questions are normally organic viewer chat and remain part of
@@ -272,5 +295,6 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
 module.exports = {
   createTwitchMessageHandler,
-  isPokemonCommunityGameCommand
+  isPokemonCommunityGameCommand,
+  extractReplyContext
 };
