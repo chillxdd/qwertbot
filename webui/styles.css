@@ -623,3 +623,12 @@ button.success{background:#16834a}
   .learned-revision-actions{width:100%}
   .learned-revision-actions button{flex:1 1 145px}
 }
+
+/* Memory-management nested lore tabs and centralized viewer review */
+.lore-subsection-nav{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:8px;margin-bottom:16px}
+.viewer-profile-global-pending-review{margin-top:18px}
+.viewer-profile-global-pending-list{max-height:420px}
+.viewer-profile-pending-review-row{grid-template-columns:minmax(0,1fr) auto}
+.viewer-pending-profile{margin-bottom:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.viewer-profile-list-section{margin-top:22px}
+@media(max-width:600px){.lore-subsection-nav{grid-template-columns:1fr}.viewer-profile-pending-review-row{grid-template-columns:1fr}.viewer-profile-pending-review-row .custom-command-actions{justify-content:flex-start}}

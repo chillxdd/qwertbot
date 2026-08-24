@@ -723,75 +723,84 @@
       <h3>Memory Management</h3>
       <div class="subsection-nav memory-subsection-nav" role="tablist" aria-label="Memory management views">
         <button id="streamLoreViewTab" class="secondary active" type="button" aria-selected="true">Stream-Specific Lore</button>
-        <button id="botPersonalityViewTab" class="secondary" type="button" aria-selected="false">Bot Personality & Tagged Questions</button>
         <button id="viewerProfilesViewTab" class="secondary" type="button" aria-selected="false">Viewer Profiles</button>
+        <button id="botPersonalityViewTab" class="secondary" type="button" aria-selected="false">Bot Personality & Tagged Questions</button>
       </div>
 
       <div id="streamLoreView" class="subsection-view open">
-      <div class="memory-block">
-        <h4>Manually Added Lore</h4>
-        <div class="detail">Moderator-written persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
-        <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
-        <div class="memory-actions">
-          <button id="saveLoreBtn">Save Lore</button>
-          <button id="undoLoreBtn" class="secondary" type="button">Undo Changes</button>
+        <div class="subsection-nav lore-subsection-nav" role="tablist" aria-label="Stream-specific lore views">
+          <button id="streamLoreAiTab" class="secondary active" type="button" aria-selected="true">AI-Learned Lore</button>
+          <button id="streamLoreManualTab" class="secondary" type="button" aria-selected="false">Manually Added Lore</button>
         </div>
-        <div id="loreCount" class="detail">0/12000 characters</div>
-        <div id="loreMsg" class="detail"></div>
-      </div>
 
-      <div class="memory-block learned-lore-block">
-        <div class="custom-response-heading"><strong>AI-Learned Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
-        <div class="detail">New AI observations stay pending until a moderator approves or rejects them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
+        <div id="streamLoreAiView" class="subsection-view open">
+          <div class="memory-block learned-lore-block">
+            <div class="custom-response-heading"><strong>AI-Learned Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
+            <div class="detail">New AI observations stay pending until a moderator approves or rejects them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
 
-        <div class="learned-review-section">
-          <div class="custom-command-header learned-review-header">
-            <div>
-              <h4>Approved Lore</h4>
-              <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support; conflicting evidence can lower confidence and suggest a moderator-reviewed revision. Approved wording never changes until you accept it.</div>
+            <div class="learned-review-section learned-review-pending">
+              <div class="custom-response-heading"><strong>Pending Lore</strong><span id="streamLorePendingCount" class="detail">0 pending</span></div>
+              <div class="detail">Pending wording can automatically refine as evidence accumulates. Approve moves it to the approved table and turns Use on. Reject discards it; future evidence may cause the AI to propose it again.</div>
+              <div id="streamLorePendingList" class="viewer-profile-facts stream-lore-observations"></div>
             </div>
-            <div class="custom-command-list-controls">
-              <label class="list-search-wrap" for="streamLoreApprovedSearch">
-                <span class="sr-only">Search approved AI-learned lore</span>
-                <input id="streamLoreApprovedSearch" class="list-search-input" type="search" placeholder="Search approved lore..." autocomplete="off">
-              </label>
-              <label class="custom-command-sort-label" for="streamLoreApprovedSort">Sort
-                <select id="streamLoreApprovedSort" aria-label="Sort approved AI-learned lore">
-                  <option value="recent_desc">Recently observed</option>
-                  <option value="text_asc">Lore — A to Z</option>
-                  <option value="text_desc">Lore — Z to A</option>
-                  <option value="evidence_desc">Evidence — most first</option>
-                  <option value="confidence_desc">Confidence — highest first</option>
-                  <option value="revision_desc">Revisions awaiting review</option>
-                </select>
-              </label>
+
+            <div class="learned-review-section">
+              <div class="custom-command-header learned-review-header">
+                <div>
+                  <h4>Approved Lore</h4>
+                  <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support; conflicting evidence can lower confidence and suggest a moderator-reviewed revision. Approved wording never changes until you accept it.</div>
+                </div>
+                <div class="custom-command-list-controls">
+                  <label class="list-search-wrap" for="streamLoreApprovedSearch">
+                    <span class="sr-only">Search approved AI-learned lore</span>
+                    <input id="streamLoreApprovedSearch" class="list-search-input" type="search" placeholder="Search approved lore..." autocomplete="off">
+                  </label>
+                  <label class="custom-command-sort-label" for="streamLoreApprovedSort">Sort
+                    <select id="streamLoreApprovedSort" aria-label="Sort approved AI-learned lore">
+                      <option value="recent_desc">Recently observed</option>
+                      <option value="text_asc">Lore — A to Z</option>
+                      <option value="text_desc">Lore — Z to A</option>
+                      <option value="evidence_desc">Evidence — most first</option>
+                      <option value="confidence_desc">Confidence — highest first</option>
+                      <option value="revision_desc">Revisions awaiting review</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="custom-response-heading learned-review-count-row"><strong></strong><span id="streamLoreApprovedCount" class="detail">0 approved</span></div>
+              <div id="streamLoreApprovedList" class="viewer-profile-facts stream-lore-observations"></div>
+              <div id="streamLoreApprovedPagination" class="list-pagination" aria-label="Approved stream lore pagination">
+                <label class="list-page-size">Show
+                  <select id="streamLoreApprovedPageSize" aria-label="Approved stream lore per page">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                  </select>
+                </label>
+                <div id="streamLoreApprovedPageLabel" class="list-page-label">Page 1 of 1</div>
+                <div class="list-page-buttons">
+                  <button id="streamLoreApprovedPrevPage" class="secondary" type="button" aria-label="Previous approved lore page">←</button>
+                  <button id="streamLoreApprovedNextPage" class="secondary" type="button" aria-label="Next approved lore page">→</button>
+                </div>
+              </div>
             </div>
+            <div id="streamLoreObservationsMsg" class="detail"></div>
           </div>
-          <div class="custom-response-heading learned-review-count-row"><strong></strong><span id="streamLoreApprovedCount" class="detail">0 approved</span></div>
-          <div id="streamLoreApprovedList" class="viewer-profile-facts stream-lore-observations"></div>
-          <div id="streamLoreApprovedPagination" class="list-pagination" aria-label="Approved stream lore pagination">
-            <label class="list-page-size">Show
-              <select id="streamLoreApprovedPageSize" aria-label="Approved stream lore per page">
-                <option value="10">10</option>
-                <option value="25">25</option>
-                <option value="50">50</option>
-              </select>
-            </label>
-            <div id="streamLoreApprovedPageLabel" class="list-page-label">Page 1 of 1</div>
-            <div class="list-page-buttons">
-              <button id="streamLoreApprovedPrevPage" class="secondary" type="button" aria-label="Previous approved lore page">←</button>
-              <button id="streamLoreApprovedNextPage" class="secondary" type="button" aria-label="Next approved lore page">→</button>
-            </div>
-          </div>
         </div>
 
-        <div class="learned-review-section learned-review-pending">
-          <div class="custom-response-heading"><strong>Pending Lore</strong><span id="streamLorePendingCount" class="detail">0 pending</span></div>
-          <div class="detail">Pending wording can automatically refine as evidence accumulates. Approve moves it to the approved table and turns Use on. Reject discards it; future evidence may cause the AI to propose it again.</div>
-          <div id="streamLorePendingList" class="viewer-profile-facts stream-lore-observations"></div>
+        <div id="streamLoreManualView" class="subsection-view">
+          <div class="memory-block">
+            <h4>Manually Added Lore</h4>
+            <div class="detail">Moderator-written persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
+            <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
+            <div class="memory-actions">
+              <button id="saveLoreBtn">Save Lore</button>
+              <button id="undoLoreBtn" class="secondary" type="button">Undo Changes</button>
+            </div>
+            <div id="loreCount" class="detail">0/12000 characters</div>
+            <div id="loreMsg" class="detail"></div>
+          </div>
         </div>
-        <div id="streamLoreObservationsMsg" class="detail"></div>
-      </div>
       </div>
 
       <div id="botPersonalityView" class="subsection-view">
@@ -900,26 +909,9 @@
 
       <div id="viewerProfilesView" class="subsection-view">
         <div class="memory-block">
-          <div class="custom-command-header">
-            <div>
-              <h4>Viewer Profiles</h4>
-              <div class="detail">Viewer context learned from meaningful chat and available for tagged AI questions.</div>
-            </div>
-            <div class="custom-command-list-controls">
-              <label class="list-search-wrap" for="viewerProfileSearch">
-                <span class="sr-only">Search viewer profiles</span>
-                <input id="viewerProfileSearch" class="list-search-input" type="search" placeholder="Search viewer profiles..." autocomplete="off" aria-label="Search viewer profiles">
-              </label>
-              <label class="custom-command-sort-label" for="viewerProfileSort">Sort
-                <select id="viewerProfileSort" aria-label="Sort viewer profiles">
-                  <option value="updated_desc">Recently updated</option>
-                  <option value="name_asc">Name — A to Z</option>
-                  <option value="name_desc">Name — Z to A</option>
-                  <option value="facts_desc">Learned facts — most first</option>
-                </select>
-              </label>
-              <button id="refreshViewerProfilesBtn" class="secondary" type="button">Refresh</button>
-            </div>
+          <div>
+            <h4>Viewer Profiles</h4>
+            <div class="detail">Viewer context learned from meaningful chat and available for tagged AI questions.</div>
           </div>
 
           <div class="viewer-profile-settings-card">
@@ -935,23 +927,54 @@
           </div>
           <div id="viewerProfileSettingsMsg" class="detail"></div>
 
-          <div id="viewerProfilesMsg" class="detail"></div>
-          <div id="viewerProfileList" class="custom-command-list"></div>
-          <div id="viewerProfilePagination" class="list-pagination" aria-label="Viewer profile pagination">
-            <label class="list-page-size">Show
-              <select id="viewerProfilePageSize" aria-label="Viewer profiles per page">
-                <option value="10">10</option>
-                <option value="25">25</option>
-                <option value="50">50</option>
-              </select>
-            </label>
-            <div id="viewerProfilePageLabel" class="list-page-label">Page 1 of 1</div>
-            <div class="list-page-buttons">
-              <button id="viewerProfilePrevPage" class="secondary" type="button" aria-label="Previous viewer profile page">←</button>
-              <button id="viewerProfileNextPage" class="secondary" type="button" aria-label="Next viewer profile page">→</button>
-            </div>
+          <div class="learned-review-section learned-review-pending viewer-profile-global-pending-review">
+            <div class="custom-response-heading"><strong>Pending AI Observations</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending</span></div>
+            <div class="detail">Review new AI-learned viewer observations here without opening each profile. Each proposal shows the viewer it belongs to. Approve makes it eligible for AI context; Reject discards it.</div>
+            <div id="viewerProfilePendingReviewList" class="viewer-profile-facts viewer-profile-global-pending-list"></div>
+            <div id="viewerProfilePendingReviewMsg" class="detail"></div>
           </div>
-          <div class="custom-command-add-row"><button id="addViewerProfileBtn" type="button">Add Viewer Profile</button></div>
+
+          <div class="learned-review-section viewer-profile-list-section">
+            <div class="custom-command-header learned-review-header">
+              <div>
+                <h4>Viewer Profiles</h4>
+                <div class="detail">Open a profile for moderator notes, approved observations, revisions, per-viewer learning controls, or detailed history.</div>
+              </div>
+              <div class="custom-command-list-controls">
+                <label class="list-search-wrap" for="viewerProfileSearch">
+                  <span class="sr-only">Search viewer profiles</span>
+                  <input id="viewerProfileSearch" class="list-search-input" type="search" placeholder="Search viewer profiles..." autocomplete="off" aria-label="Search viewer profiles">
+                </label>
+                <label class="custom-command-sort-label" for="viewerProfileSort">Sort
+                  <select id="viewerProfileSort" aria-label="Sort viewer profiles">
+                    <option value="updated_desc">Recently updated</option>
+                    <option value="name_asc">Name — A to Z</option>
+                    <option value="name_desc">Name — Z to A</option>
+                    <option value="facts_desc">Learned facts — most first</option>
+                  </select>
+                </label>
+                <button id="refreshViewerProfilesBtn" class="secondary" type="button">Refresh</button>
+              </div>
+            </div>
+
+            <div id="viewerProfilesMsg" class="detail"></div>
+            <div id="viewerProfileList" class="custom-command-list"></div>
+            <div id="viewerProfilePagination" class="list-pagination" aria-label="Viewer profile pagination">
+              <label class="list-page-size">Show
+                <select id="viewerProfilePageSize" aria-label="Viewer profiles per page">
+                  <option value="10">10</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                </select>
+              </label>
+              <div id="viewerProfilePageLabel" class="list-page-label">Page 1 of 1</div>
+              <div class="list-page-buttons">
+                <button id="viewerProfilePrevPage" class="secondary" type="button" aria-label="Previous viewer profile page">←</button>
+                <button id="viewerProfileNextPage" class="secondary" type="button" aria-label="Next viewer profile page">→</button>
+              </div>
+            </div>
+            <div class="custom-command-add-row"><button id="addViewerProfileBtn" type="button">Add Viewer Profile</button></div>
+          </div>
         </div>
 
         <dialog id="viewerProfileDialog" class="custom-variables-dialog viewer-profile-dialog">

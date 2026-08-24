@@ -31,6 +31,69 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     el.classList.toggle('bad', Boolean(isError));
   }
 
+  function setPendingReviewMessage(text, isError = false) {
+    const el = $('viewerProfilePendingReviewMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('bad', Boolean(isError));
+  }
+
+  function pendingFactsAcrossProfiles() {
+    return profiles.flatMap((profile) => (profile.facts || [])
+      .filter((fact) => factApprovalStatus(fact) === 'pending' && fact.source !== 'deterministic')
+      .map((fact) => ({ profile, fact })))
+      .sort((a, b) => new Date(b.fact.lastObservedAt || b.fact.firstObservedAt || b.profile.updatedAt || 0).getTime()
+        - new Date(a.fact.lastObservedAt || a.fact.firstObservedAt || a.profile.updatedAt || 0).getTime());
+  }
+
+  function renderPendingReview() {
+    const listEl = $('viewerProfilePendingReviewList');
+    const countEl = $('viewerProfilePendingReviewCount');
+    if (!listEl || !countEl) return;
+    const pending = pendingFactsAcrossProfiles();
+    countEl.textContent = `${pending.length} pending`;
+    listEl.innerHTML = pending.length ? pending.map(({ profile, fact }) => {
+      const windows = Math.max(1, Number(fact.supportingWindowCount || 1));
+      const refinements = Math.max(0, Number(fact.revisionCount || 0));
+      const displayName = profile.displayName || profile.username || 'Unknown viewer';
+      const disabled = profile.optedOut === true ? 'disabled' : '';
+      return `<div class="viewer-profile-fact viewer-profile-pending-review-row" data-profile-id="${esc(profile.id)}" data-fact-id="${esc(fact.id)}">
+        <div class="viewer-profile-fact-copy">
+          <div class="viewer-pending-profile"><strong>${esc(displayName)}</strong> <span class="detail">@${esc(profile.username || '')}</span>${profile.optedOut === true ? ' <span class="custom-command-state disabled">Opted out</span>' : ''}</div>
+          <div>${esc(fact.text)}</div>
+          <div class="detail">${esc(fact.kind || 'fact')} · AI · ${esc(fact.confidence || 'medium')} confidence · support ${Number(fact.evidenceCount || 1)}x across ${windows} window${windows === 1 ? '' : 's'}${refinements ? ` · auto-refined ${refinements}x` : ''}${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          ${fact.evidenceSummary ? `<div class="detail">${esc(fact.evidenceSummary)}</div>` : ''}
+        </div>
+        <div class="custom-command-actions">
+          <button class="success viewer-global-fact-approve" type="button" ${disabled}>Approve</button>
+          <button class="danger viewer-global-fact-reject" type="button" ${disabled}>Reject</button>
+        </div>
+      </div>`;
+    }).join('') : '<div class="detail custom-empty-state">No pending AI viewer observations.</div>';
+
+    listEl.querySelectorAll('.viewer-global-fact-approve, .viewer-global-fact-reject').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.viewer-profile-pending-review-row');
+        const profileId = row?.dataset.profileId;
+        const factId = row?.dataset.factId;
+        if (!profileId || !factId) return;
+        const approving = button.classList.contains('viewer-global-fact-approve');
+        button.disabled = true;
+        setPendingReviewMessage(approving ? 'Approving observation...' : 'Rejecting observation...');
+        const d = await postJson(approving ? '/viewer-profiles/fact-approve' : '/viewer-profiles/fact-reject', { profileId, factId });
+        if (!d.success) {
+          button.disabled = false;
+          return setPendingReviewMessage(d.error || `Could not ${approving ? 'approve' : 'reject'} observation.`, true);
+        }
+        const index = profiles.findIndex((item) => item.id === profileId);
+        if (index >= 0) profiles[index] = d.profile;
+        if (editingId === profileId && dialog.open) renderFacts(d.profile);
+        renderList();
+        setPendingReviewMessage(approving ? 'Observation approved and enabled.' : 'Pending observation rejected.');
+      };
+    });
+  }
+
   function selectedPageSize() {
     const value = Number($('viewerProfilePageSize').value || 10);
     return VALID_PAGE_SIZES.has(value) ? value : 10;
@@ -110,6 +173,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     $('viewerProfilePrevPage').disabled = currentPage <= 1;
     $('viewerProfileNextPage').disabled = currentPage >= pageCount;
     $('viewerProfilePagination').hidden = list.length === 0;
+    renderPendingReview();
   }
 
   function factApprovalStatus(fact) {

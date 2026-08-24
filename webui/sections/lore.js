@@ -38,6 +38,18 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     if (viewerProfiles?.onVisibilityChange) viewerProfiles.onVisibilityChange(profilesSelected);
   }
 
+  function selectStreamLoreView(view) {
+    const selected = view === 'manual' ? 'manual' : 'ai';
+    const aiSelected = selected === 'ai';
+    const manualSelected = selected === 'manual';
+    $('streamLoreAiView').classList.toggle('open', aiSelected);
+    $('streamLoreManualView').classList.toggle('open', manualSelected);
+    $('streamLoreAiTab').classList.toggle('active', aiSelected);
+    $('streamLoreManualTab').classList.toggle('active', manualSelected);
+    $('streamLoreAiTab').setAttribute('aria-selected', aiSelected ? 'true' : 'false');
+    $('streamLoreManualTab').setAttribute('aria-selected', manualSelected ? 'true' : 'false');
+  }
+
   function updateCount() {
     $('loreCount').textContent = `${$('streamLore').value.length}/${maxLength} characters`;
   }
@@ -472,8 +484,10 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('streamLoreApprovedPrevPage').onclick = () => { if (approvedLorePage > 1) { approvedLorePage--; renderLearnedLore(); } };
   $('streamLoreApprovedNextPage').onclick = () => { approvedLorePage++; renderLearnedLore(); };
   $('streamLoreViewTab').onclick = () => selectMemoryView('lore');
-  $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
   $('viewerProfilesViewTab').onclick = () => selectMemoryView('profiles');
+  $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
+  $('streamLoreAiTab').onclick = () => selectStreamLoreView('ai');
+  $('streamLoreManualTab').onclick = () => selectStreamLoreView('manual');
   $('streamLore').oninput = updateCount;
   $('saveLoreBtn').onclick = saveLore;
   $('undoLoreBtn').onclick = loadLore;
@@ -492,6 +506,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   syncCooldownResponseVisibility();
   syncAiRetryControls();
   toggleSessionMemoryAdvanced(false);
+  selectStreamLoreView('ai');
   selectMemoryView('lore');
   return {
     loadLore,
