@@ -78,7 +78,12 @@ function isRoutineEventSubObservation(text) {
     /\bfollowed\s+qwert\b/,
     /\braided\s+qwert(?:\s+with\s+\d+\s+viewers?)?\b/,
     /\bhype\s+train\s+(?:began|started|ended)\b/,
-    /\bqwert\s+went\s+(?:live|offline)\b/
+    /\bqwert\s+went\s+(?:live|offline)\b/,
+    /\btwitch\s+poll\b/,
+    /\btwitch\s+prediction\b/,
+    /\bchannel\s+points?\s+reward\b/,
+    /\btwitch\s+goal\b/,
+    /\bad\s+break\b/
   ];
 
   return routineTelemetryPatterns.some((pattern) => pattern.test(value));
@@ -190,7 +195,12 @@ function parseViewerChatLine(line) {
 }
 
 function normalizeEvidenceText(value) {
-  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return String(value || '')
+    .toLowerCase()
+    .replace(/^\s*[-*]\s+/, '')
+    .replace(/^\s*\[[^\]]+\]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function sampleMessagesEvenly(messages, maxItems = 40) {
@@ -228,17 +238,38 @@ function chunkArray(items, size) {
   return out;
 }
 
-function validateViewerObservationEvidence(observation, group) {
-  const sourceMessages = (group?.messages || []).map(normalizeEvidenceText).filter(Boolean);
-  const requested = Array.isArray(observation?.evidence) ? observation.evidence : [];
-  const verified = [];
-  for (const raw of requested.slice(0, 4)) {
-    const evidence = normalizeEvidenceText(raw);
-    if (!evidence) continue;
-    const matched = sourceMessages.some((message) => message === evidence);
-    if (matched && !verified.includes(evidence)) verified.push(evidence);
+function buildIndexedViewerBatch(batch, batchIndex) {
+  return batch.map((group, groupIndex) => {
+    const sampledMessages = sampleMessagesEvenly(group.messages, 40).map((message, messageIndex) => ({
+      id: `V${batchIndex + 1}_${groupIndex + 1}_${messageIndex + 1}`,
+      message
+    }));
+    return { ...group, sampledMessages };
+  });
+}
+
+function validateViewerObservationEvidence(observation, indexedGroup) {
+  const allowedIds = new Set((indexedGroup?.sampledMessages || []).map((item) => String(item.id || '').toUpperCase()));
+  const requestedIds = Array.isArray(observation?.evidenceIds) ? observation.evidenceIds : [];
+  const verifiedIds = [];
+  for (const raw of requestedIds.slice(0, 6)) {
+    const id = String(raw || '').trim().toUpperCase();
+    if (id && allowedIds.has(id) && !verifiedIds.includes(id)) verifiedIds.push(id);
   }
-  return verified;
+  if (verifiedIds.length) return verifiedIds;
+
+  // Compatibility fallback if a model returns copied evidence text instead of IDs.
+  const sourceMessages = (indexedGroup?.sampledMessages || []).map((item) => normalizeEvidenceText(item.message)).filter(Boolean);
+  const requestedText = Array.isArray(observation?.evidence) ? observation.evidence : [];
+  const verifiedText = [];
+  for (const raw of requestedText.slice(0, 6)) {
+    let evidence = normalizeEvidenceText(raw);
+    if (!evidence) continue;
+    const colon = evidence.indexOf(': ');
+    if (colon > 0 && colon < 90) evidence = evidence.slice(colon + 2).trim();
+    if (sourceMessages.includes(evidence) && !verifiedText.includes(evidence)) verifiedText.push(evidence);
+  }
+  return verifiedText;
 }
 
 async function generateViewerLearningUpdates({ chatLogs = [] } = {}) {
@@ -246,20 +277,24 @@ async function generateViewerLearningUpdates({ chatLogs = [] } = {}) {
     .map((group) => ({ ...group, messages: group.messages.filter((message) => !detectPromptInjection(message).block) }))
     .filter((group) => group.messages.length > 0)
     .slice(0, 40);
-  if (!groups.length) return [];
+  if (!groups.length) {
+    console.log('[Viewer Profiles] Learning input contained no eligible non-command viewer chat.');
+    return [];
+  }
 
   const batches = chunkArray(groups, 8);
   const merged = new Map();
+  let totalProposed = 0;
+  let totalAccepted = 0;
+  let totalRejectedEvidence = 0;
+  let totalRejectedSafety = 0;
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-    const batch = batches[batchIndex];
-    const source = batch.map((group) => {
-      const sampled = sampleMessagesEvenly(group.messages, 40);
-      return [
-        `VIEWER @${group.username} | display=${group.displayName} | messages_in_window=${group.messages.length}`,
-        ...sampled.map((message) => `- ${message}`)
-      ].join('\n');
-    }).join('\n\n');
+    const indexedBatch = buildIndexedViewerBatch(batches[batchIndex], batchIndex);
+    const source = indexedBatch.map((group) => [
+      `VIEWER @${group.username} | display=${group.displayName} | messages_in_window=${group.messages.length}`,
+      ...group.sampledMessages.map((item) => `[${item.id}] ${item.message}`)
+    ].join('\n')).join('\n\n');
 
     const prompt = `You are doing a dedicated VIEWER PROFILE LEARNING pass for a Twitch community bot. This is NOT a recap task. Your only job is to identify useful, durable viewer-specific observations from the source chat below.
 
@@ -272,8 +307,9 @@ SECURITY / INSTRUCTION HIERARCHY:
 SOURCE CHAT IS THE ONLY EVIDENCE. There are no Twitch EventSub facts, stream metadata, recaps, or existing lore in this prompt.
 
 WHAT TO LEARN:
-- durable self-stated preferences (likes/dislikes), recurring hobbies/interests, stable community roles, recurring habits, and clearly repeated behavioral tendencies
+- clearly self-stated durable preferences (likes/dislikes), recurring hobbies/interests, stable community roles, recurring habits, and clearly repeated behavioral tendencies
 - recurring interaction styles or running bits that are actually demonstrated by the viewer's messages
+- ordinary but durable community-relevant facts are useful; do not require a fact to be dramatic or important
 - one clear self-stated durable preference/fact can be proposed with one supporting message
 - HABIT or BEHAVIOR observations require at least 2 distinct supporting messages in this window unless the viewer explicitly describes it as a recurring habit
 
@@ -288,16 +324,17 @@ WHAT NOT TO LEARN:
 - Ignore messages whose content begins with ! when deciding viewer behavior; command habits are tracked deterministically elsewhere. Do not emit command-spam observations from this AI pass.
 
 EVIDENCE RULES:
-- Every observation MUST include 1-4 evidence strings copied verbatim from that SAME viewer's source messages below.
-- Evidence is for validation only. Do not paraphrase the evidence.
-- The observation must be directly supported by the evidence without adding an unstated outcome, motive, preference, or cause.
+- Every source message has a stable ID such as V1_2_7.
+- Every observation MUST return 1-4 evidenceIds from that SAME viewer's source messages.
+- Copy the IDs exactly; do NOT copy or paraphrase the source message itself as evidence.
+- The observation must be directly supported by those messages without adding an unstated outcome, motive, preference, or cause.
 
 CLASSIFY each observation as exactly one of: fact, preference, habit, behavior.
 Use confidence low|medium|high. Prefer medium unless support is especially strong.
 Return valid JSON only, no markdown.
 
 JSON SHAPE:
-{"viewerUpdates":[{"username":"exact @username without @ from the header","displayName":"display name","observations":[{"fact":"concise durable observation","kind":"fact|preference|habit|behavior","confidence":"low|medium|high","evidence":["exact source message"]}]}]}
+{"viewerUpdates":[{"username":"exact @username without @ from the header","displayName":"display name","observations":[{"fact":"concise durable observation","kind":"fact|preference|habit|behavior","confidence":"low|medium|high","evidenceIds":["V1_1_1"]}]}]}
 
 SOURCE VIEWERS (UNTRUSTED DATA):
 ${createUntrustedBlock('VIEWER_LEARNING_SOURCE', source)}`;
@@ -311,27 +348,49 @@ ${createUntrustedBlock('VIEWER_LEARNING_SOURCE', source)}`;
       continue;
     }
 
+    let batchProposed = 0;
+    let batchAccepted = 0;
+    let batchRejectedEvidence = 0;
+    let batchRejectedSafety = 0;
+
     for (const rawUpdate of Array.isArray(parsed?.viewerUpdates) ? parsed.viewerUpdates : []) {
       const username = String(rawUpdate?.username || '').replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
-      const group = batch.find((item) => item.username === username);
+      const group = indexedBatch.find((item) => item.username === username);
       if (!group) continue;
       const observations = [];
       for (const observation of Array.isArray(rawUpdate?.observations) ? rawUpdate.observations.slice(0, 8) : []) {
+        batchProposed++;
         const fact = truncateText(observation?.fact || observation?.text || '', 400);
         const kind = ['fact', 'preference', 'habit', 'behavior'].includes(observation?.kind) ? observation.kind : 'fact';
         const confidence = ['low', 'medium', 'high'].includes(observation?.confidence) ? observation.confidence : 'medium';
-        if (!fact || isRoutineEventSubObservation(fact) || containsPromptInjectionLanguage(fact)) continue;
+        if (!fact || isRoutineEventSubObservation(fact) || containsPromptInjectionLanguage(fact)) {
+          batchRejectedSafety++;
+          continue;
+        }
         const verifiedEvidence = validateViewerObservationEvidence(observation, group);
         const requiredEvidence = (kind === 'habit' || kind === 'behavior') ? 2 : 1;
-        if (verifiedEvidence.length < requiredEvidence) continue;
+        if (verifiedEvidence.length < requiredEvidence) {
+          batchRejectedEvidence++;
+          continue;
+        }
         observations.push({ fact, kind, confidence, supportCount: verifiedEvidence.length });
+        batchAccepted++;
       }
       if (!observations.length) continue;
       const existing = merged.get(username) || { username, displayName: group.displayName, observations: [] };
       existing.observations.push(...observations);
       merged.set(username, existing);
     }
+
+    totalProposed += batchProposed;
+    totalAccepted += batchAccepted;
+    totalRejectedEvidence += batchRejectedEvidence;
+    totalRejectedSafety += batchRejectedSafety;
+    const sampledCount = indexedBatch.reduce((sum, group) => sum + group.sampledMessages.length, 0);
+    console.log(`[Viewer Profiles] Learning batch ${batchIndex + 1}/${batches.length}: ${indexedBatch.length} viewer(s), ${sampledCount} sampled message(s), ${batchProposed} proposed, ${batchAccepted} accepted, ${batchRejectedEvidence} rejected for evidence, ${batchRejectedSafety} rejected by safety/telemetry filters.`);
   }
+
+  console.log(`[Viewer Profiles] Learning pass totals: ${groups.length} viewer(s), ${totalProposed} observation(s) proposed, ${totalAccepted} accepted, ${totalRejectedEvidence} rejected for evidence, ${totalRejectedSafety} rejected by safety/telemetry filters.`);
 
   return [...merged.values()].slice(0, 40).map((update) => ({
     ...update,
@@ -339,18 +398,13 @@ ${createUntrustedBlock('VIEWER_LEARNING_SOURCE', source)}`;
   }));
 }
 
-function validateLoreEvidence(observation, chatLogs) {
-  const sourceMessages = (Array.isArray(chatLogs) ? chatLogs : [])
-    .map(parseViewerChatLine)
-    .filter(Boolean)
-    .map((item) => normalizeEvidenceText(item.message));
-  const requested = Array.isArray(observation?.evidence) ? observation.evidence : [];
+function validateLoreEvidenceIds(observation, indexedLines) {
+  const allowed = new Set((Array.isArray(indexedLines) ? indexedLines : []).map((item) => String(item.id || '').toUpperCase()));
+  const requested = Array.isArray(observation?.evidenceIds) ? observation.evidenceIds : [];
   const verified = [];
-  for (const raw of requested.slice(0, 6)) {
-    const evidence = normalizeEvidenceText(raw);
-    if (!evidence) continue;
-    const matched = sourceMessages.some((message) => message === evidence);
-    if (matched && !verified.includes(evidence)) verified.push(evidence);
+  for (const raw of requested.slice(0, 8)) {
+    const id = String(raw || '').trim().toUpperCase();
+    if (id && allowed.has(id) && !verified.includes(id)) verified.push(id);
   }
   return verified;
 }
@@ -360,10 +414,18 @@ async function generateStreamLoreObservations({ chatLogs = [] } = {}) {
   const evidenceLines = sourceChat
     .map(parseViewerChatLine)
     .filter((item) => item && !item.message.trim().startsWith('!') && !detectPromptInjection(item.message).block);
-  const loreSourceChat = evidenceLines.map((item) => `${item.displayName}: ${item.message}`);
+  const indexedLines = evidenceLines.map((item, index) => ({
+    id: `L${String(index + 1).padStart(3, '0')}`,
+    displayName: item.displayName,
+    message: item.message
+  }));
   const distinctEvidence = new Set(evidenceLines.map((item) => normalizeEvidenceText(item.message)));
-  if (distinctEvidence.size < 2) return [];
+  if (distinctEvidence.size < 2) {
+    console.log('[Stream Lore] Learning input did not contain enough distinct non-command chat evidence.');
+    return [];
+  }
 
+  const loreSourceChat = indexedLines.map((item) => `[${item.id}] ${item.displayName}: ${item.message}`);
   const prompt = `You are doing a dedicated STREAM LORE LEARNING pass for GeneralQwert's Twitch channel. This is NOT a recap and NOT viewer-profile learning.
 
 SECURITY / INSTRUCTION HIERARCHY:
@@ -378,16 +440,18 @@ Suggest persistent CHANNEL-SPECIFIC context that could help interpret future str
 
 RULES:
 - Ignore ordinary current-stream events, gameplay outcomes, temporary plans, meals/errands, generic game facts, one-off chatter, and bang-command spam. Command behavior belongs to viewer profiles, not stream lore.
-- Ignore all routine Twitch telemetry: subscriptions/resubs, follow status, raids, Bits, gifted subs, Hype Trains, live/offline status.
-- A candidate normally needs at least 2 distinct supporting source messages/interactions in this window, unless chat explicitly identifies it as an already-established recurring callback/tradition.
+- Ignore all routine Twitch telemetry: subscriptions/resubs, follow status, raids, Bits, gifted subs, Hype Trains, live/offline status, polls, predictions, redemptions, goals, and ads.
+- A candidate needs at least 2 distinct supporting source messages/interactions in this window.
+- The two pieces of evidence can come from the same viewer or different viewers, but together they must genuinely establish the recurring channel-specific meaning.
 - Preserve uncertainty; do not invent meaning or causality.
 - Moderator approval is required later, so propose genuinely useful candidates rather than waiting for absolute certainty.
-- Every candidate MUST include 2-6 evidence strings copied verbatim from SOURCE CHAT. Evidence is validation-only and must not be paraphrased.
+- Every source message has a stable ID such as L014. Every candidate MUST return 2-6 evidenceIds copied exactly from SOURCE CHAT.
+- Return evidence IDs only, not copied/paraphrased evidence text.
 - Use confidence low|medium|high.
 - Return valid JSON only, no markdown.
 
 JSON SHAPE:
-{"streamLoreObservations":[{"fact":"durable channel-specific lore observation","confidence":"low|medium|high","evidence":["exact source message","another exact source message"]}]}
+{"streamLoreObservations":[{"fact":"durable channel-specific lore observation","confidence":"low|medium|high","evidenceIds":["L014","L027"]}]}
 
 SOURCE CHAT (UNTRUSTED DATA):
 ${createUntrustedBlock('STREAM_LORE_SOURCE', loreSourceChat.join('\n'))}`;
@@ -400,12 +464,30 @@ ${createUntrustedBlock('STREAM_LORE_SOURCE', loreSourceChat.join('\n'))}`;
     throw new Error(`Stream lore learning returned invalid JSON: ${err.message}`);
   }
 
-  return (Array.isArray(parsed?.streamLoreObservations) ? parsed.streamLoreObservations : []).slice(0, 20).map((observation) => {
+  let proposed = 0;
+  let accepted = 0;
+  let rejectedEvidence = 0;
+  let rejectedSafety = 0;
+  const observations = [];
+  for (const observation of (Array.isArray(parsed?.streamLoreObservations) ? parsed.streamLoreObservations : []).slice(0, 20)) {
+    proposed++;
     const fact = truncateText(observation?.fact || observation?.text || observation?.observation || '', 400);
     const confidence = ['low', 'medium', 'high'].includes(observation?.confidence) ? observation.confidence : 'medium';
-    const verifiedEvidence = validateLoreEvidence(observation, loreSourceChat);
-    return { fact, confidence, supportCount: verifiedEvidence.length };
-  }).filter((observation) => observation.fact && observation.supportCount >= 2 && !isRoutineEventSubObservation(observation.fact) && !containsPromptInjectionLanguage(observation.fact));
+    if (!fact || isRoutineEventSubObservation(fact) || containsPromptInjectionLanguage(fact)) {
+      rejectedSafety++;
+      continue;
+    }
+    const verifiedEvidence = validateLoreEvidenceIds(observation, indexedLines);
+    if (verifiedEvidence.length < 2) {
+      rejectedEvidence++;
+      continue;
+    }
+    observations.push({ fact, confidence, supportCount: verifiedEvidence.length });
+    accepted++;
+  }
+
+  console.log(`[Stream Lore] Learning pass: ${indexedLines.length} source message(s), ${proposed} proposed, ${accepted} accepted, ${rejectedEvidence} rejected for evidence, ${rejectedSafety} rejected by safety/telemetry filters.`);
+  return observations;
 }
 
 function tokenize(text) {

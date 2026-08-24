@@ -14,7 +14,20 @@ const EVENT_TYPES = [
   { type: 'channel.hype_train.begin', label: 'Hype Train Start', threshold: 'Level' },
   { type: 'channel.hype_train.end', label: 'Hype Train End', threshold: 'Level' },
   { type: 'stream.online', label: 'Stream Online', threshold: null },
-  { type: 'stream.offline', label: 'Stream Offline', threshold: null }
+  { type: 'stream.offline', label: 'Stream Offline', threshold: null },
+  { type: 'channel.poll.begin', label: 'Poll Start', threshold: null },
+  { type: 'channel.poll.progress', label: 'Poll Progress', threshold: 'Total Votes' },
+  { type: 'channel.poll.end', label: 'Poll End', threshold: 'Total Votes' },
+  { type: 'channel.prediction.begin', label: 'Prediction Start', threshold: null },
+  { type: 'channel.prediction.progress', label: 'Prediction Progress', threshold: 'Total Channel Points' },
+  { type: 'channel.prediction.lock', label: 'Prediction Locked', threshold: 'Total Channel Points' },
+  { type: 'channel.prediction.end', label: 'Prediction End', threshold: 'Total Channel Points' },
+  { type: 'channel.channel_points_custom_reward_redemption.add', label: 'Channel Point Redemption', threshold: 'Reward Cost' },
+  { type: 'channel.channel_points_automatic_reward_redemption.add', label: 'Automatic Point Redemption', threshold: 'Reward Cost' },
+  { type: 'channel.goal.begin', label: 'Goal Start', threshold: 'Current Amount' },
+  { type: 'channel.goal.progress', label: 'Goal Progress', threshold: 'Current Amount' },
+  { type: 'channel.goal.end', label: 'Goal End', threshold: 'Current Amount' },
+  { type: 'channel.ad_break.begin', label: 'Ad Break Start', threshold: 'Duration Seconds' }
 ];
 const EVENT_TYPE_SET = new Set(EVENT_TYPES.map((item) => item.type));
 const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_announcement', 'twitch_shoutout']);
@@ -35,10 +48,27 @@ function eventActor(event = {}, type = '') {
     };
   }
   return {
-    login: String(event.user_login || '').trim(),
-    name: String(event.user_name || event.user_login || (event.is_anonymous ? 'Anonymous' : 'viewer')).trim(),
-    userId: String(event.user_id || '').trim()
+    login: String(event.user_login || event.broadcaster_user_login || '').trim(),
+    name: String(event.user_name || event.user_login || event.broadcaster_user_name || event.broadcaster_user_login || (event.is_anonymous ? 'Anonymous' : 'Qwert')).trim(),
+    userId: String(event.user_id || event.broadcaster_user_id || '').trim()
   };
+}
+
+function sumNumeric(items, field) {
+  return (Array.isArray(items) ? items : []).reduce((sum, item) => sum + Math.max(0, Number(item?.[field] || 0)), 0);
+}
+
+function predictionWinner(event = {}) {
+  const winningId = String(event.winning_outcome_id || '');
+  const outcome = (Array.isArray(event.outcomes) ? event.outcomes : []).find((item) => String(item?.id || '') === winningId);
+  return String(outcome?.title || '').trim();
+}
+
+function eventTitle(type, event = {}) {
+  if (type === 'channel.channel_points_custom_reward_redemption.add') return String(event.reward?.title || '').trim();
+  if (type === 'channel.channel_points_automatic_reward_redemption.add') return String(event.reward?.type || '').replace(/_/g, ' ').trim();
+  if (type.startsWith('channel.goal.')) return String(event.description || '').trim();
+  return String(event.title || '').trim();
 }
 
 function numericEventValue(type, event = {}) {
@@ -49,6 +79,17 @@ function numericEventValue(type, event = {}) {
     case 'channel.raid': return Number(event.viewers || 0);
     case 'channel.hype_train.begin':
     case 'channel.hype_train.end': return Number(event.level || 0);
+    case 'channel.poll.progress':
+    case 'channel.poll.end': return sumNumeric(event.choices, 'votes');
+    case 'channel.prediction.progress':
+    case 'channel.prediction.lock':
+    case 'channel.prediction.end': return sumNumeric(event.outcomes, 'channel_points');
+    case 'channel.channel_points_custom_reward_redemption.add': return Number(event.reward?.cost || 0);
+    case 'channel.channel_points_automatic_reward_redemption.add': return Number(event.reward?.channel_points || event.reward?.cost || 0);
+    case 'channel.goal.begin':
+    case 'channel.goal.progress':
+    case 'channel.goal.end': return Number(event.current_amount || 0);
+    case 'channel.ad_break.begin': return Number(event.duration_seconds || 0);
     default: return 0;
   }
 }
@@ -126,18 +167,32 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
 
 function renderEventTemplate(template, type, event = {}) {
   const actor = eventActor(event, type);
+  const choices = (Array.isArray(event.choices) ? event.choices : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
+  const outcomes = (Array.isArray(event.outcomes) ? event.outcomes : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
   const map = {
     user: actor.name,
     username: actor.login || actor.name,
-    raider: type === 'channel.raid' ? actor.name : actor.name,
+    raider: actor.name,
     viewers: Number(event.viewers || 0),
     bits: Number(event.bits || 0),
     gifts: Number(event.total || 0),
     level: Number(event.level || 0),
     months: Number(event.cumulative_months || 0),
-    event: EVENT_TYPES.find((item) => item.type === type)?.label || type
+    event: EVENT_TYPES.find((item) => item.type === type)?.label || type,
+    title: eventTitle(type, event),
+    choices: choices || outcomes,
+    votes: sumNumeric(event.choices, 'votes'),
+    points: sumNumeric(event.outcomes, 'channel_points'),
+    winner: predictionWinner(event),
+    reward: String(event.reward?.title || event.reward?.type || '').replace(/_/g, ' ').trim(),
+    input: String(event.user_input || event.message?.text || '').trim(),
+    current: Number(event.current_amount || 0),
+    target: Number(event.target_amount || 0),
+    duration: Number(event.duration_seconds || 0),
+    status: String(event.status || '').trim(),
+    automatic: event.is_automatic ? 'yes' : 'no'
   };
-  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
+  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
 function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null }) {

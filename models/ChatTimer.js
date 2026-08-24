@@ -77,6 +77,10 @@ const chatTimerSchema = new mongoose.Schema({
     type: [Number],
     default: []
   },
+  avoidImmediateRepeat: {
+    type: Boolean,
+    default: false
+  },
   actionTypes: {
     type: [String],
     default: []

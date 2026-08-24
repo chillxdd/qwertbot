@@ -88,6 +88,14 @@ const customCommandSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  avoidImmediateRepeat: {
+    type: Boolean,
+    default: false
+  },
+  lastResponseIndex: {
+    type: Number,
+    default: -1
+  },
   sendAs: {
     type: String,
     enum: ['chat', 'reply', 'announcement'],

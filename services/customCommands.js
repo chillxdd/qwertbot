@@ -183,6 +183,7 @@ function validateAndNormalizeInput(input = {}) {
     responseMode,
     responseWeights,
     responseConditions,
+    avoidImmediateRepeat: responseMode === 'equal' && responses.length >= 2 && input.avoidImmediateRepeat === true,
     sendAs,
     announcementColor,
     userLevel,
@@ -209,6 +210,8 @@ function commandToClient(command) {
     responseMode: RESPONSE_MODES.includes(command.responseMode) ? command.responseMode : 'equal',
     responseWeights: Array.isArray(command.responseWeights) ? command.responseWeights : [],
     responseConditions: Array.isArray(command.responseConditions) ? command.responseConditions : [],
+    avoidImmediateRepeat: command.responseMode === 'equal' && Array.isArray(command.responses) && command.responses.length >= 2 && command.avoidImmediateRepeat === true,
+    lastResponseIndex: Number.isInteger(Number(command.lastResponseIndex)) ? Number(command.lastResponseIndex) : -1,
     sendAs: SEND_AS_MODES.includes(command.sendAs) ? command.sendAs : 'chat',
     announcementColor: ANNOUNCEMENT_COLORS.includes(command.announcementColor) ? command.announcementColor : 'primary',
     userLevel: USER_LEVELS.includes(command.userLevel) ? command.userLevel : 'everyone',
@@ -401,7 +404,11 @@ function chooseResponseTemplate(command, responses, query) {
     return index === -1 ? { template: '', index: -1, mode } : { template: responses[index], index, mode };
   }
 
-  const index = Math.floor(Math.random() * responses.length);
+  const allIndexes = responses.map((_, index) => index);
+  const lastIndex = Number(command?.lastResponseIndex);
+  const avoidRepeat = command?.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
+  const candidates = avoidRepeat ? allIndexes.filter((index) => index !== lastIndex) : allIndexes;
+  const index = candidates[Math.floor(Math.random() * candidates.length)];
   return { template: responses[index], index, mode };
 }
 
@@ -893,8 +900,20 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
     }
     if (!systemInvocation) lastTriggeredAt.set(commandId, Date.now());
 
+    try {
+      await CustomCommand.updateOne(
+        { _id: command._id, channelName: normalizedChannel },
+        { $set: { lastResponseIndex: selection.index } }
+      );
+    } catch (lastResponseErr) {
+      console.warn('[Custom Commands] Response sent, but last-response variety state could not be persisted:', lastResponseErr?.message || lastResponseErr);
+    }
+
     const cached = cache.find((item) => String(item._id) === commandId);
-    if (cached) cached.counter = updated.counter;
+    if (cached) {
+      cached.counter = updated.counter;
+      cached.lastResponseIndex = selection.index;
+    }
 
     console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> response ${selection.index + 1}/${responses.length} (${selection.mode}).`);
 

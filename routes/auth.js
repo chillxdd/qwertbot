@@ -152,9 +152,13 @@ function registerAuthRoutes(app, options) {
         try {
           const eventSubResults = await ensureEventSubSubscriptions();
           const failures = eventSubResults.filter((item) => item.status === 'error');
+          const skipped = eventSubResults.filter((item) => item.status === 'skipped_missing_scope');
+          const active = eventSubResults.length - failures.length - skipped.length;
           eventSubNote = failures.length
-            ? `Broadcaster OAuth succeeded. ${failures.length} EventSub subscription(s) need a retry; check Render logs.`
-            : `Broadcaster OAuth succeeded and ${eventSubResults.length} Twitch EventSub subscriptions were created or already existed.`;
+            ? `Broadcaster OAuth succeeded. ${active} EventSub subscription(s) are active; ${failures.length} need a retry. Check Render logs.`
+            : skipped.length
+              ? `Broadcaster OAuth succeeded. ${active} EventSub subscription(s) are active and ${skipped.length} optional subscription(s) are still waiting on permission.`
+              : `Broadcaster OAuth succeeded and ${active} Twitch EventSub subscriptions were created or already existed.`;
         } catch (eventSubErr) {
           console.error('[EventSub] Setup after broadcaster OAuth failed:', eventSubErr.message || eventSubErr);
         }

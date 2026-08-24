@@ -1,5 +1,31 @@
 const { noteEventReceived, verifyEventSubRequest } = require('../services/twitchEventSub');
 
+function cleanInline(value, max = 240) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function pollChoices(event = {}, includeVotes = false) {
+  const choices = Array.isArray(event.choices) ? event.choices : [];
+  return choices.slice(0, 8).map((choice) => {
+    const title = cleanInline(choice?.title || 'Choice', 80);
+    return includeVotes ? `${title}: ${Number(choice?.votes || 0)} vote(s)` : title;
+  }).join('; ');
+}
+
+function predictionOutcomes(event = {}, includePoints = false) {
+  const outcomes = Array.isArray(event.outcomes) ? event.outcomes : [];
+  return outcomes.slice(0, 8).map((outcome) => {
+    const title = cleanInline(outcome?.title || 'Outcome', 80);
+    return includePoints ? `${title}: ${Number(outcome?.channel_points || 0)} point(s)` : title;
+  }).join('; ');
+}
+
+function predictionWinner(event = {}) {
+  const winningId = String(event?.winning_outcome_id || '');
+  const outcomes = Array.isArray(event?.outcomes) ? event.outcomes : [];
+  return cleanInline(outcomes.find((item) => String(item?.id || '') === winningId)?.title || '', 80);
+}
+
 function formatEventSubForRecap(type, event) {
   const name = event?.user_name || event?.user_login || 'A viewer';
 
@@ -9,7 +35,7 @@ function formatEventSubForRecap(type, event) {
       return `${name} subscribed to Qwert at Tier ${String(event?.tier || '1000').replace('1000', '1').replace('2000', '2').replace('3000', '3')}.`;
     case 'channel.subscription.message': {
       const months = Number(event?.cumulative_months || 0);
-      const message = String(event?.message?.text || '').trim();
+      const message = cleanInline(event?.message?.text || '', 300);
       return `${name} resubscribed${months ? ` for ${months} cumulative month(s)` : ''}${message ? ` and wrote: ${message}` : ''}.`;
     }
     case 'channel.subscription.gift': {
@@ -34,6 +60,78 @@ function formatEventSubForRecap(type, event) {
       return 'Qwert went live.';
     case 'stream.offline':
       return 'Qwert went offline.';
+
+    case 'channel.poll.begin': {
+      const title = cleanInline(event?.title || 'Untitled poll', 160);
+      const choices = pollChoices(event, false);
+      return `A Twitch poll began: "${title}"${choices ? ` Choices: ${choices}.` : '.'}`;
+    }
+    case 'channel.poll.progress': {
+      const title = cleanInline(event?.title || 'Untitled poll', 160);
+      const choices = pollChoices(event, true);
+      return `Twitch poll progress for "${title}"${choices ? `: ${choices}.` : '.'}`;
+    }
+    case 'channel.poll.end': {
+      const title = cleanInline(event?.title || 'Untitled poll', 160);
+      const choices = pollChoices(event, true);
+      const status = cleanInline(event?.status || 'completed', 40);
+      return `Twitch poll "${title}" ended (${status})${choices ? `. Final results: ${choices}.` : '.'}`;
+    }
+
+    case 'channel.prediction.begin': {
+      const title = cleanInline(event?.title || 'Untitled prediction', 160);
+      const outcomes = predictionOutcomes(event, false);
+      return `A Twitch prediction began: "${title}"${outcomes ? ` Outcomes: ${outcomes}.` : '.'}`;
+    }
+    case 'channel.prediction.progress': {
+      const title = cleanInline(event?.title || 'Untitled prediction', 160);
+      const outcomes = predictionOutcomes(event, true);
+      return `Twitch prediction progress for "${title}"${outcomes ? `: ${outcomes}.` : '.'}`;
+    }
+    case 'channel.prediction.lock': {
+      const title = cleanInline(event?.title || 'Untitled prediction', 160);
+      const outcomes = predictionOutcomes(event, true);
+      return `Twitch prediction "${title}" was locked${outcomes ? `. Points at lock: ${outcomes}.` : '.'}`;
+    }
+    case 'channel.prediction.end': {
+      const title = cleanInline(event?.title || 'Untitled prediction', 160);
+      const status = cleanInline(event?.status || 'resolved', 40);
+      const winner = predictionWinner(event);
+      const outcomes = predictionOutcomes(event, true);
+      return `Twitch prediction "${title}" ended (${status})${winner ? `. Winning outcome: ${winner}.` : ''}${outcomes ? ` Final points: ${outcomes}.` : ''}`;
+    }
+
+    case 'channel.channel_points_custom_reward_redemption.add': {
+      const reward = cleanInline(event?.reward?.title || 'a custom Channel Points reward', 120);
+      const input = cleanInline(event?.user_input || '', 260);
+      const cost = Number(event?.reward?.cost || 0);
+      return `${name} redeemed "${reward}"${cost ? ` for ${cost} Channel Points` : ''}${input ? ` and entered: ${input}` : ''}.`;
+    }
+    case 'channel.channel_points_automatic_reward_redemption.add': {
+      const rewardType = cleanInline(String(event?.reward?.type || 'automatic reward').replace(/_/g, ' '), 120);
+      const points = Number(event?.reward?.channel_points || event?.reward?.cost || 0);
+      const message = cleanInline(event?.message?.text || event?.user_input || '', 260);
+      return `${name} redeemed the automatic Channel Points reward "${rewardType}"${points ? ` for ${points} Channel Points` : ''}${message ? ` with: ${message}` : ''}.`;
+    }
+
+    case 'channel.goal.begin': {
+      const description = cleanInline(event?.description || `${event?.type || 'channel'} goal`, 180);
+      return `A Twitch goal began: "${description}" (${Number(event?.current_amount || 0)}/${Number(event?.target_amount || 0)}).`;
+    }
+    case 'channel.goal.progress': {
+      const description = cleanInline(event?.description || `${event?.type || 'channel'} goal`, 180);
+      return `Twitch goal progress for "${description}": ${Number(event?.current_amount || 0)}/${Number(event?.target_amount || 0)}.`;
+    }
+    case 'channel.goal.end': {
+      const description = cleanInline(event?.description || `${event?.type || 'channel'} goal`, 180);
+      return `Twitch goal "${description}" ended at ${Number(event?.current_amount || 0)}/${Number(event?.target_amount || 0)}${event?.is_achieved ? ' and was achieved.' : '.'}`;
+    }
+
+    case 'channel.ad_break.begin': {
+      const duration = Number(event?.duration_seconds || 0);
+      const source = event?.is_automatic ? 'automatic' : 'manual';
+      return `A ${source} Twitch ad break began${duration ? ` for ${duration} second(s)` : ''}.`;
+    }
     default:
       return null;
   }
@@ -41,12 +139,35 @@ function formatEventSubForRecap(type, event) {
 
 function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager }) {
   const recentMessageIds = new Map();
+  const recapProgressSnapshots = new Map();
+  const PROGRESS_RECAP_THROTTLE_MS = 60 * 1000;
+  const PROGRESS_EVENT_TYPES = new Set([
+    'channel.poll.progress',
+    'channel.prediction.progress',
+    'channel.goal.progress'
+  ]);
 
   function cleanupRecentIds() {
     const cutoff = Date.now() - 10 * 60 * 1000;
     for (const [id, seenAt] of recentMessageIds.entries()) {
       if (seenAt < cutoff) recentMessageIds.delete(id);
     }
+  }
+
+  function shouldRecordRecapEvent(type, event = {}) {
+    if (!PROGRESS_EVENT_TYPES.has(type)) return true;
+    const eventId = String(event?.id || event?.broadcaster_user_id || 'unknown');
+    const key = `${type}:${eventId}`;
+    const now = Date.now();
+    const previous = recapProgressSnapshots.get(key) || 0;
+    if (now - previous < PROGRESS_RECAP_THROTTLE_MS) return false;
+    recapProgressSnapshots.set(key, now);
+
+    const cutoff = now - 30 * 60 * 1000;
+    for (const [snapshotKey, seenAt] of recapProgressSnapshots.entries()) {
+      if (seenAt < cutoff) recapProgressSnapshots.delete(snapshotKey);
+    }
+    return true;
   }
 
   app.post('/eventsub/twitch', (req, res) => {
@@ -80,7 +201,7 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
       const recapManager = getRecapManager();
       const reactionManager = getEventSubReactionManager?.();
 
-      if (text && recapManager) {
+      if (text && recapManager && shouldRecordRecapEvent(type, event)) {
         recapManager.recordTwitchEvent({ type, text, timestamp: Date.now() });
       }
 
@@ -99,4 +220,4 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
   });
 }
 
-module.exports = { registerEventSubRoutes };
+module.exports = { registerEventSubRoutes, formatEventSubForRecap };

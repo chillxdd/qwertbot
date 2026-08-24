@@ -288,7 +288,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       colorWrap.hidden = !announcement;
       input.placeholder = announcement ? 'Announcement message' : 'Chat message';
     };
-    const updateCount = () => { count.textContent = `${Array.from(input.value).length}/${maxResponseLength}`; };
+    const updateCount = () => {
+      count.textContent = `${Array.from(input.value).length}/${maxResponseLength}`;
+      syncResponseMode();
+    };
     input.oninput = updateCount;
     typeInput.onchange = syncType;
     row.querySelector('.timer-remove-response').onclick = () => { row.remove(); syncResponseMode(); };
@@ -304,6 +307,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       ? 'Specified Weight chooses actions proportionally. Example: weights 1, 2, and 7 are approximately 10%, 20%, and 70%.'
       : 'Equal Odds randomly chooses between all actions.';
     responsesEl.querySelectorAll('.timer-weight-row').forEach((el) => { el.hidden = !weighted; });
+    const nonblankActions = [...responsesEl.querySelectorAll('.timer-response-input')].filter((input) => input.value.trim()).length;
+    const avoidAvailable = !weighted && nonblankActions >= 2;
+    $('timerAvoidImmediateRepeatWrap').hidden = !avoidAvailable;
+    $('timerAvoidImmediateRepeatHelp').hidden = !avoidAvailable;
   }
 
   function clearEditor() {
@@ -317,6 +324,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     $('timerMinimumMessages').value = '0';
     $('timerMinimumViewers').value = '0';
     $('timerResponseMode').value = 'equal';
+    $('timerAvoidImmediateRepeat').checked = false;
     $('timerEnabled').checked = true;
     responsesEl.innerHTML = '';
     makeResponseRow();
@@ -341,6 +349,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       $('timerMinimumMessages').value = String(timer.minimumChatMessages || 0);
       $('timerMinimumViewers').value = String(timer.minimumViewers || 0);
       $('timerResponseMode').value = timer.responseMode === 'weighted' ? 'weighted' : 'equal';
+      $('timerAvoidImmediateRepeat').checked = timer.avoidImmediateRepeat === true;
       $('timerEnabled').checked = timer.enabled !== false;
       responsesEl.innerHTML = '';
       const responses = Array.isArray(timer.responses) && timer.responses.length ? timer.responses : [''];
@@ -428,6 +437,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
         responses: nonblank.map((row) => row.response),
         responseMode,
         responseWeights: nonblank.map((row) => responseMode === 'weighted' ? row.weight : 1),
+        avoidImmediateRepeat: responseMode === 'equal' && nonblank.length >= 2 && $('timerAvoidImmediateRepeat').checked,
         actionTypes: nonblank.map((row) => row.actionType),
         actionColors: nonblank.map((row) => row.actionColor),
         enabled: $('timerEnabled').checked

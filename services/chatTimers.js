@@ -122,6 +122,7 @@ function normalizeInput(input = {}, settings = {}) {
     responses,
     responseMode,
     responseWeights,
+    avoidImmediateRepeat: responseMode === 'equal' && responses.length >= 2 && input.avoidImmediateRepeat === true,
     actionTypes,
     actionColors,
     enabled: input.enabled !== false
@@ -180,7 +181,11 @@ function chooseResponse(timer) {
     return { template: responses[responses.length - 1], index: responses.length - 1, mode };
   }
 
-  const index = Math.floor(Math.random() * responses.length);
+  const allIndexes = responses.map((_, index) => index);
+  const lastIndex = Number(timer.lastResponseIndex);
+  const avoidRepeat = timer.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
+  const candidates = avoidRepeat ? allIndexes.filter((index) => index !== lastIndex) : allIndexes;
+  const index = candidates[Math.floor(Math.random() * candidates.length)];
   return { template: responses[index], index, mode };
 }
 
@@ -393,6 +398,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       responses: Array.isArray(timer.responses) ? timer.responses : [],
       responseMode: TIMER_RESPONSE_MODES.includes(timer.responseMode) ? timer.responseMode : 'equal',
       responseWeights: Array.isArray(timer.responseWeights) ? timer.responseWeights : [],
+      avoidImmediateRepeat: timer.responseMode === 'equal' && Array.isArray(timer.responses) && timer.responses.length >= 2 && timer.avoidImmediateRepeat === true,
       actionTypes: Array.isArray(timer.actionTypes) ? timer.actionTypes : [],
       actionColors: Array.isArray(timer.actionColors) ? timer.actionColors : [],
       enabled: timer.enabled !== false,

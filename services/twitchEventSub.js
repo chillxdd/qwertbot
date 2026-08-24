@@ -4,11 +4,25 @@ const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
 
 const EVENTSUB_URL = 'https://api.twitch.tv/helix/eventsub/subscriptions';
 const CALLBACK_URL = 'https://sqwertarmybot.onrender.com/eventsub/twitch';
+
+// Legacy/current EventSub permissions. Missing one no longer blocks unrelated
+// subscriptions; each subscription definition checks only the scope it needs.
 const REQUIRED_EVENTSUB_SCOPES = [
   'channel:read:subscriptions',
   'bits:read',
   'moderator:read:followers',
   'channel:read:hype_train'
+];
+
+// Optional awareness features. These are requested during broadcaster OAuth,
+// but existing broadcaster grants can keep running without them until Qwert
+// conveniently reauthorizes.
+const OPTIONAL_EVENTSUB_SCOPES = [
+  'channel:read:polls',
+  'channel:read:predictions',
+  'channel:read:redemptions',
+  'channel:read:goals',
+  'channel:read:ads'
 ];
 
 let lastEnsureAt = null;
@@ -34,27 +48,46 @@ function getEventSubSecret() {
 }
 
 function getSubscriptionDefinitions(broadcasterUserId) {
+  const broadcaster = { broadcaster_user_id: broadcasterUserId };
   return [
-    { type: 'channel.subscribe', version: '1', condition: { broadcaster_user_id: broadcasterUserId } },
-    { type: 'channel.subscription.message', version: '1', condition: { broadcaster_user_id: broadcasterUserId } },
-    { type: 'channel.subscription.gift', version: '1', condition: { broadcaster_user_id: broadcasterUserId } },
-    { type: 'channel.cheer', version: '1', condition: { broadcaster_user_id: broadcasterUserId } },
+    { type: 'channel.subscribe', version: '1', condition: broadcaster, anyScopes: ['channel:read:subscriptions'] },
+    { type: 'channel.subscription.message', version: '1', condition: broadcaster, anyScopes: ['channel:read:subscriptions'] },
+    { type: 'channel.subscription.gift', version: '1', condition: broadcaster, anyScopes: ['channel:read:subscriptions'] },
+    { type: 'channel.cheer', version: '1', condition: broadcaster, anyScopes: ['bits:read'] },
     {
       type: 'channel.follow',
       version: '2',
-      condition: { broadcaster_user_id: broadcasterUserId, moderator_user_id: broadcasterUserId }
+      condition: { broadcaster_user_id: broadcasterUserId, moderator_user_id: broadcasterUserId },
+      anyScopes: ['moderator:read:followers']
     },
     { type: 'channel.raid', version: '1', condition: { to_broadcaster_user_id: broadcasterUserId } },
-    { type: 'channel.hype_train.begin', version: '2', condition: { broadcaster_user_id: broadcasterUserId } },
-    { type: 'channel.hype_train.end', version: '2', condition: { broadcaster_user_id: broadcasterUserId } },
-    { type: 'stream.online', version: '1', condition: { broadcaster_user_id: broadcasterUserId } },
-    { type: 'stream.offline', version: '1', condition: { broadcaster_user_id: broadcasterUserId } }
+    { type: 'channel.hype_train.begin', version: '2', condition: broadcaster, anyScopes: ['channel:read:hype_train'] },
+    { type: 'channel.hype_train.end', version: '2', condition: broadcaster, anyScopes: ['channel:read:hype_train'] },
+    { type: 'stream.online', version: '1', condition: broadcaster },
+    { type: 'stream.offline', version: '1', condition: broadcaster },
+
+    // Optional read-only broadcaster awareness.
+    { type: 'channel.poll.begin', version: '1', condition: broadcaster, anyScopes: ['channel:read:polls', 'channel:manage:polls'], optional: true },
+    { type: 'channel.poll.progress', version: '1', condition: broadcaster, anyScopes: ['channel:read:polls', 'channel:manage:polls'], optional: true },
+    { type: 'channel.poll.end', version: '1', condition: broadcaster, anyScopes: ['channel:read:polls', 'channel:manage:polls'], optional: true },
+    { type: 'channel.prediction.begin', version: '1', condition: broadcaster, anyScopes: ['channel:read:predictions', 'channel:manage:predictions'], optional: true },
+    { type: 'channel.prediction.progress', version: '1', condition: broadcaster, anyScopes: ['channel:read:predictions', 'channel:manage:predictions'], optional: true },
+    { type: 'channel.prediction.lock', version: '1', condition: broadcaster, anyScopes: ['channel:read:predictions', 'channel:manage:predictions'], optional: true },
+    { type: 'channel.prediction.end', version: '1', condition: broadcaster, anyScopes: ['channel:read:predictions', 'channel:manage:predictions'], optional: true },
+    { type: 'channel.channel_points_custom_reward_redemption.add', version: '1', condition: broadcaster, anyScopes: ['channel:read:redemptions', 'channel:manage:redemptions'], optional: true },
+    { type: 'channel.channel_points_automatic_reward_redemption.add', version: '2', condition: broadcaster, anyScopes: ['channel:read:redemptions', 'channel:manage:redemptions'], optional: true },
+    { type: 'channel.goal.begin', version: '1', condition: broadcaster, anyScopes: ['channel:read:goals'], optional: true },
+    { type: 'channel.goal.progress', version: '1', condition: broadcaster, anyScopes: ['channel:read:goals'], optional: true },
+    { type: 'channel.goal.end', version: '1', condition: broadcaster, anyScopes: ['channel:read:goals'], optional: true },
+    { type: 'channel.ad_break.begin', version: '1', condition: broadcaster, anyScopes: ['channel:read:ads'], optional: true }
   ];
 }
 
-function missingScopes(actualScopes, requiredScopes = REQUIRED_EVENTSUB_SCOPES) {
-  const actual = Array.isArray(actualScopes) ? actualScopes : [];
-  return requiredScopes.filter((scope) => !actual.includes(scope));
+function definitionScopeAvailable(definition, actualScopes) {
+  const accepted = Array.isArray(definition?.anyScopes) ? definition.anyScopes.filter(Boolean) : [];
+  if (!accepted.length) return true;
+  const granted = new Set(Array.isArray(actualScopes) ? actualScopes : []);
+  return accepted.some((scope) => granted.has(scope));
 }
 
 async function createSubscription(definition, appAccessToken) {
@@ -105,14 +138,17 @@ async function ensureEventSubSubscriptions() {
     throw new Error('Broadcaster OAuth is not stored yet.');
   }
 
-  const missing = missingScopes(auth.scopes);
-  if (missing.length) {
-    throw new Error(`Broadcaster OAuth is missing EventSub scope(s): ${missing.join(', ')}`);
-  }
-
   const appAccessToken = await getAppAccessToken();
   const definitions = getSubscriptionDefinitions(auth.twitchUserId);
   const results = await Promise.all(definitions.map(async (definition) => {
+    if (!definitionScopeAvailable(definition, auth.scopes)) {
+      return {
+        type: definition.type,
+        status: 'skipped_missing_scope',
+        optional: definition.optional === true,
+        requiredAnyScope: [...(definition.anyScopes || [])]
+      };
+    }
     try {
       return await createSubscription(definition, appAccessToken);
     } catch (err) {
@@ -123,13 +159,17 @@ async function ensureEventSubSubscriptions() {
   lastEnsureAt = new Date();
   lastEnsureResults = results;
   const failures = results.filter((item) => item.status === 'error');
+  const skipped = results.filter((item) => item.status === 'skipped_missing_scope');
   lastEnsureError = failures.length ? failures.map((item) => item.error).join(' | ') : null;
 
   if (failures.length) {
     console.warn('[EventSub] Some subscriptions could not be created:', lastEnsureError);
-  } else {
-    console.log(`[EventSub] ${results.length} subscriptions are created or already present.`);
   }
+  if (skipped.length) {
+    console.log(`[EventSub] ${skipped.length} subscription(s) skipped because their broadcaster scope is not granted yet: ${skipped.map((item) => item.type).join(', ')}`);
+  }
+  const active = results.length - skipped.length - failures.length;
+  console.log(`[EventSub] Ensure complete: ${active} created/already present, ${skipped.length} waiting on scope, ${failures.length} error(s).`);
 
   return results;
 }
@@ -174,6 +214,7 @@ function getEventSubStatus() {
   return {
     callbackUrl: CALLBACK_URL,
     requiredScopes: [...REQUIRED_EVENTSUB_SCOPES],
+    optionalScopes: [...OPTIONAL_EVENTSUB_SCOPES],
     lastEnsureAt,
     lastEnsureError,
     lastEnsureResults,
@@ -184,6 +225,7 @@ function getEventSubStatus() {
 module.exports = {
   CALLBACK_URL,
   REQUIRED_EVENTSUB_SCOPES,
+  OPTIONAL_EVENTSUB_SCOPES,
   ensureEventSubSubscriptions,
   getEventSubStatus,
   noteEventReceived,

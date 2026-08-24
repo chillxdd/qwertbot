@@ -156,6 +156,7 @@ function registerDashboardRoutes(app, options) {
       },
       eventsub: {
         requiredScopes: REQUIRED_EVENTSUB_SCOPES,
+        optionalScopes: eventSubStatus.optionalScopes || [],
         lastEnsureAt: eventSubStatus.lastEnsureAt,
         lastEnsureError: eventSubStatus.lastEnsureError,
         subscriptions: eventSubStatus.lastEnsureResults,

@@ -283,6 +283,8 @@
               <option value="ifelse">If / Else (first word after trigger)</option>
             </select>
             <div id="customResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+            <label id="customAvoidImmediateRepeatWrap" class="inline-check" hidden><input id="customAvoidImmediateRepeat" type="checkbox"> Skip the last response used</label>
+            <div id="customAvoidImmediateRepeatHelp" class="detail" hidden>When 2+ Equal Odds responses exist, the next trigger will never immediately repeat the response used last time.</div>
           </div>
           <div id="customResponseHelp" class="detail"></div>
           <div id="customCommandResponses"></div>
@@ -473,6 +475,8 @@
                 <option value="weighted">Specified Weight</option>
               </select>
               <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all actions.</div>
+              <label id="timerAvoidImmediateRepeatWrap" class="inline-check" hidden><input id="timerAvoidImmediateRepeat" type="checkbox"> Skip the last action used</label>
+              <div id="timerAvoidImmediateRepeatHelp" class="detail" hidden>When 2+ Equal Odds actions exist, the next firing will never immediately repeat the action used last time.</div>
             </div>
             <div id="timerResponses"></div>
             <div class="custom-response-bottom-actions">
@@ -614,7 +618,19 @@
             <div class="custom-variable-row"><code>$(gifts)</code><div class="detail">Number of gifted subscriptions in a Gift Subs event.</div></div>
             <div class="custom-variable-row"><code>$(level)</code><div class="detail">Hype Train level when supplied by the event.</div></div>
             <div class="custom-variable-row"><code>$(months)</code><div class="detail">Cumulative subscription months in a Resub Message event.</div></div>
-            <div class="custom-variable-row"><code>$(event)</code><div class="detail">Friendly name of the EventSub event that fired, such as <code>Raid</code> or <code>Bits / Cheer</code>.</div></div>
+            <div class="custom-variable-row"><code>$(event)</code><div class="detail">Friendly name of the EventSub event that fired, such as <code>Raid</code>, <code>Poll End</code>, or <code>Ad Break Start</code>.</div></div>
+            <div class="custom-variable-row"><code>$(title)</code><div class="detail">Poll/prediction title, reward title, or goal description when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(choices)</code><div class="detail">Poll choices or prediction outcomes joined with <code>/</code>.</div></div>
+            <div class="custom-variable-row"><code>$(votes)</code><div class="detail">Total poll votes when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(points)</code><div class="detail">Total Channel Points in a prediction when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(winner)</code><div class="detail">Winning prediction outcome when the prediction has resolved.</div></div>
+            <div class="custom-variable-row"><code>$(reward)</code><div class="detail">Channel Points reward title/type.</div></div>
+            <div class="custom-variable-row"><code>$(input)</code><div class="detail">Viewer-entered/message text attached to a Channel Points redemption.</div></div>
+            <div class="custom-variable-row"><code>$(current)</code><div class="detail">Current Twitch goal amount.</div></div>
+            <div class="custom-variable-row"><code>$(target)</code><div class="detail">Target Twitch goal amount.</div></div>
+            <div class="custom-variable-row"><code>$(duration)</code><div class="detail">Ad-break duration in seconds.</div></div>
+            <div class="custom-variable-row"><code>$(status)</code><div class="detail">Event status when Twitch supplies one.</div></div>
+            <div class="custom-variable-row"><code>$(automatic)</code><div class="detail"><code>yes</code> for an automatic ad break, otherwise <code>no</code>.</div></div>
             <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, and Run Custom Command values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div>
           </div>
         </dialog>

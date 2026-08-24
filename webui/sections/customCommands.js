@@ -60,6 +60,13 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     return $('customResponseMode').value || 'equal';
   }
 
+  function updateAvoidImmediateRepeatUi() {
+    const nonblankResponses = [...responsesEl.querySelectorAll('.custom-response-input')].filter((input) => input.value.trim()).length;
+    const available = responseMode() === 'equal' && nonblankResponses >= 2;
+    $('customAvoidImmediateRepeatWrap').hidden = !available;
+    $('customAvoidImmediateRepeatHelp').hidden = !available;
+  }
+
   function updateSendAsUi() {
     const sendAs = $('customSendAs').value || 'chat';
     $('customAnnouncementColorWrap').hidden = sendAs !== 'announcement';
@@ -85,6 +92,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       row.querySelector('.custom-response-condition-wrap').hidden = mode !== 'ifelse';
     });
     updateAddResponseState();
+    updateAvoidImmediateRepeatUi();
   }
 
   function clearEditorMessages() {
@@ -171,7 +179,10 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const remove = wrapper.querySelector('.custom-response-remove');
     textarea.value = value;
 
-    const updateCount = () => { count.textContent = `${textarea.value.length}/${maxResponseLength}`; };
+    const updateCount = () => {
+      count.textContent = `${textarea.value.length}/${maxResponseLength}`;
+      updateAvoidImmediateRepeatUi();
+    };
     textarea.addEventListener('input', updateCount);
     remove.onclick = () => {
       if (responsesEl.children.length <= 1) {
@@ -195,6 +206,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
         ? 'The first word after the trigger selects a matching response; one blank condition can act as Else.'
         : 'One response is selected at equal random odds each time the command actually fires.';
     $('customResponseHelp').textContent = `${responsesEl.children.length}/${maxResponses} response slots. ${detail}`;
+    updateAvoidImmediateRepeatUi();
   }
 
   function addResponse(value = '', weight = 1, condition = '') {
@@ -242,6 +254,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customUseCooldownResponse').checked = Boolean(command?.cooldownResponse);
     $('customCooldownResponseWrap').hidden = !$('customUseCooldownResponse').checked;
     $('customResponseMode').value = command?.responseMode || 'equal';
+    $('customAvoidImmediateRepeat').checked = command?.avoidImmediateRepeat === true;
     $('customSendAs').value = command?.sendAs || 'chat';
     $('customAnnouncementColor').value = command?.announcementColor || 'primary';
     updateCooldownResponseCount();
@@ -512,6 +525,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       cooldownResponse: $('customUseCooldownResponse').checked ? $('customCooldownResponse').value.trim() : '',
       enabled: $('customEnabled').checked,
       responseMode: responseMode(),
+      avoidImmediateRepeat: responseMode() === 'equal' && responses.length >= 2 && $('customAvoidImmediateRepeat').checked,
       sendAs: $('customSendAs').value || 'chat',
       announcementColor: $('customAnnouncementColor').value || 'primary',
       responseWeights,

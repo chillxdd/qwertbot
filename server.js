@@ -56,7 +56,18 @@ const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
 const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_ANNOUNCEMENT_SCOPE, REQUIRED_CHATTERS_SCOPE];
-const TWITCH_BROADCASTER_SCOPES = ['channel:bot', 'channel:read:subscriptions', 'bits:read', 'moderator:read:followers', 'channel:read:hype_train'];
+const TWITCH_BROADCASTER_SCOPES = [
+  'channel:bot',
+  'channel:read:subscriptions',
+  'bits:read',
+  'moderator:read:followers',
+  'channel:read:hype_train',
+  'channel:read:polls',
+  'channel:read:predictions',
+  'channel:read:redemptions',
+  'channel:read:goals',
+  'channel:read:ads'
+];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
 const MOD_SESSION_COOKIE = 'sqwert_mod_session';
