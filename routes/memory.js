@@ -120,11 +120,12 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
         cooldownSeconds: req.body?.cooldownSeconds,
         modsBypassCooldown: req.body?.modsBypassCooldown,
         cooldownResponse: req.body?.cooldownResponse,
+        recapCollisionBufferSeconds: req.body?.recapCollisionBufferSeconds,
         aiRetry: req.body?.aiRetry,
         securityRefusalResponse: req.body?.securityRefusalResponse,
         sessionMemory: req.body?.sessionMemory
       });
-      console.log(`[Tagged Questions] Settings saved (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
+      console.log(`[Tagged Questions] Settings saved (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, recapBuffer=${config.recapCollisionBufferSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
       return res.json({ success: true, ...config });
     } catch (err) {
       console.error('[Tagged Questions] Could not save settings:', err.message || err);

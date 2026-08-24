@@ -40,6 +40,12 @@ const botPersonalityConfigSchema = new mongoose.Schema({
     default: '',
     maxlength: 500
   },
+  recapCollisionBufferSeconds: {
+    type: Number,
+    min: 0,
+    max: 120,
+    default: 12
+  },
   aiRetry: {
     enabled: { type: Boolean, default: true },
     maxRetries: { type: Number, min: 0, max: 2, default: 2 },

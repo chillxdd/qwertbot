@@ -38,28 +38,56 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     el.classList.toggle('bad', Boolean(isError));
   }
 
-  function pendingFactsAcrossProfiles() {
-    return profiles.flatMap((profile) => (profile.facts || [])
-      .filter((fact) => factApprovalStatus(fact) === 'pending' && fact.source !== 'deterministic')
-      .map((fact) => ({ profile, fact })))
-      .sort((a, b) => new Date(b.fact.lastObservedAt || b.fact.firstObservedAt || b.profile.updatedAt || 0).getTime()
-        - new Date(a.fact.lastObservedAt || a.fact.firstObservedAt || a.profile.updatedAt || 0).getTime());
+  function pendingReviewsAcrossProfiles() {
+    return profiles.flatMap((profile) => {
+      const facts = Array.isArray(profile.facts) ? profile.facts : [];
+      const pendingNew = facts
+        .filter((fact) => factApprovalStatus(fact) === 'pending' && fact.source !== 'deterministic')
+        .map((fact) => ({ type: 'new', profile, fact, sortAt: fact.lastObservedAt || fact.firstObservedAt || profile.updatedAt }));
+      const pendingRevisions = facts
+        .filter((fact) => factApprovalStatus(fact) === 'approved' && fact.source !== 'deterministic' && fact.revisionProposal?.text)
+        .map((fact) => ({ type: 'revision', profile, fact, sortAt: fact.revisionProposal?.lastProposedAt || fact.lastObservedAt || profile.updatedAt }));
+      return [...pendingNew, ...pendingRevisions];
+    }).sort((a, b) => new Date(b.sortAt || 0).getTime() - new Date(a.sortAt || 0).getTime());
   }
 
   function renderPendingReview() {
     const listEl = $('viewerProfilePendingReviewList');
     const countEl = $('viewerProfilePendingReviewCount');
     if (!listEl || !countEl) return;
-    const pending = pendingFactsAcrossProfiles();
-    countEl.textContent = `${pending.length} pending`;
-    listEl.innerHTML = pending.length ? pending.map(({ profile, fact }) => {
-      const windows = Math.max(1, Number(fact.supportingWindowCount || 1));
-      const refinements = Math.max(0, Number(fact.revisionCount || 0));
+    const pending = pendingReviewsAcrossProfiles();
+    countEl.textContent = `${pending.length} pending review${pending.length === 1 ? '' : 's'}`;
+    listEl.innerHTML = pending.length ? pending.map(({ type, profile, fact }) => {
       const displayName = profile.displayName || profile.username || 'Unknown viewer';
       const disabled = profile.optedOut === true ? 'disabled' : '';
-      return `<div class="viewer-profile-fact viewer-profile-pending-review-row" data-profile-id="${esc(profile.id)}" data-fact-id="${esc(fact.id)}">
+      if (type === 'revision') {
+        const proposal = fact.revisionProposal;
+        const proposalEvidence = Math.max(1, Number(proposal?.evidenceCount || 1));
+        const proposalWindows = Math.max(1, Number(proposal?.supportingWindowCount || 1));
+        return `<div class="viewer-profile-fact viewer-profile-pending-review-row" data-profile-id="${esc(profile.id)}" data-fact-id="${esc(fact.id)}" data-review-type="revision">
+          <div class="viewer-profile-fact-copy">
+            <div class="viewer-pending-profile"><strong>${esc(displayName)}</strong> <span class="detail">@${esc(profile.username || '')}</span>${profile.optedOut === true ? ' <span class="custom-command-state disabled">Opted out</span>' : ''}</div>
+            <div class="learned-revision-title"><strong>${proposal.relation === 'contradict' ? 'Suggested revision from conflicting evidence' : 'Suggested revision'}</strong></div>
+            <div class="detail"><strong>Current approved:</strong> ${esc(fact.text)}</div>
+            <div class="learned-revision-proposal ${proposal.relation === 'contradict' ? 'contradiction' : 'refinement'}">
+              <div class="learned-revision-text"><strong>Suggested:</strong> ${esc(proposal.text)}</div>
+              <div class="detail">${esc(proposal.kind || fact.kind || 'fact')} · ${esc(proposal.confidence || 'medium')} confidence · ${proposalEvidence} new evidence message${proposalEvidence === 1 ? '' : 's'} across ${proposalWindows} learning window${proposalWindows === 1 ? '' : 's'}</div>
+              ${proposal.reason ? `<div class="detail learned-revision-reason">${esc(proposal.reason)}</div>` : ''}
+            </div>
+          </div>
+          <div class="custom-command-actions learned-revision-actions">
+            <button class="success viewer-global-revision-accept" type="button" ${disabled}>Accept Revision</button>
+            <button class="secondary viewer-global-revision-dismiss" type="button" ${disabled}>Keep Current</button>
+          </div>
+        </div>`;
+      }
+
+      const windows = Math.max(1, Number(fact.supportingWindowCount || 1));
+      const refinements = Math.max(0, Number(fact.revisionCount || 0));
+      return `<div class="viewer-profile-fact viewer-profile-pending-review-row" data-profile-id="${esc(profile.id)}" data-fact-id="${esc(fact.id)}" data-review-type="new">
         <div class="viewer-profile-fact-copy">
           <div class="viewer-pending-profile"><strong>${esc(displayName)}</strong> <span class="detail">@${esc(profile.username || '')}</span>${profile.optedOut === true ? ' <span class="custom-command-state disabled">Opted out</span>' : ''}</div>
+          <div class="learned-revision-title"><strong>New AI observation</strong></div>
           <div>${esc(fact.text)}</div>
           <div class="detail">${esc(fact.kind || 'fact')} · AI · ${esc(fact.confidence || 'medium')} confidence · support ${Number(fact.evidenceCount || 1)}x across ${windows} window${windows === 1 ? '' : 's'}${refinements ? ` · auto-refined ${refinements}x` : ''}${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
           ${fact.evidenceSummary ? `<div class="detail">${esc(fact.evidenceSummary)}</div>` : ''}
@@ -69,7 +97,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
           <button class="danger viewer-global-fact-reject" type="button" ${disabled}>Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No pending AI viewer observations.</div>';
+    }).join('') : '<div class="detail custom-empty-state">No pending AI viewer observations or suggested revisions.</div>';
 
     listEl.querySelectorAll('.viewer-global-fact-approve, .viewer-global-fact-reject').forEach((button) => {
       button.onclick = async () => {
@@ -90,6 +118,28 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
         if (editingId === profileId && dialog.open) renderFacts(d.profile);
         renderList();
         setPendingReviewMessage(approving ? 'Observation approved and enabled.' : 'Pending observation rejected.');
+      };
+    });
+
+    listEl.querySelectorAll('.viewer-global-revision-accept, .viewer-global-revision-dismiss').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.viewer-profile-pending-review-row');
+        const profileId = row?.dataset.profileId;
+        const factId = row?.dataset.factId;
+        if (!profileId || !factId) return;
+        const accepting = button.classList.contains('viewer-global-revision-accept');
+        button.disabled = true;
+        setPendingReviewMessage(accepting ? 'Accepting revision...' : 'Keeping current wording...');
+        const d = await postJson(accepting ? '/viewer-profiles/fact-revision-accept' : '/viewer-profiles/fact-revision-dismiss', { profileId, factId });
+        if (!d.success) {
+          button.disabled = false;
+          return setPendingReviewMessage(d.error || `Could not ${accepting ? 'accept the revision' : 'keep the current wording'}.`, true);
+        }
+        const index = profiles.findIndex((item) => item.id === profileId);
+        if (index >= 0) profiles[index] = d.profile;
+        if (editingId === profileId && dialog.open) renderFacts(d.profile);
+        renderList();
+        setPendingReviewMessage(accepting ? 'AI revision accepted. The approved observation wording has been updated.' : 'Current wording kept. Future evidence may suggest another revision.');
       };
     });
   }
@@ -217,10 +267,15 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     currentProfileFacts = Array.isArray(profile?.facts) ? profile.facts : [];
     if (!preservePage) factCurrentPage = 1;
     const approvedAll = currentProfileFacts.filter((fact) => factApprovalStatus(fact) === 'approved');
-    const pending = currentProfileFacts.filter((fact) => factApprovalStatus(fact) === 'pending');
-    const pendingRevisions = approvedAll.filter((fact) => fact.revisionProposal?.text).length;
-    $('viewerProfileFactCount').textContent = `${approvedAll.length} approved${pendingRevisions ? ` · ${pendingRevisions} revision${pendingRevisions === 1 ? '' : 's'} to review` : ''}`;
-    $('viewerProfilePendingFactCount').textContent = `${pending.length} pending`;
+    const pendingNew = currentProfileFacts.filter((fact) => factApprovalStatus(fact) === 'pending');
+    const pendingRevisions = approvedAll.filter((fact) => fact.source !== 'deterministic' && fact.revisionProposal?.text);
+    const pendingReviews = [
+      ...pendingNew.map((fact) => ({ type: 'new', fact, sortAt: fact.lastObservedAt || fact.firstObservedAt })),
+      ...pendingRevisions.map((fact) => ({ type: 'revision', fact, sortAt: fact.revisionProposal?.lastProposedAt || fact.lastObservedAt || fact.firstObservedAt }))
+    ].sort((a, b) => new Date(b.sortAt || 0).getTime() - new Date(a.sortAt || 0).getTime());
+
+    $('viewerProfileFactCount').textContent = `${approvedAll.length} approved`;
+    $('viewerProfilePendingFactCount').textContent = `${pendingReviews.length} pending review${pendingReviews.length === 1 ? '' : 's'}`;
 
     const approved = filteredApprovedFacts();
     const pageSize = selectedFactPageSize();
@@ -229,29 +284,17 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     const page = approved.slice((factCurrentPage - 1) * pageSize, factCurrentPage * pageSize);
 
     $('viewerProfileFacts').innerHTML = page.length ? page.map((fact) => {
-      const proposal = fact.revisionProposal?.text ? fact.revisionProposal : null;
       const supportWindows = Math.max(1, Number(fact.supportingWindowCount || 1));
       const contradictions = Math.max(0, Number(fact.contradictionCount || 0));
       const revisions = Math.max(0, Number(fact.revisionCount || 0));
-      const revisionPanel = proposal ? `
-        <div class="learned-revision-proposal ${proposal.relation === 'contradict' ? 'contradiction' : 'refinement'}">
-          <div class="learned-revision-title"><strong>${proposal.relation === 'contradict' ? 'Conflicting evidence suggests a revision' : 'Suggested wording refinement'}</strong></div>
-          <div class="learned-revision-text">${esc(proposal.text)}</div>
-          <div class="detail">${esc(proposal.kind || fact.kind || 'fact')} · ${esc(proposal.confidence || 'medium')} confidence · ${Number(proposal.evidenceCount || 1)} new evidence message${Number(proposal.evidenceCount || 1) === 1 ? '' : 's'} across ${Number(proposal.supportingWindowCount || 1)} learning window${Number(proposal.supportingWindowCount || 1) === 1 ? '' : 's'}</div>
-          ${proposal.reason ? `<div class="detail">${esc(proposal.reason)}</div>` : ''}
-          <div class="custom-command-actions learned-revision-actions">
-            <button class="success viewer-profile-fact-revision-accept" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Accept Revision</button>
-            <button class="secondary viewer-profile-fact-revision-dismiss" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Keep Current</button>
-          </div>
-        </div>` : '';
+      const hasRevision = Boolean(fact.revisionProposal?.text);
       return `
       <div class="viewer-profile-fact ${fact.enabled === false ? 'disabled' : ''}" data-fact-id="${esc(fact.id)}">
         <label class="inline-check"><input class="viewer-profile-fact-toggle" type="checkbox" ${fact.enabled === false ? '' : 'checked'} ${profile?.optedOut === true ? 'disabled' : ''}> Use</label>
         <div class="viewer-profile-fact-copy">
           <div>${esc(fact.text)}</div>
-          <div class="detail">${esc(fact.kind || 'fact')} · ${fact.source === 'deterministic' ? 'deterministic' : 'AI'} · ${esc(fact.confidence || 'medium')} confidence · support ${Number(fact.evidenceCount || 1)}x across ${supportWindows} window${supportWindows === 1 ? '' : 's'}${contradictions ? ` · conflicts ${contradictions}x` : ''}${revisions ? ` · revised ${revisions}x` : ''}${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          <div class="detail">${esc(fact.kind || 'fact')} · ${fact.source === 'deterministic' ? 'deterministic' : 'AI'} · ${esc(fact.confidence || 'medium')} confidence · support ${Number(fact.evidenceCount || 1)}x across ${supportWindows} window${supportWindows === 1 ? '' : 's'}${contradictions ? ` · conflicts ${contradictions}x` : ''}${revisions ? ` · revised ${revisions}x` : ''}${hasRevision ? ' · revision pending review' : ''}${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
           ${fact.evidenceSummary ? `<div class="detail">${esc(fact.evidenceSummary)}</div>` : ''}
-          ${revisionPanel}
         </div>
         <button class="danger viewer-profile-fact-unlearn" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Unlearn</button>
       </div>`;
@@ -262,12 +305,35 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     $('viewerProfileFactNextPage').disabled = factCurrentPage >= pageCount;
     $('viewerProfileFactPagination').hidden = approved.length === 0;
 
-    $('viewerProfilePendingFacts').innerHTML = pending.length ? pending.map((fact) => {
+    $('viewerProfilePendingFacts').innerHTML = pendingReviews.length ? pendingReviews.map(({ type, fact }) => {
+      if (type === 'revision') {
+        const proposal = fact.revisionProposal;
+        const proposalEvidence = Math.max(1, Number(proposal?.evidenceCount || 1));
+        const proposalWindows = Math.max(1, Number(proposal?.supportingWindowCount || 1));
+        return `
+        <div class="viewer-profile-fact" data-fact-id="${esc(fact.id)}" data-review-type="revision">
+          <div class="viewer-profile-fact-copy">
+            <div class="learned-revision-title"><strong>${proposal.relation === 'contradict' ? 'Suggested revision from conflicting evidence' : 'Suggested revision'}</strong></div>
+            <div class="detail"><strong>Current approved:</strong> ${esc(fact.text)}</div>
+            <div class="learned-revision-proposal ${proposal.relation === 'contradict' ? 'contradiction' : 'refinement'}">
+              <div class="learned-revision-text"><strong>Suggested:</strong> ${esc(proposal.text)}</div>
+              <div class="detail">${esc(proposal.kind || fact.kind || 'fact')} · ${esc(proposal.confidence || 'medium')} confidence · ${proposalEvidence} new evidence message${proposalEvidence === 1 ? '' : 's'} across ${proposalWindows} learning window${proposalWindows === 1 ? '' : 's'}</div>
+              ${proposal.reason ? `<div class="detail learned-revision-reason">${esc(proposal.reason)}</div>` : ''}
+            </div>
+          </div>
+          <div class="custom-command-actions learned-revision-actions">
+            <button class="success viewer-profile-pending-revision-accept" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Accept Revision</button>
+            <button class="secondary viewer-profile-pending-revision-dismiss" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Keep Current</button>
+          </div>
+        </div>`;
+      }
+
       const windows = Math.max(1, Number(fact.supportingWindowCount || 1));
       const refinements = Math.max(0, Number(fact.revisionCount || 0));
       return `
-      <div class="viewer-profile-fact" data-fact-id="${esc(fact.id)}">
+      <div class="viewer-profile-fact" data-fact-id="${esc(fact.id)}" data-review-type="new">
         <div class="viewer-profile-fact-copy">
+          <div class="learned-revision-title"><strong>New AI observation</strong></div>
           <div>${esc(fact.text)}</div>
           <div class="detail">${esc(fact.kind || 'fact')} · AI · ${esc(fact.confidence || 'medium')} confidence · support ${Number(fact.evidenceCount || 1)}x across ${windows} window${windows === 1 ? '' : 's'}${refinements ? ` · auto-refined ${refinements}x` : ''}${fact.lastObservedAt ? ` · last ${esc(new Date(fact.lastObservedAt).toLocaleDateString())}` : ''}</div>
           ${fact.evidenceSummary ? `<div class="detail">${esc(fact.evidenceSummary)}</div>` : ''}
@@ -277,7 +343,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
           <button class="danger viewer-profile-fact-reject" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No pending AI observations.</div>';
+    }).join('') : '<div class="detail custom-empty-state">No pending AI observations or suggested revisions.</div>';
 
     $('viewerProfileFacts').querySelectorAll('.viewer-profile-fact-toggle').forEach((toggle) => {
       toggle.onchange = async () => {
@@ -316,39 +382,22 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
       };
     });
 
-    $('viewerProfileFacts').querySelectorAll('.viewer-profile-fact-revision-accept').forEach((button) => {
+    $('viewerProfilePendingFacts').querySelectorAll('.viewer-profile-pending-revision-accept, .viewer-profile-pending-revision-dismiss').forEach((button) => {
       button.onclick = async () => {
         if (!editingId) return;
         const row = button.closest('.viewer-profile-fact');
+        const accepting = button.classList.contains('viewer-profile-pending-revision-accept');
         button.disabled = true;
-        const d = await postJson('/viewer-profiles/fact-revision-accept', { profileId: editingId, factId: row.dataset.factId });
+        const d = await postJson(accepting ? '/viewer-profiles/fact-revision-accept' : '/viewer-profiles/fact-revision-dismiss', { profileId: editingId, factId: row.dataset.factId });
         if (!d.success) {
           button.disabled = false;
-          return setDialogMessage(d.error || 'Could not accept the revision.', true);
+          return setDialogMessage(d.error || `Could not ${accepting ? 'accept the revision' : 'keep the current wording'}.`, true);
         }
         const index = profiles.findIndex((item) => item.id === editingId);
         if (index >= 0) profiles[index] = d.profile;
         renderFacts(d.profile);
         renderList();
-        setDialogMessage('AI revision accepted. The approved observation wording has been updated.');
-      };
-    });
-
-    $('viewerProfileFacts').querySelectorAll('.viewer-profile-fact-revision-dismiss').forEach((button) => {
-      button.onclick = async () => {
-        if (!editingId) return;
-        const row = button.closest('.viewer-profile-fact');
-        button.disabled = true;
-        const d = await postJson('/viewer-profiles/fact-revision-dismiss', { profileId: editingId, factId: row.dataset.factId });
-        if (!d.success) {
-          button.disabled = false;
-          return setDialogMessage(d.error || 'Could not keep the current wording.', true);
-        }
-        const index = profiles.findIndex((item) => item.id === editingId);
-        if (index >= 0) profiles[index] = d.profile;
-        renderFacts(d.profile);
-        renderList();
-        setDialogMessage('Current wording kept. Recorded conflicts and any confidence adjustment remain; future evidence may suggest another revision.');
+        setDialogMessage(accepting ? 'AI revision accepted. The approved observation wording has been updated.' : 'Current wording kept. Recorded conflicts and any confidence adjustment remain; future evidence may suggest another revision.');
       };
     });
 
@@ -387,39 +436,6 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
         setDialogMessage('Pending observation rejected.');
       };
     });
-  }
-
-  function clearProfileForm() {
-    editingId = null;
-    $('viewerProfileDialogTitle').textContent = 'Add Viewer Profile';
-    $('viewerProfileDialogMeta').textContent = 'Manual profiles can be added before the AI has learned anything about a viewer.';
-    $('viewerProfileUsername').disabled = false;
-    $('viewerProfileUsername').value = '';
-    $('viewerProfileDisplayName').value = '';
-    $('viewerProfileAliases').value = '';
-    $('viewerProfilePinnedNotes').value = '';
-    $('viewerProfileEnabled').checked = true;
-    $('viewerProfileLearningForUser').checked = true;
-    $('viewerProfileEnabled').disabled = false;
-    $('viewerProfileLearningForUser').disabled = false;
-    $('viewerProfileAliases').disabled = false;
-    $('viewerProfilePinnedNotes').disabled = false;
-    $('saveViewerProfileBtn').disabled = false;
-    $('deleteViewerProfileBtn').hidden = true;
-    setDialogMessage('');
-    factCurrentPage = 1;
-    if ($('viewerProfileFactSearch')) $('viewerProfileFactSearch').value = '';
-    renderFacts({ facts: [] }, { preservePage: false });
-  }
-
-  function showDialog() {
-    if (typeof dialog.showModal === 'function') dialog.showModal();
-    else dialog.setAttribute('open', '');
-  }
-
-  function closeDialog() {
-    if (typeof dialog.close === 'function') dialog.close();
-    else dialog.removeAttribute('open');
   }
 
   function openProfile(profile = null) {

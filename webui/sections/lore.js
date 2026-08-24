@@ -17,6 +17,8 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityCooldown').min = 5;
   $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
   $('botPersonalityCooldownResponse').maxLength = 500;
+  $('botPersonalityRecapBuffer').min = 0;
+  $('botPersonalityRecapBuffer').max = 120;
   $('botPersonalityRetryCount').max = 2;
   $('botPersonalityFailureResponse').maxLength = 500;
   $('botPersonalitySecurityRefusalResponse').maxLength = 500;
@@ -160,11 +162,16 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   function renderLearnedLore(observations = learnedLoreObservations) {
     learnedLoreObservations = Array.isArray(observations) ? observations : [];
     const approvedAll = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'approved');
-    const pending = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'pending');
-    const pendingRevisions = approvedAll.filter((item) => item.revisionProposal?.text).length;
+    const pendingNew = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'pending');
+    const pendingRevisions = approvedAll.filter((item) => item.revisionProposal?.text);
+    const pendingReviews = [
+      ...pendingNew.map((observation) => ({ type: 'new', observation, sortAt: observation.lastObservedAt || observation.firstObservedAt })),
+      ...pendingRevisions.map((observation) => ({ type: 'revision', observation, sortAt: observation.revisionProposal?.lastProposedAt || observation.lastObservedAt || observation.firstObservedAt }))
+    ].sort((a, b) => new Date(b.sortAt || 0).getTime() - new Date(a.sortAt || 0).getTime());
+
     $('streamLoreObservationCount').textContent = `${learnedLoreObservations.length} observation${learnedLoreObservations.length === 1 ? '' : 's'}`;
-    $('streamLoreApprovedCount').textContent = `${approvedAll.length} approved${pendingRevisions ? ` · ${pendingRevisions} revision${pendingRevisions === 1 ? '' : 's'} to review` : ''}`;
-    $('streamLorePendingCount').textContent = `${pending.length} pending`;
+    $('streamLoreApprovedCount').textContent = `${approvedAll.length} approved`;
+    $('streamLorePendingCount').textContent = `${pendingReviews.length} pending review${pendingReviews.length === 1 ? '' : 's'}`;
 
     const approved = filteredApprovedLore();
     const pageSize = approvedLorePageSize();
@@ -173,31 +180,17 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     const page = approved.slice((approvedLorePage - 1) * pageSize, approvedLorePage * pageSize);
 
     $('streamLoreApprovedList').innerHTML = page.length ? page.map((observation) => {
-      const proposal = observation.revisionProposal?.text ? observation.revisionProposal : null;
       const supportWindows = Math.max(1, Number(observation.supportingWindowCount || 1));
       const contradictions = Math.max(0, Number(observation.contradictionCount || 0));
       const revisions = Math.max(0, Number(observation.revisionCount || 0));
-      const proposalEvidence = Math.max(1, Number(proposal?.evidenceCount || 1));
-      const proposalWindows = Math.max(1, Number(proposal?.supportingWindowCount || 1));
-      const revisionPanel = proposal ? `
-        <div class="learned-revision-proposal ${proposal.relation === 'contradict' ? 'contradiction' : 'refinement'}">
-          <div class="learned-revision-title"><strong>${proposal.relation === 'contradict' ? 'Conflicting evidence suggests a revision' : 'Suggested wording refinement'}</strong></div>
-          <div class="learned-revision-text">${escLore(proposal.text)}</div>
-          <div class="detail">${escLore(proposal.confidence || 'medium')} confidence · ${proposalEvidence} new evidence message${proposalEvidence === 1 ? '' : 's'} across ${proposalWindows} learning window${proposalWindows === 1 ? '' : 's'}</div>
-          ${proposal.reason ? `<div class="detail learned-revision-reason">${escLore(proposal.reason)}</div>` : ''}
-          <div class="custom-command-actions learned-revision-actions">
-            <button class="success stream-lore-revision-accept" type="button">Accept Revision</button>
-            <button class="secondary stream-lore-revision-dismiss" type="button">Keep Current</button>
-          </div>
-        </div>` : '';
+      const hasRevision = Boolean(observation.revisionProposal?.text);
       return `
       <div class="viewer-profile-fact ${observation.enabled === true ? '' : 'disabled'}" data-observation-id="${escLore(observation.id)}">
         <label class="inline-check"><input class="stream-lore-observation-toggle" type="checkbox" ${observation.enabled === true ? 'checked' : ''}> Use</label>
         <div class="viewer-profile-fact-copy">
           <div>${escLore(observation.text)}</div>
-          <div class="detail">${escLore(observation.confidence || 'medium')} confidence · support ${Math.max(1, Number(observation.evidenceCount || 1))}x across ${supportWindows} window${supportWindows === 1 ? '' : 's'}${contradictions ? ` · conflicts ${contradictions}x` : ''}${revisions ? ` · revised ${revisions}x` : ''}${observation.lastObservedAt ? ` · last ${escLore(new Date(observation.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          <div class="detail">${escLore(observation.confidence || 'medium')} confidence · support ${Math.max(1, Number(observation.evidenceCount || 1))}x across ${supportWindows} window${supportWindows === 1 ? '' : 's'}${contradictions ? ` · conflicts ${contradictions}x` : ''}${revisions ? ` · revised ${revisions}x` : ''}${hasRevision ? ' · revision pending review' : ''}${observation.lastObservedAt ? ` · last ${escLore(new Date(observation.lastObservedAt).toLocaleDateString())}` : ''}</div>
           ${observation.evidenceSummary ? `<div class="detail">${escLore(observation.evidenceSummary)}</div>` : ''}
-          ${revisionPanel}
         </div>
         <button class="danger stream-lore-observation-unlearn" type="button">Unlearn</button>
       </div>`;
@@ -208,12 +201,35 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     $('streamLoreApprovedNextPage').disabled = approvedLorePage >= pageCount;
     $('streamLoreApprovedPagination').hidden = approved.length === 0;
 
-    $('streamLorePendingList').innerHTML = pending.length ? pending.map((observation) => {
+    $('streamLorePendingList').innerHTML = pendingReviews.length ? pendingReviews.map(({ type, observation }) => {
+      if (type === 'revision') {
+        const proposal = observation.revisionProposal;
+        const proposalEvidence = Math.max(1, Number(proposal?.evidenceCount || 1));
+        const proposalWindows = Math.max(1, Number(proposal?.supportingWindowCount || 1));
+        return `
+        <div class="viewer-profile-fact" data-observation-id="${escLore(observation.id)}" data-review-type="revision">
+          <div class="viewer-profile-fact-copy">
+            <div class="learned-revision-title"><strong>${proposal.relation === 'contradict' ? 'Suggested revision from conflicting evidence' : 'Suggested revision'}</strong></div>
+            <div class="detail"><strong>Current approved:</strong> ${escLore(observation.text)}</div>
+            <div class="learned-revision-proposal ${proposal.relation === 'contradict' ? 'contradiction' : 'refinement'}">
+              <div class="learned-revision-text"><strong>Suggested:</strong> ${escLore(proposal.text)}</div>
+              <div class="detail">${escLore(proposal.confidence || 'medium')} confidence · ${proposalEvidence} new evidence message${proposalEvidence === 1 ? '' : 's'} across ${proposalWindows} learning window${proposalWindows === 1 ? '' : 's'}</div>
+              ${proposal.reason ? `<div class="detail learned-revision-reason">${escLore(proposal.reason)}</div>` : ''}
+            </div>
+          </div>
+          <div class="custom-command-actions learned-revision-actions">
+            <button class="success stream-lore-revision-accept" type="button">Accept Revision</button>
+            <button class="secondary stream-lore-revision-dismiss" type="button">Keep Current</button>
+          </div>
+        </div>`;
+      }
+
       const windows = Math.max(1, Number(observation.supportingWindowCount || 1));
       const refinements = Math.max(0, Number(observation.revisionCount || 0));
       return `
-      <div class="viewer-profile-fact" data-observation-id="${escLore(observation.id)}">
+      <div class="viewer-profile-fact" data-observation-id="${escLore(observation.id)}" data-review-type="new">
         <div class="viewer-profile-fact-copy">
+          <div class="learned-revision-title"><strong>New AI-learned lore</strong></div>
           <div>${escLore(observation.text)}</div>
           <div class="detail">${escLore(observation.confidence || 'medium')} confidence · support ${Math.max(1, Number(observation.evidenceCount || 1))}x across ${windows} window${windows === 1 ? '' : 's'}${refinements ? ` · auto-refined ${refinements}x` : ''}${observation.lastObservedAt ? ` · last ${escLore(new Date(observation.lastObservedAt).toLocaleDateString())}` : ''}</div>
           ${observation.evidenceSummary ? `<div class="detail">${escLore(observation.evidenceSummary)}</div>` : ''}
@@ -223,7 +239,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
           <button class="danger stream-lore-observation-reject" type="button">Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No pending AI-learned lore.</div>';
+    }).join('') : '<div class="detail custom-empty-state">No pending AI-learned lore or suggested revisions.</div>';
 
     $('streamLoreApprovedList').querySelectorAll('.stream-lore-observation-toggle').forEach((toggle) => {
       toggle.onchange = async () => {
@@ -257,7 +273,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       };
     });
 
-    $('streamLoreApprovedList').querySelectorAll('.stream-lore-revision-accept').forEach((button) => {
+    $('streamLorePendingList').querySelectorAll('.stream-lore-revision-accept').forEach((button) => {
       button.onclick = async () => {
         const row = button.closest('.viewer-profile-fact');
         button.disabled = true;
@@ -272,7 +288,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       };
     });
 
-    $('streamLoreApprovedList').querySelectorAll('.stream-lore-revision-dismiss').forEach((button) => {
+    $('streamLorePendingList').querySelectorAll('.stream-lore-revision-dismiss').forEach((button) => {
       button.onclick = async () => {
         const row = button.closest('.viewer-profile-fact');
         button.disabled = true;
@@ -406,6 +422,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityModsOnly').checked = d.audience === 'mods';
       $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
       $('botPersonalityCooldown').value = d.cooldownSeconds ?? 5;
+      $('botPersonalityRecapBuffer').value = d.recapCollisionBufferSeconds ?? 12;
       $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
       $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
       setAiRetrySettings(d.aiRetry || {});
@@ -427,6 +444,12 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityCooldown').focus();
       return;
     }
+    const recapCollisionBufferSeconds = Number($('botPersonalityRecapBuffer').value);
+    if (!Number.isFinite(recapCollisionBufferSeconds) || recapCollisionBufferSeconds < 0 || recapCollisionBufferSeconds > 120 || !Number.isInteger(recapCollisionBufferSeconds)) {
+      $('botPersonalityMsg').textContent = 'Recap Collision Buffer must be a whole number from 0 to 120 seconds.';
+      $('botPersonalityRecapBuffer').focus();
+      return;
+    }
     const retryCount = Number($('botPersonalityRetryCount').value);
     if (!Number.isFinite(retryCount) || retryCount < 0 || retryCount > 2 || !Number.isInteger(retryCount)) {
       $('botPersonalityMsg').textContent = 'AI retry count must be a whole number from 0 to 2.';
@@ -443,6 +466,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
         cooldownSeconds,
         modsBypassCooldown: $('botPersonalityModsBypassCooldown').checked,
         cooldownResponse: $('botPersonalityUseCooldownResponse').checked ? $('botPersonalityCooldownResponse').value.trim() : '',
+        recapCollisionBufferSeconds,
         aiRetry: getAiRetrySettings(),
         securityRefusalResponse: $('botPersonalitySecurityRefusalResponse').value.trim(),
         sessionMemory: getSessionMemorySettings()
@@ -456,6 +480,7 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       $('botPersonalityModsOnly').checked = d.audience === 'mods';
       $('botPersonalityModsBypassCooldown').checked = d.modsBypassCooldown !== false;
       $('botPersonalityCooldown').value = d.cooldownSeconds ?? 5;
+      $('botPersonalityRecapBuffer').value = d.recapCollisionBufferSeconds ?? 12;
       $('botPersonalityCooldownResponse').value = d.cooldownResponse || '';
       $('botPersonalityUseCooldownResponse').checked = Boolean(d.cooldownResponse);
       setAiRetrySettings(d.aiRetry || {});
@@ -465,11 +490,12 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
       updatePersonalityCount();
       const audienceText = d.audience === 'everyone' ? 'Everyone can ask.' : 'Only Mods/Broadcaster can ask.';
       const cooldownText = ` Cooldown: ${d.cooldownSeconds}s${d.modsBypassCooldown ? ' (Mods/Broadcaster bypass).' : '.'}`;
+      const recapBufferText = ` Recap buffer: ${d.recapCollisionBufferSeconds ?? 12}s.`;
       const retryText = d.aiRetry?.enabled === false ? ' AI retries: disabled.' : ` AI retries: ${d.aiRetry?.maxRetries ?? 2}.`;
       const memoryText = d.sessionMemory?.enabled === false ? ' Session Memory: disabled.' : ' Session Memory: enabled.';
       $('botPersonalityMsg').textContent = d.personality
-        ? `Saved. ${audienceText}${cooldownText}${retryText}${memoryText}`
-        : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}${retryText}${memoryText}`;
+        ? `Saved. ${audienceText}${cooldownText}${recapBufferText}${retryText}${memoryText}`
+        : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}${recapBufferText}${retryText}${memoryText}`;
       await loadSessionMemoryStatus();
     } catch (_) {
       $('botPersonalityMsg').textContent = 'Could not save personality settings.';

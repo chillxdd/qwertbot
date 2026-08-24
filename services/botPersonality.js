@@ -10,6 +10,8 @@ const TWITCH_MESSAGE_LIMIT = 500;
 const MIN_BOT_PERSONALITY_COOLDOWN_SECONDS = 5;
 const MAX_BOT_PERSONALITY_COOLDOWN_SECONDS = 86400;
 const MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH = 500;
+const DEFAULT_TAGGED_QUESTION_RECAP_BUFFER_SECONDS = 12;
+const MAX_TAGGED_QUESTION_RECAP_BUFFER_SECONDS = 120;
 const MAX_TAGGED_QUESTION_RETRIES = 2;
 const TAGGED_QUESTION_RETRY_WINDOW_MS = 15000;
 const TAGGED_QUESTION_FAILURE_GUARD_MS = 20000;
@@ -67,6 +69,14 @@ function renderFailureResponse(template, displayName) {
   return String(template || '')
     .replace(/\$\(user\)|\$user\b/gi, user)
     .trim();
+}
+
+function normalizeRecapCollisionBufferSeconds(value) {
+  const seconds = Number(value ?? DEFAULT_TAGGED_QUESTION_RECAP_BUFFER_SECONDS);
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds > MAX_TAGGED_QUESTION_RECAP_BUFFER_SECONDS) {
+    throw new Error(`Tagged-question recap buffer must be between 0 and ${MAX_TAGGED_QUESTION_RECAP_BUFFER_SECONDS} seconds.`);
+  }
+  return Math.round(seconds);
 }
 
 function normalizeSecurityRefusalResponse(value) {
@@ -136,8 +146,10 @@ function clipTwitchMessage(text, prefix = '') {
 function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore, getStreamContext, getSessionMemoryContext }) {
   const normalizedChannel = normalizeChannelName(channelName);
   const normalizedBotUsername = String(botUsername || '').toLowerCase().trim();
-  let config = { name: '', personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, cooldownResponse: '', aiRetry: normalizeAiRetryConfig(), securityRefusalResponse: DEFAULT_TAGGED_QUESTION_SECURITY_REFUSAL, sessionMemory: normalizeSessionMemoryConfig(), updatedAt: null };
+  let config = { name: '', personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, cooldownResponse: '', recapCollisionBufferSeconds: DEFAULT_TAGGED_QUESTION_RECAP_BUFFER_SECONDS, aiRetry: normalizeAiRetryConfig(), securityRefusalResponse: DEFAULT_TAGGED_QUESTION_SECURITY_REFUSAL, sessionMemory: normalizeSessionMemoryConfig(), updatedAt: null };
   let lastPublicResponseAt = 0;
+  let lastTaggedResponseAt = 0;
+  let taggedQuestionsInFlight = 0;
   const ownResponses = [];
   const failureGuards = new Map();
   const OWN_RESPONSE_TTL_MS = 15000;
@@ -170,6 +182,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       cooldownSeconds: Math.max(MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))),
       modsBypassCooldown: doc?.modsBypassCooldown !== false,
       cooldownResponse: String(doc?.cooldownResponse || ''),
+      recapCollisionBufferSeconds: normalizeRecapCollisionBufferSeconds(doc?.recapCollisionBufferSeconds),
       aiRetry: normalizeAiRetryConfig(doc?.aiRetry || {}),
       securityRefusalResponse: normalizeSecurityRefusalResponse(doc?.securityRefusalResponse),
       sessionMemory: normalizeSessionMemoryConfig(doc?.sessionMemory || {}),
@@ -180,10 +193,10 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
 
   async function initialize() {
     await loadConfig();
-    console.log(`[Tagged Questions] Loaded personality settings (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
+    console.log(`[Tagged Questions] Loaded personality settings (name=${config.name || 'none'}, personality=${config.personality.length} characters, audience=${config.audience}, cooldown=${config.cooldownSeconds}s, recapBuffer=${config.recapCollisionBufferSeconds}s, modsBypass=${config.modsBypassCooldown}).`);
   }
 
-  async function saveConfig({ name, personality, audience, cooldownSeconds, modsBypassCooldown, cooldownResponse, aiRetry, securityRefusalResponse, sessionMemory }) {
+  async function saveConfig({ name, personality, audience, cooldownSeconds, modsBypassCooldown, cooldownResponse, recapCollisionBufferSeconds, aiRetry, securityRefusalResponse, sessionMemory }) {
     const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
     if (normalizedName.length > MAX_BOT_PERSONALITY_NAME_LENGTH) {
       throw new Error(`Tagged-question name cannot exceed ${MAX_BOT_PERSONALITY_NAME_LENGTH} characters.`);
@@ -205,6 +218,9 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     if (normalizedCooldownResponse.length > MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH) {
       throw new Error(`Tagged-question cooldown response cannot exceed ${MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH} characters.`);
     }
+    const normalizedRecapCollisionBufferSeconds = normalizeRecapCollisionBufferSeconds(
+      recapCollisionBufferSeconds ?? config.recapCollisionBufferSeconds
+    );
     const normalizedAiRetry = normalizeAiRetryConfig(aiRetry || config.aiRetry || {});
     if (String(aiRetry?.failureResponse ?? normalizedAiRetry.failureResponse).trim().length > MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH) {
       throw new Error(`Tagged-question AI failure response cannot exceed ${MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH} characters.`);
@@ -217,7 +233,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     const normalizedSessionMemory = normalizeSessionMemoryConfig(sessionMemory || config.sessionMemory || {});
     const doc = await BotPersonalityConfig.findOneAndUpdate(
       { channelName: normalizedChannel },
-      { $set: { name: normalizedName, personality: normalizedPersonality, audience: normalizedAudience, cooldownSeconds: roundedCooldown, modsBypassCooldown: normalizedBypass, cooldownResponse: normalizedCooldownResponse, aiRetry: normalizedAiRetry, securityRefusalResponse: normalizedSecurityRefusalResponse, sessionMemory: normalizedSessionMemory } },
+      { $set: { name: normalizedName, personality: normalizedPersonality, audience: normalizedAudience, cooldownSeconds: roundedCooldown, modsBypassCooldown: normalizedBypass, cooldownResponse: normalizedCooldownResponse, recapCollisionBufferSeconds: normalizedRecapCollisionBufferSeconds, aiRetry: normalizedAiRetry, securityRefusalResponse: normalizedSecurityRefusalResponse, sessionMemory: normalizedSessionMemory } },
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     ).lean();
 
@@ -228,6 +244,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
       cooldownSeconds: Math.max(MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(doc?.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))),
       modsBypassCooldown: doc?.modsBypassCooldown !== false,
       cooldownResponse: String(doc?.cooldownResponse || ''),
+      recapCollisionBufferSeconds: normalizeRecapCollisionBufferSeconds(doc?.recapCollisionBufferSeconds),
       aiRetry: normalizeAiRetryConfig(doc?.aiRetry || {}),
       securityRefusalResponse: normalizeSecurityRefusalResponse(doc?.securityRefusalResponse),
       sessionMemory: normalizeSessionMemoryConfig(doc?.sessionMemory || {}),
@@ -256,12 +273,18 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     const question = parseTaggedQuestion(rawMessage);
     if (!question) return { matched: false };
 
-    const replyTarget = String(replyParentMessageId || '').trim();
-    const sendTaggedResponse = (text) => sendMessage(
-      normalizedChannel,
-      text,
-      replyTarget ? { replyParentMessageId: replyTarget } : {}
-    );
+    taggedQuestionsInFlight += 1;
+    try {
+      const replyTarget = String(replyParentMessageId || '').trim();
+      const sendTaggedResponse = async (text) => {
+        const result = await sendMessage(
+          normalizedChannel,
+          text,
+          replyTarget ? { replyParentMessageId: replyTarget } : {}
+        );
+        lastTaggedResponseAt = Date.now();
+        return result;
+      };
 
     const normalizedReplyContext = replyContext && typeof replyContext === 'object'
       ? {
@@ -533,6 +556,31 @@ Output only the answer.`;
     const result = await sendTaggedResponse(rendered);
     if (!bypassCooldown) lastPublicResponseAt = Date.now();
     return { matched: true, responded: true, message: rendered, sendMethod: result?.method || 'unknown' };
+    } finally {
+      taggedQuestionsInFlight = Math.max(0, taggedQuestionsInFlight - 1);
+    }
+  }
+
+  function getRecapCollisionStatus() {
+    const bufferSeconds = Math.max(0, Number(config.recapCollisionBufferSeconds || 0));
+    if (bufferSeconds <= 0) {
+      return { active: false, inFlight: false, remainingMs: 0, availableAt: 0, bufferSeconds, lastTaggedResponseAt: lastTaggedResponseAt || 0 };
+    }
+
+    if (taggedQuestionsInFlight > 0) {
+      return { active: true, inFlight: true, remainingMs: 1000, availableAt: 0, bufferSeconds, lastTaggedResponseAt: lastTaggedResponseAt || 0 };
+    }
+
+    const availableAt = lastTaggedResponseAt ? lastTaggedResponseAt + (bufferSeconds * 1000) : 0;
+    const remainingMs = availableAt ? Math.max(0, availableAt - Date.now()) : 0;
+    return {
+      active: remainingMs > 0,
+      inFlight: false,
+      remainingMs,
+      availableAt: remainingMs > 0 ? availableAt : 0,
+      bufferSeconds,
+      lastTaggedResponseAt: lastTaggedResponseAt || 0
+    };
   }
 
   return {
@@ -540,6 +588,7 @@ Output only the answer.`;
     loadConfig,
     saveConfig,
     getConfig: () => ({ ...config, aiRetry: { ...config.aiRetry }, sessionMemory: { ...config.sessionMemory } }),
+    getRecapCollisionStatus,
     handleTaggedQuestion,
     consumeOwnResponse
   };
@@ -551,6 +600,8 @@ module.exports = {
   MIN_BOT_PERSONALITY_COOLDOWN_SECONDS,
   MAX_BOT_PERSONALITY_COOLDOWN_SECONDS,
   MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH,
+  DEFAULT_TAGGED_QUESTION_RECAP_BUFFER_SECONDS,
+  MAX_TAGGED_QUESTION_RECAP_BUFFER_SECONDS,
   MAX_TAGGED_QUESTION_RETRIES,
   MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH,
   MAX_TAGGED_QUESTION_SECURITY_REFUSAL_LENGTH,

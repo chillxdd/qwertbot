@@ -736,11 +736,11 @@
         <div id="streamLoreAiView" class="subsection-view open">
           <div class="memory-block learned-lore-block">
             <div class="custom-response-heading"><strong>AI-Learned Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
-            <div class="detail">New AI observations stay pending until a moderator approves or rejects them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
+            <div class="detail">New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
 
             <div class="learned-review-section learned-review-pending">
-              <div class="custom-response-heading"><strong>Pending Lore</strong><span id="streamLorePendingCount" class="detail">0 pending</span></div>
-              <div class="detail">Pending wording can automatically refine as evidence accumulates. Approve moves it to the approved table and turns Use on. Reject discards it; future evidence may cause the AI to propose it again.</div>
+              <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
+              <div class="detail">Review both newly discovered lore and suggested revisions here. New lore can automatically refine while pending. Revision cards show the current approved wording beside the AI suggestion before you Accept Revision or Keep Current.</div>
               <div id="streamLorePendingList" class="viewer-profile-facts stream-lore-observations"></div>
             </div>
 
@@ -748,7 +748,7 @@
               <div class="custom-command-header learned-review-header">
                 <div>
                   <h4>Approved Lore</h4>
-                  <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support; conflicting evidence can lower confidence and suggest a moderator-reviewed revision. Approved wording never changes until you accept it.</div>
+                  <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support or suggest a revision; any suggested revision appears in Pending Lore above. Approved wording never changes until you accept it.</div>
                 </div>
                 <div class="custom-command-list-controls">
                   <label class="list-search-wrap" for="streamLoreApprovedSearch">
@@ -820,6 +820,11 @@
             <label class="prompt-label" for="botPersonalityCooldown">Cooldown</label>
             <div class="duration-field"><input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
             <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
+          </div>
+          <div class="personality-cooldown-field">
+            <label class="prompt-label" for="botPersonalityRecapBuffer">Recap Collision Buffer</label>
+            <div class="duration-field"><input id="botPersonalityRecapBuffer" type="number" min="0" max="120" step="1" value="12"><span class="duration-unit">seconds</span></div>
+            <div class="detail">Hourly recaps yield while a Tagged Question is being answered, then wait this long after its reply. Tagged Question replies are never delayed. Set to 0 to disable.</div>
           </div>
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityUseCooldownResponse" type="checkbox"> Send a custom response while tagged questions are on cooldown</label>
           <div id="botPersonalityCooldownResponsePanel" class="personality-cooldown-response-panel" hidden>
@@ -928,8 +933,8 @@
           <div id="viewerProfileSettingsMsg" class="detail"></div>
 
           <div class="learned-review-section learned-review-pending viewer-profile-global-pending-review">
-            <div class="custom-response-heading"><strong>Pending AI Observations</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending</span></div>
-            <div class="detail">Review new AI-learned viewer observations here without opening each profile. Each proposal shows the viewer it belongs to. Approve makes it eligible for AI context; Reject discards it.</div>
+            <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending reviews</span></div>
+            <div class="detail">Review newly learned viewer observations and suggested revisions here without opening each profile. Each item shows the viewer it belongs to. New observations use Approve/Reject; revisions use Accept Revision/Keep Current.</div>
             <div id="viewerProfilePendingReviewList" class="viewer-profile-facts viewer-profile-global-pending-list"></div>
             <div id="viewerProfilePendingReviewMsg" class="detail"></div>
           </div>
@@ -1003,7 +1008,7 @@
               <div class="custom-command-header learned-review-header">
                 <div>
                   <div class="custom-response-heading"><strong>Approved Learned Observations</strong><span id="viewerProfileFactCount" class="detail">0 approved</span></div>
-                  <div class="detail">Only approved observations can be used as Tagged Question context. Use can temporarily disable one without deleting it. New evidence can strengthen support; conflicting evidence can lower confidence and suggest a moderator-reviewed revision. Approved wording never changes until you accept it.</div>
+                  <div class="detail">Only approved observations can be used as Tagged Question context. Use can temporarily disable one without deleting it. New evidence can strengthen support or suggest a revision; any suggested revision appears in Pending AI Observations below. Approved wording never changes until you accept it.</div>
                 </div>
                 <div class="custom-command-list-controls">
                   <label class="list-search-wrap" for="viewerProfileFactSearch">
@@ -1039,8 +1044,8 @@
               </div>
             </div>
             <div class="learned-review-section learned-review-pending viewer-profile-pending-review">
-              <div class="custom-response-heading"><strong>Pending AI Observations</strong><span id="viewerProfilePendingFactCount" class="detail">0 pending</span></div>
-              <div class="detail">Pending wording can automatically refine as evidence accumulates. Approve makes it available for AI context. Reject discards it; later evidence can cause a similar observation to be proposed again.</div>
+              <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingFactCount" class="detail">0 pending reviews</span></div>
+              <div class="detail">This review queue contains both new observations and suggested revisions for this viewer. New observations can automatically refine while pending. Revision cards show the current approved wording beside the suggestion before you Accept Revision or Keep Current.</div>
               <div id="viewerProfilePendingFacts" class="viewer-profile-facts"></div>
             </div>
             <div class="custom-editor-actions">

@@ -48,6 +48,7 @@ function createRecapManager({
   validateTwitchAccessToken,
   getSessionMemoryConfig,
   getEventReactionHoldStatus = null,
+  getTaggedQuestionRecapBufferStatus = null,
   getAutomationSpacingStatus = null,
   tryReserveAutomationSlot = null,
   getNativeCommandResponse = null
@@ -117,6 +118,30 @@ function createRecapManager({
     return true;
   }
 
+
+
+  function taggedQuestionRecapBuffer() {
+    try {
+      return typeof getTaggedQuestionRecapBufferStatus === 'function'
+        ? (getTaggedQuestionRecapBufferStatus() || { active: false })
+        : { active: false };
+    } catch (_) {
+      return { active: false };
+    }
+  }
+
+  function deferForTaggedQuestionBuffer(reason = 'Tagged Question collision buffer') {
+    const status = taggedQuestionRecapBuffer();
+    if (!status.active) return false;
+    const resumeAt = status.availableAt && status.availableAt > Date.now()
+      ? status.availableAt + 250
+      : Date.now() + Math.max(1000, Number(status.remainingMs || 0));
+    recapInProgress = false;
+    scheduleRecapAt(resumeAt);
+    const suffix = status.inFlight ? 'while a Tagged Question is still being answered' : `for ${status.bufferSeconds || 0}s after the Tagged Question reply`;
+    console.log(`[Recap] Deferred by ${reason} ${suffix}. Tagged Questions remain immediate.`);
+    return true;
+  }
 
 
   function automationSpacing() {
@@ -669,6 +694,7 @@ function createRecapManager({
   async function sendAutomaticRecap(reason) {
     if (!streamLive || recapPaused || recapInProgress) return;
     if (deferForEventReaction()) return;
+    if (deferForTaggedQuestionBuffer()) return;
     if (deferForAutomationSpacing()) return;
 
     recapInProgress = true;
@@ -731,6 +757,7 @@ function createRecapManager({
       }
 
       if (deferForEventReaction('EventSub reaction started during recap generation')) return;
+      if (deferForTaggedQuestionBuffer('Tagged Question activity during recap generation')) return;
       if (deferForAutomationSpacing('automation activity during recap generation')) return;
       const automationReservation = await reserveAutomationSlot();
       if (!automationReservation?.allowed) {
