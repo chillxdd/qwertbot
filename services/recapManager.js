@@ -9,7 +9,7 @@ const {
   clearStreamRecapsByChannel
 } = require('./streamRecapHistory');
 const { getStreamLore, applyStreamLoreObservations } = require('./streamLore');
-const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
+const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini, formatGroundingForTaggedQuestion } = require('./recapGenerator');
 const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, getViewerLearningContext, applyViewerProfileUpdates } = require('./viewerProfiles');
 
@@ -66,6 +66,8 @@ function createRecapManager({
   let contextSequence = 0;
   let twitchEvents = [];
   let eventSequence = 0;
+  let recentRecapGroundings = [];
+  const MAX_RECENT_RECAP_GROUNDINGS = 10;
   let firstRecapSent = false;
   let recapInProgress = false;
   let streamSessionStartedAt = 0;
@@ -408,6 +410,7 @@ function createRecapManager({
     contextSequence = 0;
     twitchEvents = [];
     eventSequence = 0;
+    recentRecapGroundings = [];
     firstRecapSent = false;
     recapInProgress = false;
     recapPaused = false;
@@ -473,6 +476,7 @@ function createRecapManager({
     contextSequence = 0;
     twitchEvents = [];
     eventSequence = 0;
+    recentRecapGroundings = [];
     firstRecapSent = false;
     recapInProgress = false;
     recapPaused = false;
@@ -640,6 +644,47 @@ function createRecapManager({
     console.log(`[Recap] Moderator announcement recorded from ${moderator}: ${text}`);
   }
 
+  function normalizeRecapBodyForMatch(value) {
+    return String(value || '')
+      .replace(/^Hourly Recap:\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function noteRecapGrounding({ messageId = '', recapBody = '', grounding = null }) {
+    if (!grounding?.verified) return;
+    const normalizedBody = normalizeRecapBodyForMatch(recapBody);
+    if (!normalizedBody) return;
+
+    recentRecapGroundings.push({
+      messageId: String(messageId || '').trim(),
+      recapBody: normalizedBody,
+      grounding,
+      createdAt: Date.now()
+    });
+
+    if (recentRecapGroundings.length > MAX_RECENT_RECAP_GROUNDINGS) {
+      recentRecapGroundings = recentRecapGroundings.slice(-MAX_RECENT_RECAP_GROUNDINGS);
+    }
+  }
+
+  function getRecapGroundingContext({ parentMessageId = '', parentBody = '' } = {}) {
+    const messageId = String(parentMessageId || '').trim();
+    const body = normalizeRecapBodyForMatch(parentBody);
+    const match = [...recentRecapGroundings].reverse().find((entry) => (
+      (messageId && entry.messageId && entry.messageId === messageId) ||
+      (body && entry.recapBody === body)
+    ));
+
+    if (!match) return { found: false, text: '', grounding: null };
+    return {
+      found: true,
+      text: formatGroundingForTaggedQuestion(match.grounding),
+      grounding: match.grounding,
+      createdAt: match.createdAt
+    };
+  }
+
   function discardMessageSnapshot(snapshotMaxId) {
     if (snapshotMaxId === null) return;
     recapMessages = recapMessages.filter((item) => item.id > snapshotMaxId);
@@ -688,6 +733,7 @@ function createRecapManager({
     try {
       let twitchMessage;
       let recapSummaryBody;
+      let recapGrounding = null;
       let previousRecaps = [];
       let streamLore = '';
       let streamLoreRecord = null;
@@ -721,6 +767,7 @@ function createRecapManager({
         };
         const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName);
         recapSummaryBody = result.summary;
+        recapGrounding = result.grounding || null;
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
 
@@ -742,7 +789,9 @@ function createRecapManager({
         return;
       }
 
-      await client.say(channelName, twitchMessage, { temporaryPin: true });
+      const sentRecap = await client.say(channelName, twitchMessage, { temporaryPin: true });
+      const sentMessageId = String(sentRecap?.result?.message_id || sentRecap?.result?.messageId || '').trim();
+      noteRecapGrounding({ messageId: sentMessageId, recapBody: recapSummaryBody, grounding: recapGrounding });
       console.log('[Recap] Sent:', twitchMessage);
       console.log(`[Recap] Length: ${twitchMessage.length}/500`);
 
@@ -1046,6 +1095,7 @@ function createRecapManager({
     getCurrentStreamRecapHistory,
     getSessionMemoryStatus,
     getSessionMemoryContext,
+    getRecapGroundingContext,
     clearCurrentSessionMemory,
     getStatus
   };

@@ -251,7 +251,8 @@ botPersonalityManager = createBotPersonalityManager({
       category: status.currentStreamCategory || ''
     };
   },
-  getSessionMemoryContext: (question) => recapManager?.getSessionMemoryContext?.(question) || { text: '' }
+  getSessionMemoryContext: (question) => recapManager?.getSessionMemoryContext?.(question) || { text: '' },
+  getRecapGroundingContext: (context) => recapManager?.getRecapGroundingContext?.(context) || { found: false, text: '' }
 });
 
 const twitchMessageHandler = createTwitchMessageHandler({
