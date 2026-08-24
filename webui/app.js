@@ -452,7 +452,7 @@ $('logoutBtn').onclick = doLogout;
 $('password').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doLogin(); } });
 window.addEventListener('dashboard-auth-expired', () => showLogin('MOD session expired. Please log in again.'));
 $('chatToggle').onclick = () => setChatOpen(!$('chatSidebar').classList.contains('open'));
-setChatOpen(true);
+setChatOpen(false);
 
 async function recapAction(action) {
   const d = await postJson('/recap-control', { action });
