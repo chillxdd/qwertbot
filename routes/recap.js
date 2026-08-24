@@ -121,10 +121,7 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
         characterCount: fullOutput.length,
         sanitized: result.sanitization.sanitized,
         censoredCount: result.sanitization.censoredCount,
-        affectedMessages: result.sanitization.affectedMessages,
-        groundingVerified: result.grounding?.verified === true,
-        groundedClaimCount: Array.isArray(result.grounding?.claims) ? result.grounding.claims.length : 0,
-        usedSafeFallback: result.grounding?.fallback === true
+        affectedMessages: result.sanitization.affectedMessages
       });
     } catch (err) {
       console.error('[Recap] Summary test error:', err);
