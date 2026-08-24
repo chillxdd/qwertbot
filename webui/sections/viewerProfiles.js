@@ -438,6 +438,39 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     });
   }
 
+  function clearProfileForm() {
+    editingId = null;
+    $('viewerProfileDialogTitle').textContent = 'Add Viewer Profile';
+    $('viewerProfileDialogMeta').textContent = 'Manual profiles can be added before the AI has learned anything about a viewer.';
+    $('viewerProfileUsername').disabled = false;
+    $('viewerProfileUsername').value = '';
+    $('viewerProfileDisplayName').value = '';
+    $('viewerProfileAliases').value = '';
+    $('viewerProfilePinnedNotes').value = '';
+    $('viewerProfileEnabled').checked = true;
+    $('viewerProfileLearningForUser').checked = true;
+    $('viewerProfileEnabled').disabled = false;
+    $('viewerProfileLearningForUser').disabled = false;
+    $('viewerProfileAliases').disabled = false;
+    $('viewerProfilePinnedNotes').disabled = false;
+    $('saveViewerProfileBtn').disabled = false;
+    $('deleteViewerProfileBtn').hidden = true;
+    setDialogMessage('');
+    factCurrentPage = 1;
+    if ($('viewerProfileFactSearch')) $('viewerProfileFactSearch').value = '';
+    renderFacts({ facts: [] }, { preservePage: false });
+  }
+
+  function showDialog() {
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }
+
+  function closeDialog() {
+    if (typeof dialog.close === 'function') dialog.close();
+    else dialog.removeAttribute('open');
+  }
+
   function openProfile(profile = null) {
     clearProfileForm();
     if (profile) {
