@@ -729,8 +729,8 @@
 
       <div id="streamLoreView" class="subsection-view open">
       <div class="memory-block">
-        <h4>Stream Specific Lore</h4>
-        <div class="detail">Persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
+        <h4>Manually Added Lore</h4>
+        <div class="detail">Moderator-written persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
         <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
         <div class="memory-actions">
           <button id="saveLoreBtn">Save Lore</button>
@@ -739,10 +739,57 @@
         <div id="loreCount" class="detail">0/12000 characters</div>
         <div id="loreMsg" class="detail"></div>
       </div>
+
       <div class="memory-block learned-lore-block">
-        <div class="custom-response-heading"><strong>AI-Learned Stream Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
-        <div class="detail">AI-made observations are never added to active lore automatically. Check <strong>Use</strong> to approve one, uncheck it to keep it without using it, or Unlearn it to delete it.</div>
-        <div id="streamLoreObservations" class="viewer-profile-facts stream-lore-observations"></div>
+        <div class="custom-response-heading"><strong>AI-Learned Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
+        <div class="detail">New AI observations stay pending until a moderator approves or rejects them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
+
+        <div class="learned-review-section">
+          <div class="custom-command-header learned-review-header">
+            <div>
+              <h4>Approved Lore</h4>
+              <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support; conflicting evidence can lower confidence and suggest a moderator-reviewed revision. Approved wording never changes until you accept it.</div>
+            </div>
+            <div class="custom-command-list-controls">
+              <label class="list-search-wrap" for="streamLoreApprovedSearch">
+                <span class="sr-only">Search approved AI-learned lore</span>
+                <input id="streamLoreApprovedSearch" class="list-search-input" type="search" placeholder="Search approved lore..." autocomplete="off">
+              </label>
+              <label class="custom-command-sort-label" for="streamLoreApprovedSort">Sort
+                <select id="streamLoreApprovedSort" aria-label="Sort approved AI-learned lore">
+                  <option value="recent_desc">Recently observed</option>
+                  <option value="text_asc">Lore — A to Z</option>
+                  <option value="text_desc">Lore — Z to A</option>
+                  <option value="evidence_desc">Evidence — most first</option>
+                  <option value="confidence_desc">Confidence — highest first</option>
+                  <option value="revision_desc">Revisions awaiting review</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="custom-response-heading learned-review-count-row"><strong></strong><span id="streamLoreApprovedCount" class="detail">0 approved</span></div>
+          <div id="streamLoreApprovedList" class="viewer-profile-facts stream-lore-observations"></div>
+          <div id="streamLoreApprovedPagination" class="list-pagination" aria-label="Approved stream lore pagination">
+            <label class="list-page-size">Show
+              <select id="streamLoreApprovedPageSize" aria-label="Approved stream lore per page">
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
+            </label>
+            <div id="streamLoreApprovedPageLabel" class="list-page-label">Page 1 of 1</div>
+            <div class="list-page-buttons">
+              <button id="streamLoreApprovedPrevPage" class="secondary" type="button" aria-label="Previous approved lore page">←</button>
+              <button id="streamLoreApprovedNextPage" class="secondary" type="button" aria-label="Next approved lore page">→</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="learned-review-section learned-review-pending">
+          <div class="custom-response-heading"><strong>Pending Lore</strong><span id="streamLorePendingCount" class="detail">0 pending</span></div>
+          <div class="detail">Pending wording can automatically refine as evidence accumulates. Approve moves it to the approved table and turns Use on. Reject discards it; future evidence may cause the AI to propose it again.</div>
+          <div id="streamLorePendingList" class="viewer-profile-facts stream-lore-observations"></div>
+        </div>
         <div id="streamLoreObservationsMsg" class="detail"></div>
       </div>
       </div>
@@ -929,8 +976,50 @@
             </div>
             <label class="prompt-label" for="viewerProfilePinnedNotes">Moderator-Pinned Notes</label>
             <textarea id="viewerProfilePinnedNotes" maxlength="4000" placeholder="Optional moderator-approved context. These notes are treated as more authoritative than AI-learned observations."></textarea>
-            <div class="custom-response-heading"><strong>AI-Learned Observations</strong><span id="viewerProfileFactCount" class="detail">0 facts</span></div>
-            <div id="viewerProfileFacts" class="viewer-profile-facts"></div>
+            <div class="learned-review-section viewer-profile-learned-review">
+              <div class="custom-command-header learned-review-header">
+                <div>
+                  <div class="custom-response-heading"><strong>Approved Learned Observations</strong><span id="viewerProfileFactCount" class="detail">0 approved</span></div>
+                  <div class="detail">Only approved observations can be used as Tagged Question context. Use can temporarily disable one without deleting it. New evidence can strengthen support; conflicting evidence can lower confidence and suggest a moderator-reviewed revision. Approved wording never changes until you accept it.</div>
+                </div>
+                <div class="custom-command-list-controls">
+                  <label class="list-search-wrap" for="viewerProfileFactSearch">
+                    <span class="sr-only">Search approved viewer observations</span>
+                    <input id="viewerProfileFactSearch" class="list-search-input" type="search" placeholder="Search observations..." autocomplete="off">
+                  </label>
+                  <label class="custom-command-sort-label" for="viewerProfileFactSort">Sort
+                    <select id="viewerProfileFactSort" aria-label="Sort approved viewer observations">
+                      <option value="recent_desc">Recently observed</option>
+                      <option value="text_asc">Observation — A to Z</option>
+                      <option value="text_desc">Observation — Z to A</option>
+                      <option value="evidence_desc">Evidence — most first</option>
+                      <option value="confidence_desc">Confidence — highest first</option>
+                      <option value="revision_desc">Revisions awaiting review</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div id="viewerProfileFacts" class="viewer-profile-facts"></div>
+              <div id="viewerProfileFactPagination" class="list-pagination" aria-label="Approved viewer observation pagination">
+                <label class="list-page-size">Show
+                  <select id="viewerProfileFactPageSize" aria-label="Approved viewer observations per page">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                  </select>
+                </label>
+                <div id="viewerProfileFactPageLabel" class="list-page-label">Page 1 of 1</div>
+                <div class="list-page-buttons">
+                  <button id="viewerProfileFactPrevPage" class="secondary" type="button" aria-label="Previous approved viewer observation page">←</button>
+                  <button id="viewerProfileFactNextPage" class="secondary" type="button" aria-label="Next approved viewer observation page">→</button>
+                </div>
+              </div>
+            </div>
+            <div class="learned-review-section learned-review-pending viewer-profile-pending-review">
+              <div class="custom-response-heading"><strong>Pending AI Observations</strong><span id="viewerProfilePendingFactCount" class="detail">0 pending</span></div>
+              <div class="detail">Pending wording can automatically refine as evidence accumulates. Approve makes it available for AI context. Reject discards it; later evidence can cause a similar observation to be proposed again.</div>
+              <div id="viewerProfilePendingFacts" class="viewer-profile-facts"></div>
+            </div>
             <div class="custom-editor-actions">
               <button id="saveViewerProfileBtn" type="button">Save Profile</button>
               <button id="deleteViewerProfileBtn" class="danger" type="button">Delete Profile</button>

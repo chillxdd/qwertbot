@@ -1,11 +1,31 @@
 const mongoose = require('mongoose');
 
+const learnedLoreRevisionSchema = new mongoose.Schema({
+  text: { type: String, required: true, maxlength: 400 },
+  relation: { type: String, enum: ['refine', 'contradict'], default: 'refine' },
+  confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
+  evidenceCount: { type: Number, min: 1, default: 1 },
+  supportingWindowCount: { type: Number, min: 1, default: 1 },
+  evidenceSummary: { type: String, default: '', maxlength: 500 },
+  reason: { type: String, default: '', maxlength: 300 },
+  firstProposedAt: { type: Date, default: Date.now },
+  lastProposedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const learnedLoreObservationSchema = new mongoose.Schema({
   text: { type: String, required: true, maxlength: 400 },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
+  supportingWindowCount: { type: Number, min: 1, default: 1 },
+  contradictionCount: { type: Number, min: 0, default: 0 },
+  revisionCount: { type: Number, min: 0, default: 0 },
+  evidenceSummary: { type: String, default: '', maxlength: 500 },
   firstObservedAt: { type: Date, default: Date.now },
   lastObservedAt: { type: Date, default: Date.now },
+  lastRefinedAt: { type: Date, default: null },
+  lastContradictedAt: { type: Date, default: null },
+  revisionProposal: { type: learnedLoreRevisionSchema, default: null },
+  approvalStatus: { type: String, enum: ['pending', 'approved'], default: undefined },
   enabled: { type: Boolean, default: false }
 }, { _id: true });
 

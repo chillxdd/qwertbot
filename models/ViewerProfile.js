@@ -1,14 +1,34 @@
 const mongoose = require('mongoose');
 
+const viewerFactRevisionSchema = new mongoose.Schema({
+  text: { type: String, required: true, maxlength: 400 },
+  kind: { type: String, enum: ['fact', 'preference', 'habit', 'behavior'], default: 'fact' },
+  relation: { type: String, enum: ['refine', 'contradict'], default: 'refine' },
+  confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
+  evidenceCount: { type: Number, min: 1, default: 1 },
+  supportingWindowCount: { type: Number, min: 1, default: 1 },
+  evidenceSummary: { type: String, default: '', maxlength: 500 },
+  reason: { type: String, default: '', maxlength: 300 },
+  firstProposedAt: { type: Date, default: Date.now },
+  lastProposedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const viewerFactSchema = new mongoose.Schema({
   text: { type: String, required: true, maxlength: 400 },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
+  supportingWindowCount: { type: Number, min: 1, default: 1 },
+  contradictionCount: { type: Number, min: 0, default: 0 },
+  revisionCount: { type: Number, min: 0, default: 0 },
   kind: { type: String, enum: ['fact', 'preference', 'habit', 'behavior'], default: 'fact' },
   source: { type: String, enum: ['ai', 'deterministic'], default: 'ai' },
+  approvalStatus: { type: String, enum: ['pending', 'approved'], default: undefined },
   evidenceSummary: { type: String, default: '', maxlength: 500 },
   firstObservedAt: { type: Date, default: Date.now },
   lastObservedAt: { type: Date, default: Date.now },
+  lastRefinedAt: { type: Date, default: null },
+  lastContradictedAt: { type: Date, default: null },
+  revisionProposal: { type: viewerFactRevisionSchema, default: null },
   enabled: { type: Boolean, default: true }
 }, { _id: true });
 

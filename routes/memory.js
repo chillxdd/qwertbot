@@ -1,5 +1,5 @@
-const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
-const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, setFactEnabled, deleteViewerFact, deleteViewerProfile } = require('../services/viewerProfiles');
+const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
+const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, approveViewerFact, rejectViewerFact, acceptViewerFactRevision, dismissViewerFactRevision, setFactEnabled, deleteViewerFact, deleteViewerProfile } = require('../services/viewerProfiles');
 
 function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
   app.post('/stream-lore/get', requireModSession, async (req, res) => {
@@ -30,6 +30,46 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     } catch (err) {
       console.error('[Memory] Could not save stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
+    }
+  });
+
+  app.post('/stream-lore/observation-approve', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await approveLearnedObservation(channelName, req.body?.observationId);
+      return res.json({ success: true, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not approve learned stream lore.' });
+    }
+  });
+
+  app.post('/stream-lore/observation-reject', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await rejectLearnedObservation(channelName, req.body?.observationId);
+      return res.json({ success: true, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not reject learned stream lore.' });
+    }
+  });
+
+  app.post('/stream-lore/observation-revision-accept', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await acceptLearnedObservationRevision(channelName, req.body?.observationId);
+      return res.json({ success: true, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not accept the stream lore revision.' });
+    }
+  });
+
+  app.post('/stream-lore/observation-revision-dismiss', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await dismissLearnedObservationRevision(channelName, req.body?.observationId);
+      return res.json({ success: true, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not dismiss the stream lore revision.' });
     }
   });
 
@@ -177,6 +217,46 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     } catch (err) {
       console.error('[Viewer Profiles] Could not save profile:', err.message || err);
       return res.status(400).json({ success: false, error: err.message || 'Could not save viewer profile.' });
+    }
+  });
+
+  app.post('/viewer-profiles/fact-approve', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await approveViewerFact(channelName, req.body?.profileId, req.body?.factId);
+      return res.json({ success: true, profile });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not approve viewer observation.' });
+    }
+  });
+
+  app.post('/viewer-profiles/fact-reject', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await rejectViewerFact(channelName, req.body?.profileId, req.body?.factId);
+      return res.json({ success: true, profile });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not reject viewer observation.' });
+    }
+  });
+
+  app.post('/viewer-profiles/fact-revision-accept', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await acceptViewerFactRevision(channelName, req.body?.profileId, req.body?.factId);
+      return res.json({ success: true, profile });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not accept the viewer observation revision.' });
+    }
+  });
+
+  app.post('/viewer-profiles/fact-revision-dismiss', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const profile = await dismissViewerFactRevision(channelName, req.body?.profileId, req.body?.factId);
+      return res.json({ success: true, profile });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not dismiss the viewer observation revision.' });
     }
   });
 

@@ -11,7 +11,7 @@ const {
 const { getStreamLore, applyStreamLoreObservations } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
 const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
-const { getViewerProfileSettings, applyViewerProfileUpdates } = require('./viewerProfiles');
+const { getViewerProfileSettings, getViewerLearningContext, applyViewerProfileUpdates } = require('./viewerProfiles');
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
 const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
@@ -690,6 +690,7 @@ function createRecapManager({
       let recapSummaryBody;
       let previousRecaps = [];
       let streamLore = '';
+      let streamLoreRecord = null;
 
       if (currentStreamId) {
         try {
@@ -701,8 +702,8 @@ function createRecapManager({
       }
 
       try {
-        const loreRecord = await getStreamLore(channelName);
-        streamLore = String(loreRecord?.effectiveText || loreRecord?.text || '');
+        streamLoreRecord = await getStreamLore(channelName);
+        streamLore = String(streamLoreRecord?.effectiveText || streamLoreRecord?.text || '');
         if (streamLore) console.log(`[Recap] Loaded ${streamLore.length} characters of stream-specific lore from MongoDB.`);
       } catch (loreErr) {
         console.error('[Recap] Could not load stream-specific lore. Continuing without it:', loreErr.message || loreErr);
@@ -804,16 +805,17 @@ function createRecapManager({
 
           if (viewerProfileSettings.automaticLearningEnabled) {
             try {
-              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: memoryChatLogs });
+              const existingProfiles = await getViewerLearningContext(channelName, memoryChatLogs);
+              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: memoryChatLogs, existingProfiles });
               if (viewerUpdates.length) {
                 const profileResult = await applyViewerProfileUpdates({
                   channelName,
                   chatLogs: memoryChatLogs,
                   updates: viewerUpdates
                 });
-                console.log(`[Viewer Profiles] Dedicated hourly learning processed ${viewerUpdates.length} candidate viewer update(s); applied ${profileResult.applied}, skipped ${profileResult.skipped}.`);
+                console.log(`[Viewer Profiles] Dedicated hourly learning processed ${viewerUpdates.length} viewer update(s): ${profileResult.created} new pending, ${profileResult.reinforced} reinforced, ${profileResult.refined} pending auto-refined, ${profileResult.revisionsProposed} approved revision proposal(s), ${profileResult.contradictions} contradiction update(s), ${profileResult.skipped} skipped.`);
               } else {
-                console.log('[Viewer Profiles] Dedicated hourly learning found no durable viewer observations.');
+                console.log('[Viewer Profiles] Dedicated hourly learning found no durable viewer observations or updates.');
               }
             } catch (viewerErr) {
               console.error('[Viewer Profiles] Dedicated hourly learning failed. Session memory and public recap remain successful:', viewerErr?.message || viewerErr);
@@ -821,12 +823,15 @@ function createRecapManager({
           }
 
           try {
-            const loreObservations = await generateStreamLoreObservations({ chatLogs: memoryChatLogs });
+            const loreObservations = await generateStreamLoreObservations({
+              chatLogs: memoryChatLogs,
+              existingObservations: streamLoreRecord?.learnedObservations || []
+            });
             if (loreObservations.length) {
               const loreResult = await applyStreamLoreObservations(channelName, loreObservations);
-              console.log(`[Stream Lore] Dedicated hourly learning processed ${loreObservations.length} candidate lore observation(s); applied ${loreResult.applied}, skipped ${loreResult.skipped}. All new observations remain pending until approved.`);
+              console.log(`[Stream Lore] Dedicated hourly learning processed ${loreObservations.length} candidate(s): ${loreResult.created} new pending, ${loreResult.reinforced} reinforced, ${loreResult.refined} pending auto-refined, ${loreResult.revisionsProposed} approved revision proposal(s), ${loreResult.contradictions} contradiction update(s), ${loreResult.skipped} skipped.`);
             } else {
-              console.log('[Stream Lore] Dedicated hourly learning found no durable channel-lore candidates.');
+              console.log('[Stream Lore] Dedicated hourly learning found no durable channel-lore candidates or updates.');
             }
           } catch (loreErr) {
             console.error('[Stream Lore] Dedicated hourly learning failed. Session memory and public recap remain successful:', loreErr?.message || loreErr);

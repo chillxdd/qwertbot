@@ -1,6 +1,20 @@
 const ViewerProfile = require('../models/ViewerProfile');
 const ViewerProfileSettings = require('../models/ViewerProfileSettings');
 const { containsPromptInjectionLanguage } = require('./promptSecurity');
+const {
+  normalizeConfidence,
+  normalizeLearningRelation,
+  textsEquivalent,
+  textsRelated,
+  buildEvidenceSummary,
+  addSupportingEvidence,
+  addContradictingEvidence,
+  mergeRevisionProposal,
+  applyPendingRevision,
+  acceptRevision,
+  dismissRevision,
+  serializeRevisionProposal
+} = require('./learningRevision');
 
 const MAX_ALIASES = 12;
 const MAX_PINNED_NOTES = 4000;
@@ -42,12 +56,20 @@ function normalizeAliases(value) {
   return out;
 }
 
-function normalizeConfidence(value) {
-  return ['low', 'medium', 'high'].includes(value) ? value : 'medium';
-}
-
 function normalizeFactText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, MAX_FACT_LENGTH);
+}
+
+function inferFactApprovalStatus(fact) {
+  if (fact?.approvalStatus === 'approved' || fact?.approvalStatus === 'pending') return fact.approvalStatus;
+  // Existing AI facts were already active before approvalStatus existed; preserve them as approved.
+  // Deterministic observations are code-derived and remain automatically approved.
+  return 'approved';
+}
+
+function refreshFactEvidenceSummary(fact) {
+  if (!fact || fact.source === 'deterministic') return;
+  fact.evidenceSummary = buildEvidenceSummary(fact);
 }
 
 function serializeProfile(doc) {
@@ -81,12 +103,19 @@ function serializeProfile(doc) {
       text: String(fact.text || ''),
       confidence: normalizeConfidence(fact.confidence),
       evidenceCount: Math.max(1, Number(fact.evidenceCount || 1)),
+      supportingWindowCount: Math.max(1, Number(fact.supportingWindowCount || 1)),
+      contradictionCount: Math.max(0, Number(fact.contradictionCount || 0)),
+      revisionCount: Math.max(0, Number(fact.revisionCount || 0)),
       kind: ['fact', 'preference', 'habit', 'behavior'].includes(fact.kind) ? fact.kind : 'fact',
       source: fact.source === 'deterministic' ? 'deterministic' : 'ai',
-      evidenceSummary: String(fact.evidenceSummary || ''),
+      approvalStatus: inferFactApprovalStatus(fact),
+      evidenceSummary: String(fact.evidenceSummary || buildEvidenceSummary(fact)),
       firstObservedAt: fact.firstObservedAt || null,
       lastObservedAt: fact.lastObservedAt || null,
-      enabled: fact.enabled !== false
+      lastRefinedAt: fact.lastRefinedAt || null,
+      lastContradictedAt: fact.lastContradictedAt || null,
+      revisionProposal: serializeRevisionProposal(fact.revisionProposal, { includeKind: true }),
+      enabled: inferFactApprovalStatus(fact) === 'approved' && fact.enabled !== false
     })),
     firstSeenAt: value.firstSeenAt || null,
     lastSeenAt: value.lastSeenAt || null,
@@ -255,6 +284,7 @@ function upsertFakeCommandBehaviorFact(profile, now = new Date()) {
   if (fact) {
     fact.kind = 'behavior';
     fact.source = 'deterministic';
+    fact.approvalStatus = 'approved';
     fact.confidence = confidence;
     fact.evidenceCount = Math.max(Math.max(1, Number(fact.evidenceCount || 1)), stats.total);
     fact.evidenceSummary = evidenceSummary;
@@ -266,6 +296,7 @@ function upsertFakeCommandBehaviorFact(profile, now = new Date()) {
     text: FAKE_COMMAND_BEHAVIOR_FACT,
     kind: 'behavior',
     source: 'deterministic',
+    approvalStatus: 'approved',
     confidence,
     evidenceCount: stats.total,
     evidenceSummary,
@@ -348,6 +379,64 @@ async function recordViewerCommandUsage(channelName, { username, displayName, tw
   return { recorded: true, recognized: Boolean(recognized) };
 }
 
+async function approveViewerFact(channelName, profileId, factId) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
+  if (!doc) throw new Error('Viewer profile not found.');
+  if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
+  const fact = doc.facts.id(factId);
+  if (!fact) throw new Error('Viewer fact not found.');
+  fact.approvalStatus = 'approved';
+  fact.enabled = true;
+  await doc.save();
+  return serializeProfile(doc);
+}
+
+async function rejectViewerFact(channelName, profileId, factId) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
+  if (!doc) throw new Error('Viewer profile not found.');
+  if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
+  const fact = doc.facts.id(factId);
+  if (!fact) throw new Error('Viewer fact not found.');
+  if (inferFactApprovalStatus(fact) !== 'pending') throw new Error('Only pending observations can be rejected.');
+  fact.deleteOne();
+  await doc.save();
+  return serializeProfile(doc);
+}
+
+async function acceptViewerFactRevision(channelName, profileId, factId) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
+  if (!doc) throw new Error('Viewer profile not found.');
+  if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
+  const fact = doc.facts.id(factId);
+  if (!fact) throw new Error('Viewer fact not found.');
+  if (inferFactApprovalStatus(fact) !== 'approved') throw new Error('Only approved observations can accept revisions.');
+  if (fact.source === 'deterministic') throw new Error('Deterministic observations cannot be revised by AI.');
+  const proposalText = normalizeFactText(fact.revisionProposal?.text);
+  if (!proposalText) throw new Error('No AI revision is waiting for review.');
+  if (containsPromptInjectionLanguage(proposalText)) throw new Error('The proposed revision failed the safety check.');
+  acceptRevision(fact, { now: new Date(), includeKind: true });
+  refreshFactEvidenceSummary(fact);
+  await doc.save();
+  return serializeProfile(doc);
+}
+
+async function dismissViewerFactRevision(channelName, profileId, factId) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
+  if (!doc) throw new Error('Viewer profile not found.');
+  if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
+  const fact = doc.facts.id(factId);
+  if (!fact) throw new Error('Viewer fact not found.');
+  if (inferFactApprovalStatus(fact) !== 'approved') throw new Error('Only approved observations can dismiss revisions.');
+  dismissRevision(fact);
+  refreshFactEvidenceSummary(fact);
+  await doc.save();
+  return serializeProfile(doc);
+}
+
 async function setFactEnabled(channelName, profileId, factId, enabled) {
   const channel = normalizeChannelName(channelName);
   const doc = await ViewerProfile.findOne({ channelName: channel, _id: profileId });
@@ -355,6 +444,8 @@ async function setFactEnabled(channelName, profileId, factId, enabled) {
   if (doc.optedOut === true) throw new Error('This viewer opted out. Their retained profile cannot be edited until they use !optin.');
   const fact = doc.facts.id(factId);
   if (!fact) throw new Error('Viewer fact not found.');
+  if (inferFactApprovalStatus(fact) !== 'approved') throw new Error('Approve this observation before toggling its use.');
+  fact.approvalStatus = 'approved';
   fact.enabled = Boolean(enabled);
   await doc.save();
   return serializeProfile(doc);
@@ -398,31 +489,91 @@ function buildParticipantCounts(chatLogs = []) {
   return { counts, displayNames };
 }
 
-function findSimilarFact(facts, text) {
-  const normalized = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  if (!normalized) return null;
-  return facts.find((fact) => {
-    const candidate = String(fact.text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    return candidate === normalized || candidate.includes(normalized) || normalized.includes(candidate);
+function findSimilarFact(facts, text, kind = '') {
+  const candidates = Array.isArray(facts) ? facts : [];
+  return candidates.find((fact) => {
+    if (!fact || fact.source === 'deterministic') return false;
+    if (kind && fact.kind && fact.kind !== kind) return false;
+    return textsRelated(fact.text, text, 0.58);
   }) || null;
+}
+
+async function getViewerLearningContext(channelName, chatLogs = []) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) return {};
+  const { counts } = buildParticipantCounts(chatLogs);
+  const usernames = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 40)
+    .map(([username]) => username);
+  if (!usernames.length) return {};
+
+  const docs = await ViewerProfile.find({
+    channelName: channel,
+    username: { $in: usernames },
+    optedOut: { $ne: true },
+    learningEnabled: { $ne: false }
+  }).lean();
+
+  const context = {};
+  for (const doc of docs) {
+    const facts = (Array.isArray(doc?.facts) ? doc.facts : [])
+      .filter((fact) => fact?.source !== 'deterministic' && String(fact?.text || '').trim())
+      .sort((a, b) => new Date(b.lastObservedAt || b.firstObservedAt || 0).getTime() - new Date(a.lastObservedAt || a.firstObservedAt || 0).getTime())
+      .slice(0, 12)
+      .map((fact) => ({
+        id: String(fact._id || ''),
+        text: normalizeFactText(fact.text),
+        kind: ['fact', 'preference', 'habit', 'behavior'].includes(fact.kind) ? fact.kind : 'fact',
+        confidence: normalizeConfidence(fact.confidence),
+        evidenceCount: Math.max(1, Number(fact.evidenceCount || 1)),
+        supportingWindowCount: Math.max(1, Number(fact.supportingWindowCount || 1)),
+        contradictionCount: Math.max(0, Number(fact.contradictionCount || 0)),
+        approvalStatus: inferFactApprovalStatus(fact),
+        enabled: inferFactApprovalStatus(fact) === 'approved' && fact.enabled !== false,
+        revisionProposal: serializeRevisionProposal(fact.revisionProposal, { includeKind: true }),
+        lastObservedAt: fact.lastObservedAt || fact.firstObservedAt || null
+      }));
+    context[String(doc.username || '').toLowerCase()] = {
+      username: String(doc.username || '').toLowerCase(),
+      displayName: String(doc.displayName || doc.username || ''),
+      facts
+    };
+  }
+  return context;
+}
+
+function resolveViewerFactMatch(profile, observation, text, kind) {
+  const targetId = String(observation?.existingObservationId || observation?.targetId || '').trim();
+  let match = null;
+  if (targetId && profile?.facts?.id) {
+    try { match = profile.facts.id(targetId); } catch (_) { match = null; }
+  }
+  if (match?.source === 'deterministic') match = null;
+  if (!match && text) match = findSimilarFact(profile?.facts, text, kind);
+  return match;
+}
+
+function normalizeRevisionReason(value) {
+  const reason = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return containsPromptInjectionLanguage(reason) ? '' : reason;
 }
 
 async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates = [] }) {
   const settings = await getViewerProfileSettings(channelName);
-  if (!settings.automaticLearningEnabled) return { applied: 0, skipped: 0 };
+  if (!settings.automaticLearningEnabled) return { applied: 0, skipped: 0, created: 0, reinforced: 0, refined: 0, revisionsProposed: 0, contradictions: 0 };
   const channel = normalizeChannelName(channelName);
   await purgeExpiredOptedOutProfiles(channel);
   const excludedUsers = new Set([channel, 'sqwertarmybot', 'nightbot', 'streamelements', 'pokemoncommunitygame']);
   const { counts, displayNames } = buildParticipantCounts(chatLogs);
-  let applied = 0;
-  let skipped = 0;
+  const stats = { applied: 0, skipped: 0, created: 0, reinforced: 0, refined: 0, revisionsProposed: 0, contradictions: 0 };
+  const relationPriority = { new: 0, support: 1, refine: 2, contradict: 3 };
 
   for (const rawUpdate of Array.isArray(updates) ? updates : []) {
     const username = normalizeUsername(rawUpdate?.username);
-    if (!username || excludedUsers.has(username) || !counts.has(username)) { skipped++; continue; }
+    if (!username || excludedUsers.has(username) || !counts.has(username)) { stats.skipped++; continue; }
     const existing = await ViewerProfile.findOne({ channelName: channel, username });
-    if (!existing && (counts.get(username) || 0) < 2) { skipped++; continue; }
-    if (existing?.optedOut === true || existing?.learningEnabled === false) { skipped++; continue; }
+    if (existing?.optedOut === true || existing?.learningEnabled === false) { stats.skipped++; continue; }
 
     const profile = existing || new ViewerProfile({
       channelName: channel,
@@ -430,34 +581,139 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
       displayName: normalizeDisplayName(rawUpdate?.displayName) || displayNames.get(username) || username,
       firstSeenAt: new Date()
     });
-    profile.displayName = normalizeDisplayName(rawUpdate?.displayName) || profile.displayName || displayNames.get(username) || username;
-    profile.lastSeenAt = new Date();
+    const supportTouchedThisWindow = new Set();
+    const proposalTouchedThisWindow = new Set();
+    const contradictionTouchedThisWindow = new Set();
+    let profileChanged = false;
+    const observations = (Array.isArray(rawUpdate?.observations) ? [...rawUpdate.observations] : [])
+      .sort((a, b) => (relationPriority[normalizeLearningRelation(a?.relation || a?.relationship)] ?? 0) - (relationPriority[normalizeLearningRelation(b?.relation || b?.relationship)] ?? 0));
 
-    for (const observation of Array.isArray(rawUpdate?.observations) ? rawUpdate.observations : []) {
-      const text = normalizeFactText(observation?.fact || observation?.text);
-      if (!text || containsPromptInjectionLanguage(text)) continue;
-      const match = findSimilarFact(profile.facts, text);
-      const supportCount = Math.max(1, Math.min(4, Number(observation?.supportCount || 1)));
+    for (const observation of observations) {
+      let relation = normalizeLearningRelation(observation?.relation || observation?.relationship);
+      const text = normalizeFactText(observation?.fact || observation?.text || observation?.proposedText);
+      const supportCount = Math.max(1, Math.min(6, Number(observation?.supportCount || 1)));
       const kind = ['fact', 'preference', 'habit', 'behavior'].includes(observation?.kind) ? observation.kind : 'fact';
+      const confidence = normalizeConfidence(observation?.confidence);
+      const reason = normalizeRevisionReason(observation?.reason);
+      if (text && containsPromptInjectionLanguage(text)) { stats.skipped++; continue; }
+
+      const match = resolveViewerFactMatch(profile, observation, text, kind);
+      const now = new Date();
       if (match) {
-        match.evidenceCount = Math.max(1, Number(match.evidenceCount || 1)) + supportCount;
-        match.lastObservedAt = new Date();
-        const incoming = normalizeConfidence(observation?.confidence);
-        if (incoming === 'high' || (incoming === 'medium' && match.confidence === 'low')) match.confidence = incoming;
-        if (match.source !== 'deterministic') {
-          match.kind = kind;
-          match.source = 'ai';
-          match.evidenceSummary = `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} in the latest learning window.`;
+        if (match.source === 'deterministic') { stats.skipped++; continue; }
+        match.source = 'ai';
+        if (!['approved', 'pending'].includes(match.approvalStatus)) match.approvalStatus = 'approved';
+        match.kind = ['fact', 'preference', 'habit', 'behavior'].includes(match.kind) ? match.kind : kind;
+        const status = inferFactApprovalStatus(match);
+        const matchKey = String(match._id || match.id || match.text);
+
+        if (relation === 'new') relation = text && !textsEquivalent(match.text, text) ? 'refine' : 'support';
+        if (relation === 'support' || !text || textsEquivalent(match.text, text)) {
+          const incrementWindow = !supportTouchedThisWindow.has(matchKey);
+          supportTouchedThisWindow.add(matchKey);
+          addSupportingEvidence(match, { supportCount, confidence, kind: match.kind }, { now, incrementWindow });
+          refreshFactEvidenceSummary(match);
+          stats.reinforced++;
+          profileChanged = true;
+          continue;
         }
-      } else if (profile.facts.length < MAX_FACTS) {
-        profile.facts.push({ text, kind, source: 'ai', confidence: normalizeConfidence(observation?.confidence), evidenceCount: supportCount, evidenceSummary: `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} in the learning window.`, firstObservedAt: new Date(), lastObservedAt: new Date(), enabled: true });
+
+        if (relation === 'contradict' && (match.kind === 'habit' || match.kind === 'behavior') && supportCount < 2) {
+          // A recurring behavior should not be overturned by a single ambiguous message.
+          stats.skipped++;
+          continue;
+        }
+
+        if (status === 'pending') {
+          const incrementWindow = !supportTouchedThisWindow.has(matchKey);
+          supportTouchedThisWindow.add(matchKey);
+          const result = applyPendingRevision(match, {
+            relation,
+            text,
+            kind,
+            confidence,
+            supportCount,
+            reason
+          }, { now, includeKind: true, incrementWindow });
+          refreshFactEvidenceSummary(match);
+          if (result === 'reinforced') stats.reinforced++;
+          else stats.refined++;
+          if (relation === 'contradict') stats.contradictions++;
+          profileChanged = true;
+          continue;
+        }
+
+        if (relation === 'contradict') {
+          const demote = !contradictionTouchedThisWindow.has(matchKey);
+          contradictionTouchedThisWindow.add(matchKey);
+          const incrementProposalWindow = !proposalTouchedThisWindow.has(matchKey);
+          proposalTouchedThisWindow.add(matchKey);
+          addContradictingEvidence(match, { supportCount, confidence, kind }, { now, demote });
+          const proposed = mergeRevisionProposal(match, {
+            relation,
+            text,
+            kind,
+            confidence,
+            supportCount,
+            reason
+          }, { now, includeKind: true, incrementWindow: incrementProposalWindow });
+          refreshFactEvidenceSummary(match);
+          stats.contradictions++;
+          if (proposed) stats.revisionsProposed++;
+          profileChanged = true;
+          continue;
+        }
+
+        const incrementSupportWindow = !supportTouchedThisWindow.has(matchKey);
+        supportTouchedThisWindow.add(matchKey);
+        const incrementProposalWindow = !proposalTouchedThisWindow.has(matchKey);
+        proposalTouchedThisWindow.add(matchKey);
+        addSupportingEvidence(match, { supportCount, confidence, kind }, { now, incrementWindow: incrementSupportWindow });
+        const proposed = mergeRevisionProposal(match, {
+          relation: 'refine',
+          text,
+          kind,
+          confidence,
+          supportCount,
+          reason
+        }, { now, includeKind: true, incrementWindow: incrementProposalWindow });
+        refreshFactEvidenceSummary(match);
+        if (proposed) stats.revisionsProposed++;
+        else stats.reinforced++;
+        profileChanged = true;
+      } else if (relation === 'new' && text && profile.facts.length < MAX_FACTS) {
+        profile.facts.push({
+          text,
+          kind,
+          source: 'ai',
+          approvalStatus: 'pending',
+          confidence,
+          evidenceCount: supportCount,
+          supportingWindowCount: 1,
+          contradictionCount: 0,
+          revisionCount: 0,
+          evidenceSummary: `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} across 1 learning window.`,
+          firstObservedAt: now,
+          lastObservedAt: now,
+          enabled: false
+        });
+        const created = profile.facts[profile.facts.length - 1];
+        supportTouchedThisWindow.add(String(created?._id || created?.id || created?.text || text));
+        stats.created++;
+        profileChanged = true;
+      } else {
+        stats.skipped++;
       }
     }
 
+    // Do not persist empty profiles merely because the AI returned an unusable candidate.
+    if (!profileChanged) continue;
+    profile.displayName = normalizeDisplayName(rawUpdate?.displayName) || profile.displayName || displayNames.get(username) || username;
+    profile.lastSeenAt = new Date();
     await profile.save();
-    applied++;
+    stats.applied++;
   }
-  return { applied, skipped };
+  return stats;
 }
 
 function escapeRegExp(value) {
@@ -486,7 +742,7 @@ function formatViewerProfilesForPrompt(profiles = []) {
   const active = Array.isArray(profiles) ? profiles : [];
   if (!active.length) return '';
   return active.map((profile) => {
-    const facts = (profile.facts || []).filter((fact) => fact.enabled !== false).slice(0, 20);
+    const facts = (profile.facts || []).filter((fact) => inferFactApprovalStatus(fact) === 'approved' && fact.enabled !== false).slice(0, 20);
     const commandUsage = (profile.commandUsage || []).map((entry) => {
       const total = Math.max(1, Number(entry.count || 1));
       const unrecognizedCount = Math.max(0, Number(entry.unrecognizedCount || 0));
@@ -528,12 +784,17 @@ module.exports = {
   listViewerProfiles,
   getViewerProfile,
   saveViewerProfile,
+  approveViewerFact,
+  rejectViewerFact,
+  acceptViewerFactRevision,
+  dismissViewerFactRevision,
   setFactEnabled,
   deleteViewerFact,
   deleteViewerProfile,
   setViewerProfileOptOut,
   recordViewerCommandUsage,
   purgeExpiredOptedOutProfiles,
+  getViewerLearningContext,
   applyViewerProfileUpdates,
   getRelevantViewerProfiles,
   formatViewerProfilesForPrompt

@@ -3,6 +3,10 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   const personalityNameMaxLength = Number(maxBotPersonalityNameLength) || 80;
   const personalityMaxLength = Number(maxBotPersonalityLength) || 12000;
   const sessionMemoryPromptMaxLength = 6000;
+  let learnedLoreObservations = [];
+  let approvedLorePage = 1;
+  const APPROVED_LORE_PAGE_SIZES = new Set([10, 25, 50]);
+  const APPROVED_LORE_SORTS = new Set(['recent_desc', 'text_asc', 'text_desc', 'evidence_desc', 'confidence_desc', 'revision_desc']);
   $('streamLore').maxLength = maxLength;
   $('botPersonalityName').maxLength = personalityNameMaxLength;
   $('botPersonality').maxLength = personalityMaxLength;
@@ -100,20 +104,116 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   }
 
 
-  function renderLearnedLore(observations = []) {
-    const list = Array.isArray(observations) ? observations : [];
-    $('streamLoreObservationCount').textContent = `${list.length} observation${list.length === 1 ? '' : 's'}`;
-    $('streamLoreObservations').innerHTML = list.length ? list.map((observation) => `
-      <div class="viewer-profile-fact ${observation.enabled === true ? '' : 'disabled'}" data-observation-id="${String(observation.id || '').replace(/[&<>"']/g, '')}">
+  function escLore(value) {
+    return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function loreApprovalStatus(observation) {
+    if (observation?.approvalStatus === 'approved' || observation?.approvalStatus === 'pending') return observation.approvalStatus;
+    return observation?.enabled === true ? 'approved' : 'pending';
+  }
+
+  function approvedLorePageSize() {
+    const value = Number($('streamLoreApprovedPageSize')?.value || 10);
+    return APPROVED_LORE_PAGE_SIZES.has(value) ? value : 10;
+  }
+
+  function approvedLoreSort() {
+    const value = $('streamLoreApprovedSort')?.value || 'recent_desc';
+    return APPROVED_LORE_SORTS.has(value) ? value : 'recent_desc';
+  }
+
+  function filteredApprovedLore() {
+    const query = String($('streamLoreApprovedSearch')?.value || '').trim().toLowerCase();
+    const list = learnedLoreObservations.filter((item) => {
+      if (loreApprovalStatus(item) !== 'approved') return false;
+      const haystack = `${String(item.text || '')} ${String(item.revisionProposal?.text || '')}`.toLowerCase();
+      return !query || haystack.includes(query);
+    });
+    const sort = approvedLoreSort();
+    const confidenceRank = { high: 3, medium: 2, low: 1 };
+    list.sort((a, b) => {
+      if (sort === 'text_asc' || sort === 'text_desc') {
+        const cmp = String(a.text || '').localeCompare(String(b.text || ''), undefined, { sensitivity: 'base' });
+        return sort === 'text_desc' ? -cmp : cmp;
+      }
+      if (sort === 'evidence_desc') return Number(b.evidenceCount || 0) - Number(a.evidenceCount || 0);
+      if (sort === 'confidence_desc') return (confidenceRank[b.confidence] || 0) - (confidenceRank[a.confidence] || 0) || Number(b.evidenceCount || 0) - Number(a.evidenceCount || 0);
+      if (sort === 'revision_desc') return Number(Boolean(b.revisionProposal?.text)) - Number(Boolean(a.revisionProposal?.text)) || new Date(b.revisionProposal?.lastProposedAt || b.lastObservedAt || 0).getTime() - new Date(a.revisionProposal?.lastProposedAt || a.lastObservedAt || 0).getTime();
+      return new Date(b.lastObservedAt || b.firstObservedAt || 0).getTime() - new Date(a.lastObservedAt || a.firstObservedAt || 0).getTime();
+    });
+    return list;
+  }
+
+  function renderLearnedLore(observations = learnedLoreObservations) {
+    learnedLoreObservations = Array.isArray(observations) ? observations : [];
+    const approvedAll = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'approved');
+    const pending = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'pending');
+    const pendingRevisions = approvedAll.filter((item) => item.revisionProposal?.text).length;
+    $('streamLoreObservationCount').textContent = `${learnedLoreObservations.length} observation${learnedLoreObservations.length === 1 ? '' : 's'}`;
+    $('streamLoreApprovedCount').textContent = `${approvedAll.length} approved${pendingRevisions ? ` · ${pendingRevisions} revision${pendingRevisions === 1 ? '' : 's'} to review` : ''}`;
+    $('streamLorePendingCount').textContent = `${pending.length} pending`;
+
+    const approved = filteredApprovedLore();
+    const pageSize = approvedLorePageSize();
+    const pageCount = Math.max(1, Math.ceil(approved.length / pageSize));
+    approvedLorePage = Math.max(1, Math.min(approvedLorePage, pageCount));
+    const page = approved.slice((approvedLorePage - 1) * pageSize, approvedLorePage * pageSize);
+
+    $('streamLoreApprovedList').innerHTML = page.length ? page.map((observation) => {
+      const proposal = observation.revisionProposal?.text ? observation.revisionProposal : null;
+      const supportWindows = Math.max(1, Number(observation.supportingWindowCount || 1));
+      const contradictions = Math.max(0, Number(observation.contradictionCount || 0));
+      const revisions = Math.max(0, Number(observation.revisionCount || 0));
+      const proposalEvidence = Math.max(1, Number(proposal?.evidenceCount || 1));
+      const proposalWindows = Math.max(1, Number(proposal?.supportingWindowCount || 1));
+      const revisionPanel = proposal ? `
+        <div class="learned-revision-proposal ${proposal.relation === 'contradict' ? 'contradiction' : 'refinement'}">
+          <div class="learned-revision-title"><strong>${proposal.relation === 'contradict' ? 'Conflicting evidence suggests a revision' : 'Suggested wording refinement'}</strong></div>
+          <div class="learned-revision-text">${escLore(proposal.text)}</div>
+          <div class="detail">${escLore(proposal.confidence || 'medium')} confidence · ${proposalEvidence} new evidence message${proposalEvidence === 1 ? '' : 's'} across ${proposalWindows} learning window${proposalWindows === 1 ? '' : 's'}</div>
+          ${proposal.reason ? `<div class="detail learned-revision-reason">${escLore(proposal.reason)}</div>` : ''}
+          <div class="custom-command-actions learned-revision-actions">
+            <button class="success stream-lore-revision-accept" type="button">Accept Revision</button>
+            <button class="secondary stream-lore-revision-dismiss" type="button">Keep Current</button>
+          </div>
+        </div>` : '';
+      return `
+      <div class="viewer-profile-fact ${observation.enabled === true ? '' : 'disabled'}" data-observation-id="${escLore(observation.id)}">
         <label class="inline-check"><input class="stream-lore-observation-toggle" type="checkbox" ${observation.enabled === true ? 'checked' : ''}> Use</label>
         <div class="viewer-profile-fact-copy">
-          <div>${String(observation.text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')}</div>
-          <div class="detail">${String(observation.confidence || 'medium')} confidence · evidence ${Math.max(1, Number(observation.evidenceCount || 1))}x${observation.lastObservedAt ? ` · last ${new Date(observation.lastObservedAt).toLocaleDateString()}` : ''}</div>
+          <div>${escLore(observation.text)}</div>
+          <div class="detail">${escLore(observation.confidence || 'medium')} confidence · support ${Math.max(1, Number(observation.evidenceCount || 1))}x across ${supportWindows} window${supportWindows === 1 ? '' : 's'}${contradictions ? ` · conflicts ${contradictions}x` : ''}${revisions ? ` · revised ${revisions}x` : ''}${observation.lastObservedAt ? ` · last ${escLore(new Date(observation.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          ${observation.evidenceSummary ? `<div class="detail">${escLore(observation.evidenceSummary)}</div>` : ''}
+          ${revisionPanel}
         </div>
         <button class="danger stream-lore-observation-unlearn" type="button">Unlearn</button>
-      </div>`).join('') : '<div class="detail custom-empty-state">No AI-learned stream lore observations yet.</div>';
+      </div>`;
+    }).join('') : `<div class="detail custom-empty-state">${approvedAll.length ? 'No approved lore matches your search.' : 'No approved AI-learned lore yet.'}</div>`;
 
-    $('streamLoreObservations').querySelectorAll('.stream-lore-observation-toggle').forEach((toggle) => {
+    $('streamLoreApprovedPageLabel').textContent = `Page ${approvedLorePage} of ${pageCount}`;
+    $('streamLoreApprovedPrevPage').disabled = approvedLorePage <= 1;
+    $('streamLoreApprovedNextPage').disabled = approvedLorePage >= pageCount;
+    $('streamLoreApprovedPagination').hidden = approved.length === 0;
+
+    $('streamLorePendingList').innerHTML = pending.length ? pending.map((observation) => {
+      const windows = Math.max(1, Number(observation.supportingWindowCount || 1));
+      const refinements = Math.max(0, Number(observation.revisionCount || 0));
+      return `
+      <div class="viewer-profile-fact" data-observation-id="${escLore(observation.id)}">
+        <div class="viewer-profile-fact-copy">
+          <div>${escLore(observation.text)}</div>
+          <div class="detail">${escLore(observation.confidence || 'medium')} confidence · support ${Math.max(1, Number(observation.evidenceCount || 1))}x across ${windows} window${windows === 1 ? '' : 's'}${refinements ? ` · auto-refined ${refinements}x` : ''}${observation.lastObservedAt ? ` · last ${escLore(new Date(observation.lastObservedAt).toLocaleDateString())}` : ''}</div>
+          ${observation.evidenceSummary ? `<div class="detail">${escLore(observation.evidenceSummary)}</div>` : ''}
+        </div>
+        <div class="custom-command-actions">
+          <button class="success stream-lore-observation-approve" type="button">Approve</button>
+          <button class="danger stream-lore-observation-reject" type="button">Reject</button>
+        </div>
+      </div>`;
+    }).join('') : '<div class="detail custom-empty-state">No pending AI-learned lore.</div>';
+
+    $('streamLoreApprovedList').querySelectorAll('.stream-lore-observation-toggle').forEach((toggle) => {
       toggle.onchange = async () => {
         const row = toggle.closest('.viewer-profile-fact');
         toggle.disabled = true;
@@ -124,15 +224,15 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
           $('streamLoreObservationsMsg').textContent = d.error || 'Could not update learned lore.';
           return;
         }
-        $('streamLoreObservationsMsg').textContent = toggle.checked ? 'Observation approved.' : 'Observation kept but not used.';
+        $('streamLoreObservationsMsg').textContent = toggle.checked ? 'Approved lore enabled for AI context.' : 'Approved lore kept but disabled for AI context.';
         renderLearnedLore(d.learnedObservations || []);
       };
     });
 
-    $('streamLoreObservations').querySelectorAll('.stream-lore-observation-unlearn').forEach((button) => {
+    $('streamLoreApprovedList').querySelectorAll('.stream-lore-observation-unlearn').forEach((button) => {
       button.onclick = async () => {
         const row = button.closest('.viewer-profile-fact');
-        if (!window.confirm('Unlearn this stream lore observation? This permanently deletes it.')) return;
+        if (!window.confirm('Unlearn this approved stream lore observation? This permanently deletes it.')) return;
         button.disabled = true;
         const d = await postJson('/stream-lore/observation-unlearn', { observationId: row.dataset.observationId });
         if (!d.success) {
@@ -140,7 +240,67 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
           $('streamLoreObservationsMsg').textContent = d.error || 'Could not unlearn stream lore.';
           return;
         }
-        $('streamLoreObservationsMsg').textContent = 'Observation unlearned.';
+        $('streamLoreObservationsMsg').textContent = 'Approved lore permanently unlearned.';
+        renderLearnedLore(d.learnedObservations || []);
+      };
+    });
+
+    $('streamLoreApprovedList').querySelectorAll('.stream-lore-revision-accept').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.viewer-profile-fact');
+        button.disabled = true;
+        const d = await postJson('/stream-lore/observation-revision-accept', { observationId: row.dataset.observationId });
+        if (!d.success) {
+          button.disabled = false;
+          $('streamLoreObservationsMsg').textContent = d.error || 'Could not accept the lore revision.';
+          return;
+        }
+        $('streamLoreObservationsMsg').textContent = 'AI revision accepted. The approved lore wording has been updated.';
+        renderLearnedLore(d.learnedObservations || []);
+      };
+    });
+
+    $('streamLoreApprovedList').querySelectorAll('.stream-lore-revision-dismiss').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.viewer-profile-fact');
+        button.disabled = true;
+        const d = await postJson('/stream-lore/observation-revision-dismiss', { observationId: row.dataset.observationId });
+        if (!d.success) {
+          button.disabled = false;
+          $('streamLoreObservationsMsg').textContent = d.error || 'Could not keep the current lore wording.';
+          return;
+        }
+        $('streamLoreObservationsMsg').textContent = 'Current wording kept. Recorded conflicts and any confidence adjustment remain; future evidence may suggest another revision.';
+        renderLearnedLore(d.learnedObservations || []);
+      };
+    });
+
+    $('streamLorePendingList').querySelectorAll('.stream-lore-observation-approve').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.viewer-profile-fact');
+        button.disabled = true;
+        const d = await postJson('/stream-lore/observation-approve', { observationId: row.dataset.observationId });
+        if (!d.success) {
+          button.disabled = false;
+          $('streamLoreObservationsMsg').textContent = d.error || 'Could not approve stream lore.';
+          return;
+        }
+        $('streamLoreObservationsMsg').textContent = 'Lore approved and enabled.';
+        renderLearnedLore(d.learnedObservations || []);
+      };
+    });
+
+    $('streamLorePendingList').querySelectorAll('.stream-lore-observation-reject').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.viewer-profile-fact');
+        button.disabled = true;
+        const d = await postJson('/stream-lore/observation-reject', { observationId: row.dataset.observationId });
+        if (!d.success) {
+          button.disabled = false;
+          $('streamLoreObservationsMsg').textContent = d.error || 'Could not reject stream lore.';
+          return;
+        }
+        $('streamLoreObservationsMsg').textContent = 'Pending lore rejected.';
         renderLearnedLore(d.learnedObservations || []);
       };
     });
@@ -306,6 +466,11 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     }
   }
 
+  $('streamLoreApprovedSearch').oninput = () => { approvedLorePage = 1; renderLearnedLore(); };
+  $('streamLoreApprovedSort').onchange = () => { approvedLorePage = 1; renderLearnedLore(); };
+  $('streamLoreApprovedPageSize').onchange = () => { approvedLorePage = 1; renderLearnedLore(); };
+  $('streamLoreApprovedPrevPage').onclick = () => { if (approvedLorePage > 1) { approvedLorePage--; renderLearnedLore(); } };
+  $('streamLoreApprovedNextPage').onclick = () => { approvedLorePage++; renderLearnedLore(); };
   $('streamLoreViewTab').onclick = () => selectMemoryView('lore');
   $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
   $('viewerProfilesViewTab').onclick = () => selectMemoryView('profiles');
