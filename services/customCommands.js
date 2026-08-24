@@ -406,7 +406,7 @@ function chooseResponseTemplate(command, responses, query) {
 
   const allIndexes = responses.map((_, index) => index);
   const lastIndex = Number(command?.lastResponseIndex);
-  const avoidRepeat = command?.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
+  const avoidRepeat = mode === 'equal' && command?.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
   const candidates = avoidRepeat ? allIndexes.filter((index) => index !== lastIndex) : allIndexes;
   const index = candidates[Math.floor(Math.random() * candidates.length)];
   return { template: responses[index], index, mode };

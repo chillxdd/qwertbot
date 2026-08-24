@@ -183,7 +183,7 @@ function chooseResponse(timer) {
 
   const allIndexes = responses.map((_, index) => index);
   const lastIndex = Number(timer.lastResponseIndex);
-  const avoidRepeat = timer.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
+  const avoidRepeat = mode === 'equal' && timer.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
   const candidates = avoidRepeat ? allIndexes.filter((index) => index !== lastIndex) : allIndexes;
   const index = candidates[Math.floor(Math.random() * candidates.length)];
   return { template: responses[index], index, mode };
