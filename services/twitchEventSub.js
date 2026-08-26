@@ -22,7 +22,10 @@ const OPTIONAL_EVENTSUB_SCOPES = [
   'channel:read:predictions',
   'channel:read:redemptions',
   'channel:read:goals',
-  'channel:read:ads'
+  'channel:read:ads',
+  'moderator:read:shoutouts',
+  'channel:read:vips',
+  'channel:read:charity'
 ];
 
 let lastEnsureAt = null;

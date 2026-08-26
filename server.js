@@ -66,7 +66,10 @@ const TWITCH_BROADCASTER_SCOPES = [
   'channel:read:predictions',
   'channel:read:redemptions',
   'channel:read:goals',
-  'channel:read:ads'
+  'channel:read:ads',
+  'moderator:read:shoutouts',
+  'channel:read:vips',
+  'channel:read:charity'
 ];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
