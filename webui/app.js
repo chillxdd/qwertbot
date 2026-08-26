@@ -97,7 +97,7 @@ async function status() {
     $('chatApiDetail').textContent = loggedIn
       ? (chatReady
         ? 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
-        : (!botReady || !broadcasterReady ? 'Complete both OAuth grants in OAuth Management' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.'))
+        : (!botReady || !broadcasterReady ? 'Complete both OAuth grants in OAuth Management' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render Diagnostics.'))
       : '';
 
     if (loggedIn) {

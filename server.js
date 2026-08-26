@@ -543,6 +543,7 @@ registerDashboardRoutes(app, {
   botScopes: TWITCH_OAUTH_SCOPES,
   broadcasterScopes: TWITCH_BROADCASTER_SCOPES,
   getRecapManager: () => recapManager,
+  getBotPersonalityManager: () => botPersonalityManager,
   getDatabaseConnected: () => databaseConnected,
   getBotConnected: () => botConnected,
   getUsingMongoOAuth: () => usingMongoOAuth,

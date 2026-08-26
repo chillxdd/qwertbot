@@ -632,3 +632,4 @@ button.success{background:#16834a}
 .viewer-pending-profile{margin-bottom:4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .viewer-profile-list-section{margin-top:22px}
 @media(max-width:600px){.lore-subsection-nav{grid-template-columns:1fr}.viewer-profile-pending-review-row{grid-template-columns:1fr}.viewer-profile-pending-review-row .custom-command-actions{justify-content:flex-start}}
+.runtime-diagnostics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0 20px}.runtime-diagnostics-grid .box{min-width:0}.runtime-diagnostics-grid .value{overflow-wrap:anywhere}.render-log-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-top:18px;padding-top:16px;border-top:1px solid #2a2a30}.render-log-heading .recap-card-title{margin-bottom:4px}@media(max-width:600px){.runtime-diagnostics-grid{grid-template-columns:1fr}}

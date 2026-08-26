@@ -79,7 +79,7 @@ export function initOauthSection({ $, postJson }) {
     $('oauthChatApiStatusBox').className = `value ${chatReady ? 'good' : 'warn'}`;
     $('oauthChatApiDetail').textContent = chatReady
       ? 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
-      : (!botReady || !broadcasterReady ? 'Complete both OAuth grants above.' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render logs.');
+      : (!botReady || !broadcasterReady ? 'Complete both OAuth grants above.' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render Diagnostics.');
 
     $('oauthBtn').disabled = !d.oauth.configured || !d.database.connected;
     return { botReady, broadcasterReady };

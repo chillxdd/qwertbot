@@ -16,6 +16,8 @@ const {
 } = require('../services/chatTimers');
 const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
 const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('../services/renderLogs');
+const { getRuntimeDiagnostics } = require('../services/runtimeDiagnostics');
+const { getGeminiClientStatus } = require('../services/geminiClient');
 const { getAuthStatus } = require('../services/twitchAuth');
 const { getBroadcasterAuthStatus } = require('../services/twitchBroadcasterAuth');
 const { getChatApiReadiness } = require('../services/twitchChat');
@@ -34,6 +36,7 @@ function registerDashboardRoutes(app, options) {
     botScopes,
     broadcasterScopes,
     getRecapManager,
+    getBotPersonalityManager,
     getDatabaseConnected,
     getBotConnected,
     getUsingMongoOAuth,
@@ -180,14 +183,58 @@ function registerDashboardRoutes(app, options) {
   });
 
   app.post('/render-logs', requireModSession, async (req, res) => {
+    const recapManager = getRecapManager();
+    const recapStatus = recapManager?.getStatus?.() || {};
+    const taggedStatus = getBotPersonalityManager?.()?.getRecapCollisionStatus?.() || {};
+    const runtime = getRuntimeDiagnostics();
+    const gemini = getGeminiClientStatus();
+    const diagnostics = {
+      runtime,
+      gemini,
+      taggedQuestions: {
+        inFlight: Number(taggedStatus.taggedQuestionsInFlight || 0)
+      },
+      recap: {
+        inProgress: Boolean(recapStatus.recapInProgress),
+        paused: Boolean(recapStatus.recapPaused),
+        messagesInWindow: Number(recapStatus.messagesInWindow || 0),
+        twitchEventsInWindow: Number(recapStatus.twitchEventsInWindow || 0)
+      },
+      services: {
+        databaseConnected: Boolean(getDatabaseConnected()),
+        botConnected: Boolean(getBotConnected()),
+        streamLive: Boolean(recapStatus.streamLive),
+        streamStateKnown: Boolean(recapStatus.streamStateInitialized)
+      }
+    };
+
+    const config = getRenderLogsConfigStatus();
+    if (!config.configured) {
+      return res.json({
+        success: true,
+        configured: false,
+        serviceName: process.env.RENDER_SERVICE_NAME || 'Render service',
+        logs: [],
+        hasMore: false,
+        logsError: config.error,
+        diagnostics
+      });
+    }
+
     try {
-      const config = getRenderLogsConfigStatus();
-      if (!config.configured) return res.status(503).json({ success: false, configured: false, error: config.error });
       const result = await getRecentRenderLogs({ limit: 100 });
-      return res.json({ success: true, configured: true, serviceName: result.serviceName, logs: result.logs, hasMore: result.hasMore });
+      return res.json({ success: true, configured: true, serviceName: result.serviceName, logs: result.logs, hasMore: result.hasMore, diagnostics });
     } catch (err) {
-      console.error('[Render Logs] Could not load logs:', err.message || err);
-      return res.status(err.status || 500).json({ success: false, configured: true, error: err.message || 'Could not load Render logs.' });
+      console.error('[Render Diagnostics] Could not load Render logs:', err.message || err);
+      return res.json({
+        success: true,
+        configured: true,
+        serviceName: process.env.RENDER_SERVICE_NAME || 'Render service',
+        logs: [],
+        hasMore: false,
+        logsError: err.message || 'Could not load Render logs.',
+        diagnostics
+      });
     }
   });
 

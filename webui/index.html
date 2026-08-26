@@ -37,7 +37,7 @@
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
-      <button id="renderLogsTab" class="secondary" type="button">Render Logs</button>
+      <button id="renderLogsTab" class="secondary" type="button">Render Diagnostics</button>
     </div>
 
     <div id="messagingPanel" class="section-panel">
@@ -1068,13 +1068,33 @@
     </div>
 
     <div id="renderLogsPanel" class="section-panel">
-      <h3>Render Logs</h3>
+      <div class="section-intro">
+        <h3>Render Diagnostics</h3>
+        <div class="detail">Live process health and recent Render service logs. Runtime diagnostics come directly from the bot and do not require the Render API.</div>
+      </div>
+
+      <div class="runtime-diagnostics-grid" aria-label="Runtime diagnostics">
+        <div class="box"><div class="label">Process Memory</div><div id="diagMemory" class="value warn">Checking...</div><div id="diagMemoryDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Node Heap</div><div id="diagHeap" class="value warn">Checking...</div><div id="diagHeapDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Event Loop</div><div id="diagEventLoop" class="value warn">Checking...</div><div id="diagEventLoopDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Process Uptime</div><div id="diagUptime" class="value warn">Checking...</div><div id="diagUptimeDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Gemini Queue</div><div id="diagGemini" class="value warn">Checking...</div><div id="diagGeminiDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Tagged Questions</div><div id="diagTagged" class="value warn">Checking...</div><div id="diagTaggedDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Recap Engine</div><div id="diagRecap" class="value warn">Checking...</div><div id="diagRecapDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Core Services</div><div id="diagServices" class="value warn">Checking...</div><div id="diagServicesDetail" class="detail"></div></div>
+      </div>
+
+      <div class="render-log-heading">
+        <div>
+          <div class="recap-card-title">Recent Render Logs</div>
+          <div id="renderLogsMsg" class="detail">Open this section to load diagnostics and recent service logs.</div>
+        </div>
+      </div>
       <div class="render-log-toolbar">
-        <button id="refreshLogsBtn" type="button">Refresh Logs</button>
+        <button id="refreshLogsBtn" type="button">Refresh Diagnostics</button>
         <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh every 10s</label>
         <input id="logFilter" class="log-filter" placeholder="Filter loaded logs...">
       </div>
-      <div id="renderLogsMsg" class="detail">Open this section to load recent service logs.</div>
       <div id="renderLogConsole" class="render-log-console" aria-live="polite"></div>
     </div>
   </div>

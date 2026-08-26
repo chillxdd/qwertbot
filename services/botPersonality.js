@@ -974,11 +974,11 @@ Output only the answer.`;
   function getRecapCollisionStatus() {
     const bufferSeconds = Math.max(0, Number(config.recapCollisionBufferSeconds || 0));
     if (bufferSeconds <= 0) {
-      return { active: false, inFlight: false, remainingMs: 0, availableAt: 0, bufferSeconds, lastTaggedResponseAt: lastTaggedResponseAt || 0 };
+      return { active: false, inFlight: false, remainingMs: 0, availableAt: 0, bufferSeconds, lastTaggedResponseAt: lastTaggedResponseAt || 0, taggedQuestionsInFlight };
     }
 
     if (taggedQuestionsInFlight > 0) {
-      return { active: true, inFlight: true, remainingMs: 1000, availableAt: 0, bufferSeconds, lastTaggedResponseAt: lastTaggedResponseAt || 0 };
+      return { active: true, inFlight: true, remainingMs: 1000, availableAt: 0, bufferSeconds, lastTaggedResponseAt: lastTaggedResponseAt || 0, taggedQuestionsInFlight };
     }
 
     const availableAt = lastTaggedResponseAt ? lastTaggedResponseAt + (bufferSeconds * 1000) : 0;
@@ -989,7 +989,8 @@ Output only the answer.`;
       remainingMs,
       availableAt: remainingMs > 0 ? availableAt : 0,
       bufferSeconds,
-      lastTaggedResponseAt: lastTaggedResponseAt || 0
+      lastTaggedResponseAt: lastTaggedResponseAt || 0,
+      taggedQuestionsInFlight
     };
   }
 

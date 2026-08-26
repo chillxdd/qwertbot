@@ -37,7 +37,13 @@ function getGeminiClientStatus() {
     model: GEMINI_MODEL,
     requestSpacingMs: getGeminiRequestSpacingMs(),
     globalBackoffUntil: globalBackoffUntil || null,
-    queued: queues.high.length + queues.normal.length + queues.low.length
+    queued: queues.high.length + queues.normal.length + queues.low.length,
+    queueByPriority: {
+      high: queues.high.length,
+      normal: queues.normal.length,
+      low: queues.low.length
+    },
+    processing: Boolean(processing)
   };
 }
 
