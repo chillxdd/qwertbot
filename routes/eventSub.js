@@ -200,6 +200,14 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
       const text = formatEventSubForRecap(type, event);
       const recapManager = getRecapManager();
       const reactionManager = getEventSubReactionManager?.();
+      const messageTimestamp = Date.parse(req.get('Twitch-Eventsub-Message-Timestamp') || '');
+      const lifecycleTimestamp = Number.isNaN(messageTimestamp) ? Date.now() : messageTimestamp;
+
+      if ((type === 'stream.online' || type === 'stream.offline') && recapManager?.noteStreamLifecycleEvent) {
+        void recapManager.noteStreamLifecycleEvent({ type, event, timestamp: lifecycleTimestamp }).catch((lifecycleErr) => {
+          console.error('[Stream Lifecycle] EventSub lifecycle handling failed:', lifecycleErr?.message || lifecycleErr);
+        });
+      }
 
       if (text && recapManager && shouldRecordRecapEvent(type, event)) {
         recapManager.recordTwitchEvent({ type, text, timestamp: Date.now() });

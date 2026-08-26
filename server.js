@@ -251,7 +251,11 @@ botPersonalityManager = createBotPersonalityManager({
       statusKnown: Boolean(status.streamStateInitialized),
       streamLive: Boolean(status.streamLive),
       title: status.currentStreamTitle || '',
-      category: status.currentStreamCategory || ''
+      category: status.currentStreamCategory || '',
+      currentStreamStartedAt: status.twitchStreamStartedAt || null,
+      lastStreamEndedAt: status.lastStreamEndedAt || null,
+      lastStreamEndedAgoMs: status.lastStreamEndedAgoMs ?? null,
+      streamTimezone: status.streamTimezone || 'America/Los_Angeles'
     };
   },
   getSessionMemoryContext: (question) => recapManager?.getSessionMemoryContext?.(question) || { text: '' }

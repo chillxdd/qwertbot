@@ -12,6 +12,7 @@ const { getStreamLore, applyStreamLoreObservations } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
 const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, getViewerLearningContext, applyViewerProfileUpdates } = require('./viewerProfiles');
+const { getStreamLifecycleState, saveStreamLifecycleState } = require('./streamLifecycle');
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
 const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
@@ -80,6 +81,10 @@ function createRecapManager({
   let activeStateCheckpointTimer = null;
   let activeStateDirty = false;
   let activeStateSaveInProgress = false;
+  let lastStreamStartedAt = 0;
+  let lastStreamEndedAt = 0;
+  let lastStreamLifecycleEventType = '';
+  let lastStreamLifecycleEventAt = 0;
 
   async function nativeResponse(command, variant, variables, fallback) {
     if (typeof getNativeCommandResponse === 'function') {
@@ -92,6 +97,35 @@ function createRecapManager({
     }
     return fallback;
   }
+  async function loadStreamLifecycleMemory() {
+    try {
+      const saved = await getStreamLifecycleState(channelName);
+      if (!saved) return;
+      lastStreamStartedAt = saved.lastStreamStartedAt ? new Date(saved.lastStreamStartedAt).getTime() : 0;
+      lastStreamEndedAt = saved.lastStreamEndedAt ? new Date(saved.lastStreamEndedAt).getTime() : 0;
+      lastStreamLifecycleEventType = String(saved.lastLifecycleEventType || '');
+      lastStreamLifecycleEventAt = saved.lastLifecycleEventAt ? new Date(saved.lastLifecycleEventAt).getTime() : 0;
+      if (lastStreamEndedAt) {
+        console.log(`[Stream Lifecycle] Restored last stream end: ${new Date(lastStreamEndedAt).toISOString()}.`);
+      }
+    } catch (err) {
+      console.error('[Stream Lifecycle] Could not restore persisted stream lifecycle state:', err?.message || err);
+    }
+  }
+
+  async function persistStreamLifecycle(patch = {}) {
+    try {
+      await saveStreamLifecycleState(channelName, patch);
+    } catch (err) {
+      console.error('[Stream Lifecycle] Could not persist stream lifecycle state:', err?.message || err);
+    }
+  }
+
+  function recentOfflineLifecycleTimestamp(now = Date.now()) {
+    if (lastStreamLifecycleEventType !== 'offline' || !lastStreamLifecycleEventAt) return 0;
+    return now - lastStreamLifecycleEventAt <= 5 * 60 * 1000 ? lastStreamLifecycleEventAt : 0;
+  }
+
   let activeStateSavePromise = null;
   let lastRecapCommandUse = 0;
 
@@ -451,6 +485,16 @@ function createRecapManager({
       twitchStreamStartedAt = Date.now();
     }
 
+    lastStreamStartedAt = twitchStreamStartedAt;
+    lastStreamLifecycleEventType = 'online';
+    lastStreamLifecycleEventAt = Date.now();
+    await persistStreamLifecycle({
+      lastStreamStartedAt,
+      lastKnownStreamId: currentStreamId,
+      lastLifecycleEventType: 'online',
+      lastLifecycleEventAt: lastStreamLifecycleEventAt
+    });
+
     // Preserve existing recap cadence behavior: if the bot starts/restarts while
     // Qwert is already live, begin a fresh 60-minute recap window from bot startup.
     // twitchStreamStartedAt above remains the authoritative Twitch uptime source.
@@ -481,12 +525,22 @@ function createRecapManager({
     console.log(restored ? '[Recap Persistence] Existing recap cadence preserved across restart.' : '[Recap] First recap will send after 60 minutes.');
   }
 
-  async function endStreamSession() {
+  async function endStreamSession(endedAtMs = 0) {
+    const now = Date.now();
+    const resolvedEndedAt = Number(endedAtMs) || recentOfflineLifecycleTimestamp(now) || now;
+    lastStreamEndedAt = resolvedEndedAt;
+    lastStreamLifecycleEventType = 'offline';
+    lastStreamLifecycleEventAt = resolvedEndedAt;
     clearRecapTimer();
+    streamLive = false;
+    const lifecycleSavePromise = persistStreamLifecycle({
+      lastStreamEndedAt,
+      lastLifecycleEventType: 'offline',
+      lastLifecycleEventAt: resolvedEndedAt
+    });
     if (activeStateSavePromise) {
       try { await activeStateSavePromise; } catch {}
     }
-    streamLive = false;
     currentStreamId = '';
     currentStreamTitle = '';
     currentStreamCategory = '';
@@ -509,7 +563,46 @@ function createRecapManager({
     clearStreamRecapsByChannel(channelName)
       .then((result) => console.log(`[Recap] Cleared ${result?.deletedCount || 0} stored stream recap session(s) from MongoDB.`))
       .catch((err) => console.error('[Recap] Could not clear stored stream recap history after stream end:', err.message || err));
+    await lifecycleSavePromise;
     console.log('[Recap] Qwert is OFFLINE. Automatic recap session stopped and recap history cleared.');
+  }
+
+  async function noteStreamLifecycleEvent({ type, event = {}, timestamp = Date.now() } = {}) {
+    const normalizedType = String(type || '').trim();
+    const receivedAt = Number(timestamp) || Date.now();
+
+    if (normalizedType === 'stream.offline') {
+      lastStreamEndedAt = receivedAt;
+      lastStreamLifecycleEventType = 'offline';
+      lastStreamLifecycleEventAt = receivedAt;
+      console.log(`[Stream Lifecycle] EventSub recorded stream end at ${new Date(receivedAt).toISOString()}.`);
+      if (streamStateInitialized && streamLive) {
+        await endStreamSession(receivedAt);
+      } else {
+        await persistStreamLifecycle({
+          lastStreamEndedAt,
+          lastLifecycleEventType: 'offline',
+          lastLifecycleEventAt: receivedAt
+        });
+      }
+      return;
+    }
+
+    if (normalizedType === 'stream.online') {
+      const parsedStartedAt = Date.parse(event?.started_at || '');
+      const startedAt = Number.isNaN(parsedStartedAt) ? receivedAt : parsedStartedAt;
+      lastStreamStartedAt = startedAt;
+      lastStreamLifecycleEventType = 'online';
+      lastStreamLifecycleEventAt = receivedAt;
+      await persistStreamLifecycle({
+        lastStreamStartedAt,
+        lastKnownStreamId: String(event?.id || '').trim(),
+        lastLifecycleEventType: 'online',
+        lastLifecycleEventAt: receivedAt
+      });
+      console.log(`[Stream Lifecycle] EventSub recorded stream start at ${new Date(startedAt).toISOString()}.`);
+      if (streamStateInitialized && !streamLive) await checkStreamStatus();
+    }
   }
 
   async function checkStreamStatus() {
@@ -521,6 +614,14 @@ function createRecapManager({
         if (status.live) await startStreamSession(status, true);
         else {
           streamLive = false;
+          if (lastStreamStartedAt && (!lastStreamEndedAt || lastStreamStartedAt > lastStreamEndedAt)) {
+            // The bot restarted after a stream that began while we were online, but
+            // no trustworthy offline timestamp survived. Do not present an older
+            // stream's end time as though it were the most recent one.
+            lastStreamEndedAt = 0;
+            void persistStreamLifecycle({ lastStreamEndedAt: null });
+            console.warn('[Stream Lifecycle] Current status is offline, but the most recent stream start is newer than the stored end time. Exact last-stream end is unknown (likely missed during downtime).');
+          }
           clearStreamRecapsByChannel(channelName)
             .then((result) => {
               if (result?.deletedCount) console.log(`[Recap] Removed ${result.deletedCount} stale stored recap session(s) while Qwert is offline.`);
@@ -964,7 +1065,13 @@ function createRecapManager({
       pausedRemainingMs: recapPaused ? pausedRemainingMs : null,
       streamSessionStartedAt: streamSessionStartedAt || null,
       twitchStreamStartedAt: twitchStreamStartedAt || null,
-      streamUptimeMs: streamLive && twitchStreamStartedAt ? Math.max(0, Date.now() - twitchStreamStartedAt) : null
+      streamUptimeMs: streamLive && twitchStreamStartedAt ? Math.max(0, Date.now() - twitchStreamStartedAt) : null,
+      lastStreamStartedAt: lastStreamStartedAt || null,
+      lastStreamEndedAt: lastStreamEndedAt || null,
+      lastStreamEndedAgoMs: !streamLive && lastStreamEndedAt ? Math.max(0, Date.now() - lastStreamEndedAt) : null,
+      streamTimezone: 'America/Los_Angeles',
+      lastStreamLifecycleEventType: lastStreamLifecycleEventType || null,
+      lastStreamLifecycleEventAt: lastStreamLifecycleEventAt || null
     };
   }
 
@@ -1040,6 +1147,7 @@ function createRecapManager({
       return;
     }
 
+    await loadStreamLifecycleMemory();
     await checkStreamStatus();
 
     streamPollTimer = setInterval(checkStreamStatus, STREAM_STATUS_POLL_INTERVAL);
@@ -1074,6 +1182,7 @@ function createRecapManager({
     getSessionMemoryStatus,
     getSessionMemoryContext,
     clearCurrentSessionMemory,
+    noteStreamLifecycleEvent,
     getStatus
   };
 }
