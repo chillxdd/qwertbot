@@ -1,13 +1,13 @@
-export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityNameLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds, botUsername, viewerProfiles }) {
-  const maxLength = Number(maxLoreLength) || 12000;
+export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxBotPersonalityLength, maxBotPersonalityCooldownSeconds, botUsername, viewerProfiles }) {
   const personalityNameMaxLength = Number(maxBotPersonalityNameLength) || 80;
   const personalityMaxLength = Number(maxBotPersonalityLength) || 12000;
   const sessionMemoryPromptMaxLength = 6000;
   let learnedLoreObservations = [];
+  let manualLoreEntries = [];
+  let manualLoreLimits = { maxEntries: 100, maxTextLength: 2400, maxSubjectLength: 80, maxAliases: 12, maxAliasLength: 80 };
   let approvedLorePage = 1;
   const APPROVED_LORE_PAGE_SIZES = new Set([10, 25, 50]);
   const APPROVED_LORE_SORTS = new Set(['recent_desc', 'text_asc', 'text_desc', 'evidence_desc', 'confidence_desc', 'revision_desc']);
-  $('streamLore').maxLength = maxLength;
   $('botPersonalityName').maxLength = personalityNameMaxLength;
   $('botPersonality').maxLength = personalityMaxLength;
   $('sessionMemoryPromptInstructions').maxLength = sessionMemoryPromptMaxLength;
@@ -52,8 +52,8 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     $('streamLoreManualTab').setAttribute('aria-selected', manualSelected ? 'true' : 'false');
   }
 
-  function updateCount() {
-    $('loreCount').textContent = `${$('streamLore').value.length}/${maxLength} characters`;
+  function escManual(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
 
   function updatePersonalityCount() {
@@ -334,42 +334,105 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
     });
   }
 
+  function syncManualLoreEditorScope() {
+    const subjectMode = $('manualLoreScope').value === 'subject';
+    $('manualLoreAliasesPanel').hidden = !subjectMode;
+    $('manualLoreSubjectLabel').innerHTML = subjectMode ? 'Subject <span class="detail">(required)</span>' : 'Label <span class="detail">(optional)</span>';
+    $('manualLoreSubject').placeholder = subjectMode ? 'Example: Motmo_' : 'Example: Chat culture';
+    $('manualLoreSubjectHelp').textContent = subjectMode
+      ? 'The subject or any alias must be referenced before this card is loaded into a Tagged Question.'
+      : 'Global lore is always available as background context; this label is only for organization.';
+  }
+
+  function updateManualLoreTextCount() {
+    const max = Number(manualLoreLimits.maxTextLength || 2400);
+    $('manualLoreTextCount').textContent = `${$('manualLoreText').value.length}/${max} characters`;
+  }
+
+  function renderManualLore(entries = manualLoreEntries) {
+    manualLoreEntries = Array.isArray(entries) ? entries : [];
+    $('manualLoreCount').textContent = `${manualLoreEntries.length} entr${manualLoreEntries.length === 1 ? 'y' : 'ies'}`;
+    $('manualLoreList').innerHTML = manualLoreEntries.length ? manualLoreEntries.map((entry) => {
+      const scope = entry.scope === 'subject' ? 'Subject-specific' : 'Global';
+      const title = entry.subject || (entry.scope === 'subject' ? 'Unnamed subject' : 'Global lore');
+      const aliases = Array.isArray(entry.aliases) && entry.aliases.length ? `<div class="detail">Aliases: ${escManual(entry.aliases.join(', '))}</div>` : '';
+      return `<div class="manual-lore-card ${entry.enabled === false ? 'disabled' : ''}" data-entry-id="${escManual(entry.id)}">
+        <div class="manual-lore-card-header"><div><div class="manual-lore-card-title"><span class="manual-lore-badge">${escManual(scope)}</span><span>${escManual(title)}</span></div>${aliases}</div></div>
+        <div class="manual-lore-card-text">${escManual(entry.text)}</div>
+        <div class="manual-lore-card-actions">
+          <label class="inline-check"><input class="manual-lore-toggle" type="checkbox" ${entry.enabled !== false ? 'checked' : ''}> Use</label>
+          <button class="secondary manual-lore-edit" type="button">Edit</button>
+          <button class="danger manual-lore-delete" type="button">Delete</button>
+        </div>
+      </div>`;
+    }).join('') : '<div class="detail custom-empty-state">No manual lore cards yet. Add Global lore for channel-wide context, or Subject-specific lore for a person, character, entity, or topic.</div>';
+
+    $('manualLoreList').querySelectorAll('.manual-lore-edit').forEach((button) => {
+      button.onclick = () => {
+        const id = button.closest('.manual-lore-card').dataset.entryId;
+        openManualLoreEditor(manualLoreEntries.find((entry) => entry.id === id));
+      };
+    });
+    $('manualLoreList').querySelectorAll('.manual-lore-toggle').forEach((toggle) => {
+      toggle.onchange = async () => {
+        const row = toggle.closest('.manual-lore-card'); toggle.disabled = true;
+        const d = await postJson('/stream-lore/manual-entry-toggle', { entryId: row.dataset.entryId, enabled: toggle.checked });
+        toggle.disabled = false;
+        if (!d.success) { toggle.checked = !toggle.checked; $('loreMsg').textContent = d.error || 'Could not update lore entry.'; return; }
+        renderManualLore(d.manualEntries || []); $('loreMsg').textContent = toggle.checked ? 'Lore entry enabled.' : 'Lore entry disabled.';
+      };
+    });
+    $('manualLoreList').querySelectorAll('.manual-lore-delete').forEach((button) => {
+      button.onclick = async () => {
+        const row = button.closest('.manual-lore-card');
+        if (!window.confirm('Delete this manual lore entry?')) return;
+        button.disabled = true;
+        const d = await postJson('/stream-lore/manual-entry-delete', { entryId: row.dataset.entryId });
+        if (!d.success) { button.disabled = false; $('loreMsg').textContent = d.error || 'Could not delete lore entry.'; return; }
+        renderManualLore(d.manualEntries || []); $('loreMsg').textContent = 'Lore entry deleted.';
+      };
+    });
+  }
+
+  function openManualLoreEditor(entry = null) {
+    $('manualLoreDialogTitle').textContent = entry ? 'Edit Lore Entry' : 'Add Lore Entry';
+    $('manualLoreId').value = entry?.id || '';
+    $('manualLoreScope').value = entry?.scope === 'subject' ? 'subject' : 'global';
+    $('manualLoreSubject').value = entry?.subject || '';
+    $('manualLoreAliases').value = Array.isArray(entry?.aliases) ? entry.aliases.join(', ') : '';
+    $('manualLoreText').value = entry?.text || '';
+    $('manualLoreEnabled').checked = entry?.enabled !== false;
+    $('manualLoreDialogMsg').textContent = '';
+    syncManualLoreEditorScope(); updateManualLoreTextCount();
+    $('manualLoreDialog').showModal();
+  }
+
+  async function saveManualLoreEditor() {
+    const scope = $('manualLoreScope').value;
+    const subject = $('manualLoreSubject').value.trim();
+    const text = $('manualLoreText').value.trim();
+    if (scope === 'subject' && !subject) { $('manualLoreDialogMsg').textContent = 'Subject-specific lore requires a subject.'; return; }
+    if (!text) { $('manualLoreDialogMsg').textContent = 'Lore text is required.'; return; }
+    $('saveManualLoreEntryBtn').disabled = true; $('manualLoreDialogMsg').textContent = 'Saving...';
+    const d = await postJson('/stream-lore/manual-entry-save', { id: $('manualLoreId').value || undefined, scope, subject, aliases: $('manualLoreAliases').value, text, enabled: $('manualLoreEnabled').checked });
+    $('saveManualLoreEntryBtn').disabled = false;
+    if (!d.success) { $('manualLoreDialogMsg').textContent = d.error || 'Could not save lore entry.'; return; }
+    renderManualLore(d.manualEntries || []); $('manualLoreDialog').close(); $('loreMsg').textContent = 'Manual lore saved.';
+  }
+
   async function loadLore() {
     try {
       $('loreMsg').textContent = 'Loading...';
       const d = await postJson('/stream-lore/get', {});
-      if (!d.success) {
-        $('loreMsg').textContent = d.error || 'Could not load lore.';
-        return;
-      }
-      $('streamLore').value = d.text || '';
+      if (!d.success) { $('loreMsg').textContent = d.error || 'Could not load lore.'; return; }
+      manualLoreLimits = { ...manualLoreLimits, ...(d.manualLimits || {}) };
+      $('manualLoreText').maxLength = Number(manualLoreLimits.maxTextLength || 2400);
+      $('manualLoreSubject').maxLength = Number(manualLoreLimits.maxSubjectLength || 80);
+      renderManualLore(d.manualEntries || []);
       renderLearnedLore(d.learnedObservations || []);
       $('streamLoreObservationsMsg').textContent = '';
-      updateCount();
-      $('loreMsg').textContent = d.updatedAt ? '' : 'No lore saved yet.';
-    } catch (_) {
-      $('loreMsg').textContent = 'Could not load lore.';
-    }
-  }
-
-  async function saveLore() {
-    try {
-      $('saveLoreBtn').disabled = true;
-      $('loreMsg').textContent = 'Saving...';
-      const d = await postJson('/stream-lore/save', { text: $('streamLore').value });
-      if (!d.success) {
-        $('loreMsg').textContent = d.error || 'Could not save lore.';
-        return;
-      }
-      $('streamLore').value = d.text || '';
-      renderLearnedLore(d.learnedObservations || []);
-      updateCount();
-      $('loreMsg').textContent = d.text ? 'Saved.' : 'Lore cleared.';
-    } catch (_) {
-      $('loreMsg').textContent = 'Could not save lore.';
-    } finally {
-      $('saveLoreBtn').disabled = false;
-    }
+      $('loreMsg').textContent = '';
+    } catch (_) { $('loreMsg').textContent = 'Could not load lore.'; }
   }
 
   async function loadSessionMemoryStatus() {
@@ -514,9 +577,12 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
   $('streamLoreAiTab').onclick = () => selectStreamLoreView('ai');
   $('streamLoreManualTab').onclick = () => selectStreamLoreView('manual');
-  $('streamLore').oninput = updateCount;
-  $('saveLoreBtn').onclick = saveLore;
-  $('undoLoreBtn').onclick = loadLore;
+  $('addManualLoreBtn').onclick = () => openManualLoreEditor();
+  $('manualLoreScope').onchange = syncManualLoreEditorScope;
+  $('manualLoreText').oninput = updateManualLoreTextCount;
+  $('saveManualLoreEntryBtn').onclick = saveManualLoreEditor;
+  $('cancelManualLoreEntryBtn').onclick = () => $('manualLoreDialog').close();
+  $('manualLoreDialogClose').onclick = () => $('manualLoreDialog').close();
   $('botPersonality').oninput = updatePersonalityCount;
   $('botPersonalityUseCooldownResponse').onchange = syncCooldownResponseVisibility;
   $('botPersonalityRetryEnabled').onchange = syncAiRetryControls;
@@ -526,7 +592,6 @@ export function initLoreSection({ $, postJson, maxLoreLength, maxBotPersonalityN
   $('clearSessionMemoryBtn').onclick = clearSessionMemory;
   $('saveBotPersonalityBtn').onclick = saveBotPersonality;
   $('undoBotPersonalityBtn').onclick = loadBotPersonality;
-  updateCount();
   updatePersonalityCount();
   updateSessionMemoryPromptCount();
   syncCooldownResponseVisibility();

@@ -1,5 +1,5 @@
 const { generateRecap, SUMMARY_PREFIX } = require('../commands/recap');
-const { getStreamLore } = require('../services/streamLore');
+const { getStreamLore, buildEffectiveLore } = require('../services/streamLore');
 const {
   MAX_PRIMARY_INSTRUCTIONS_LENGTH,
   MAX_EXPANSION_INSTRUCTIONS_LENGTH,
@@ -87,7 +87,8 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
     try {
       if (getDatabaseConnected()) {
         const loreRecord = await getStreamLore(channelName);
-        streamLore = String(loreRecord?.effectiveText || loreRecord?.text || '');
+        const loreMatchSource = [...logs, ...twitchEvents.map((event) => String(event?.text || ''))].join('\n');
+        streamLore = buildEffectiveLore(loreRecord?.manualEntries || [], loreRecord?.learnedObservations || [], loreMatchSource, { includeGlobal: true });
       }
     } catch (loreErr) {
       console.error('[Recap] Could not load stream-specific lore for WebUI current-window test:', loreErr.message || loreErr);

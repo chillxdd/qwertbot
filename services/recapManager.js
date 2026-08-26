@@ -8,7 +8,7 @@ const {
   saveActiveRecapState,
   clearStreamRecapsByChannel
 } = require('./streamRecapHistory');
-const { getStreamLore, applyStreamLoreObservations } = require('./streamLore');
+const { getStreamLore, applyStreamLoreObservations, buildEffectiveLore } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
 const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, getViewerLearningContext, applyViewerProfileUpdates } = require('./viewerProfiles');
@@ -830,7 +830,8 @@ function createRecapManager({
 
       try {
         streamLoreRecord = await getStreamLore(channelName);
-        streamLore = String(streamLoreRecord?.effectiveText || streamLoreRecord?.text || '');
+        const loreMatchSource = [...chatLogs, ...eventSnapshot.map((event) => String(event?.text || ''))].join('\n');
+        streamLore = buildEffectiveLore(streamLoreRecord?.manualEntries || [], streamLoreRecord?.learnedObservations || [], loreMatchSource, { includeGlobal: true });
         if (streamLore) console.log(`[Recap] Loaded ${streamLore.length} characters of stream-specific lore from MongoDB.`);
       } catch (loreErr) {
         console.error('[Recap] Could not load stream-specific lore. Continuing without it:', loreErr.message || loreErr);

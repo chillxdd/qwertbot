@@ -608,6 +608,7 @@ If existing lore shows revision_waiting, it is an unapproved proposal, not evide
 RULES:
 - Ignore ordinary current-stream events, gameplay outcomes, temporary plans, meals/errands, generic game facts, one-off chatter, and bang-command spam.
 - Ignore routine Twitch telemetry: subscriptions/resubs, follows, raids, Bits, gifted subs, Hype Trains, live/offline state, polls, predictions, redemptions, goals, and ads.
+- STREAM LORE IS GLOBAL CHANNEL LORE, NOT A VIEWER PROFILE. Do not create stream-lore facts whose core meaning is a specific viewer's personal preference, possession, habit, relationship, crush, pet, biography, or other person-specific attribute. Those belong in Viewer Profiles instead. A named viewer may appear only when the durable fact is genuinely a channel-wide convention, recurring bit, nickname, or community relationship needed to interpret future chat.
 - The two pieces of evidence may come from the same viewer or different viewers, but together must establish recurring channel-specific meaning.
 - Preserve uncertainty; do not invent meaning or causality.
 - existingObservationId may only use an S... ID shown below.

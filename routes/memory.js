@@ -1,4 +1,4 @@
-const { MAX_STREAM_LORE_LENGTH, getStreamLore, saveStreamLore, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
+const { MAX_STREAM_LORE_LENGTH, MAX_MANUAL_LORE_ENTRIES, MAX_MANUAL_LORE_TEXT_LENGTH, MAX_MANUAL_LORE_SUBJECT_LENGTH, MAX_MANUAL_LORE_ALIASES, MAX_MANUAL_LORE_ALIAS_LENGTH, getStreamLore, saveStreamLore, saveManualLoreEntry, setManualLoreEntryEnabled, deleteManualLoreEntry, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
 const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, approveViewerFact, rejectViewerFact, acceptViewerFactRevision, dismissViewerFactRevision, setFactEnabled, deleteViewerFact, deleteViewerProfile } = require('../services/viewerProfiles');
 
 function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
@@ -8,7 +8,7 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     }
     try {
       const lore = await getStreamLore(channelName);
-      return res.json({ success: true, text: lore.text, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH });
+      return res.json({ success: true, text: lore.text, manualEntries: lore.manualEntries, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH, manualLimits: { maxEntries: MAX_MANUAL_LORE_ENTRIES, maxTextLength: MAX_MANUAL_LORE_TEXT_LENGTH, maxSubjectLength: MAX_MANUAL_LORE_SUBJECT_LENGTH, maxAliases: MAX_MANUAL_LORE_ALIASES, maxAliasLength: MAX_MANUAL_LORE_ALIAS_LENGTH } });
     } catch (err) {
       console.error('[Memory] Could not load stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: 'Could not load stream-specific lore.' });
@@ -30,6 +30,39 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     } catch (err) {
       console.error('[Memory] Could not save stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: err.message || 'Could not save stream-specific lore.' });
+    }
+  });
+
+
+  app.post('/stream-lore/manual-entry-save', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await saveManualLoreEntry(channelName, req.body || {});
+      console.log(`[Memory] Manual lore entry ${req.body?.id ? 'updated' : 'created'} (${lore.manualEntries.length} total).`);
+      return res.json({ success: true, manualEntries: lore.manualEntries, updatedAt: lore.updatedAt });
+    } catch (err) {
+      console.error('[Memory] Could not save manual lore entry:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not save manual lore entry.' });
+    }
+  });
+
+  app.post('/stream-lore/manual-entry-toggle', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await setManualLoreEntryEnabled(channelName, req.body?.entryId, req.body?.enabled);
+      return res.json({ success: true, manualEntries: lore.manualEntries, updatedAt: lore.updatedAt });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not update manual lore entry.' });
+    }
+  });
+
+  app.post('/stream-lore/manual-entry-delete', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const lore = await deleteManualLoreEntry(channelName, req.body?.entryId);
+      return res.json({ success: true, manualEntries: lore.manualEntries, updatedAt: lore.updatedAt });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not delete manual lore entry.' });
     }
   });
 

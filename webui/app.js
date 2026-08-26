@@ -44,7 +44,7 @@ function ensureTwitchChatLoaded() {
 await loadConfig();
 const messaging = initMessagingSection({ $, postJson });
 const viewerProfiles = initViewerProfilesSection({ $, esc, postJson });
-const lore = initLoreSection({ $, postJson, maxLoreLength: config.maxStreamLoreLength, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername, viewerProfiles });
+const lore = initLoreSection({ $, postJson, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername, viewerProfiles });
 const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
 const timers = initTimersSection({ $, esc, postJson, config: config.timers || {} });
 const eventSubReactions = initEventSubReactionsSection({ $, esc, postJson });

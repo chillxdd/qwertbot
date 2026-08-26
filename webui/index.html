@@ -735,8 +735,8 @@
 
         <div id="streamLoreAiView" class="subsection-view open">
           <div class="memory-block learned-lore-block">
-            <div class="custom-response-heading"><strong>AI-Learned Lore</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
-            <div class="detail">New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
+            <div class="custom-response-heading"><strong>AI-Learned Stream Lore (Global)</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
+            <div class="detail">This is channel-wide lore, not per-viewer memory. New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
 
             <div class="learned-review-section learned-review-pending">
               <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
@@ -790,16 +790,51 @@
 
         <div id="streamLoreManualView" class="subsection-view">
           <div class="memory-block">
-            <h4>Manually Added Lore</h4>
-            <div class="detail">Moderator-written persistent context for recurring channel lore, callbacks, nicknames, running jokes, or other background that can help the recap AI interpret current chat.</div>
-            <textarea id="streamLore" maxlength="12000" placeholder="Example: Chat calls the shiny Graveler 'Greg'. The left/middle/right joke refers to an old starter-choice argument..."></textarea>
-            <div class="memory-actions">
-              <button id="saveLoreBtn">Save Lore</button>
-              <button id="undoLoreBtn" class="secondary" type="button">Undo Changes</button>
+            <div class="custom-command-header">
+              <div>
+                <h4>Manually Added Lore</h4>
+                <div class="detail">Structured moderator-written lore. <strong>Global</strong> entries are always available as background context. <strong>Subject-specific</strong> entries are only loaded when their subject or an alias is actually referenced.</div>
+              </div>
+              <button id="addManualLoreBtn" type="button">Add Lore Entry</button>
             </div>
-            <div id="loreCount" class="detail">0/12000 characters</div>
+            <div class="detail manual-lore-guidance">Use Subject-specific for people, characters, recurring entities, or topics such as <code>Motmo_</code>, <code>coosgoose</code>, <code>Chair</code>, or <code>Kaizo IronMon</code>. This keeps unrelated lore out of Tagged Questions.</div>
+            <div class="custom-response-heading"><strong>Manual Lore Cards</strong><span id="manualLoreCount" class="detail">0 entries</span></div>
+            <div id="manualLoreList" class="manual-lore-list"></div>
             <div id="loreMsg" class="detail"></div>
           </div>
+
+          <dialog id="manualLoreDialog" class="entity-editor-dialog manual-lore-dialog">
+            <div class="custom-editor-header">
+              <div>
+                <h4 id="manualLoreDialogTitle">Add Lore Entry</h4>
+                <div class="detail">Keep one subject or one global concept per card.</div>
+              </div>
+              <button id="manualLoreDialogClose" class="secondary" type="button">Close</button>
+            </div>
+            <input id="manualLoreId" type="hidden">
+            <label class="prompt-label" for="manualLoreScope">Scope</label>
+            <select id="manualLoreScope">
+              <option value="global">Global</option>
+              <option value="subject">Subject-specific</option>
+            </select>
+            <label id="manualLoreSubjectLabel" class="prompt-label" for="manualLoreSubject">Label <span class="detail">(optional)</span></label>
+            <input id="manualLoreSubject" type="text" maxlength="80" placeholder="Example: Chat culture">
+            <div id="manualLoreSubjectHelp" class="detail">For Global lore this is only an organizational label.</div>
+            <div id="manualLoreAliasesPanel" hidden>
+              <label class="prompt-label" for="manualLoreAliases">Aliases</label>
+              <input id="manualLoreAliases" type="text" placeholder="Comma-separated, e.g. Motmo, Motmo_">
+              <div class="detail">Any subject or alias match can load this card for a Tagged Question.</div>
+            </div>
+            <label class="prompt-label" for="manualLoreText">Lore</label>
+            <textarea id="manualLoreText" maxlength="2400" placeholder="Write the facts/context that belong to this subject or global concept."></textarea>
+            <div id="manualLoreTextCount" class="detail">0/2400 characters</div>
+            <label class="inline-check"><input id="manualLoreEnabled" type="checkbox" checked> Use this lore in AI context</label>
+            <div class="custom-editor-actions">
+              <button id="saveManualLoreEntryBtn" type="button">Save Entry</button>
+              <button id="cancelManualLoreEntryBtn" class="secondary" type="button">Cancel</button>
+            </div>
+            <div id="manualLoreDialogMsg" class="detail"></div>
+          </dialog>
         </div>
       </div>
 

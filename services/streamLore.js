@@ -15,7 +15,12 @@ const {
   serializeRevisionProposal
 } = require('./learningRevision');
 
-const MAX_STREAM_LORE_LENGTH = 12000;
+const MAX_STREAM_LORE_LENGTH = 12000; // Legacy blob limit; retained only for backwards compatibility.
+const MAX_MANUAL_LORE_ENTRIES = 100;
+const MAX_MANUAL_LORE_TEXT_LENGTH = 2400;
+const MAX_MANUAL_LORE_SUBJECT_LENGTH = 80;
+const MAX_MANUAL_LORE_ALIASES = 12;
+const MAX_MANUAL_LORE_ALIAS_LENGTH = 80;
 const MAX_LEARNED_LORE = 80;
 const MAX_LEARNED_LORE_LENGTH = 400;
 
@@ -63,30 +68,141 @@ function serializeObservation(observation) {
   };
 }
 
-function buildEffectiveLore(manualText, learnedObservations = []) {
-  const manual = String(manualText || '').trim();
-  const approved = learnedObservations
+function normalizeManualLoreScope(value) {
+  return String(value || '').toLowerCase().trim() === 'subject' ? 'subject' : 'global';
+}
+
+function normalizeManualLoreSubject(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, MAX_MANUAL_LORE_SUBJECT_LENGTH);
+}
+
+function normalizeManualLoreText(value) {
+  return String(value || '').replace(/\r\n/g, '\n').trim().slice(0, MAX_MANUAL_LORE_TEXT_LENGTH);
+}
+
+function normalizeManualLoreAliases(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(',');
+  const seen = new Set();
+  const aliases = [];
+  for (const item of raw) {
+    const alias = String(item || '').replace(/^@+/, '').replace(/\s+/g, ' ').trim().slice(0, MAX_MANUAL_LORE_ALIAS_LENGTH);
+    if (!alias) continue;
+    const key = alias.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(alias);
+    if (aliases.length >= MAX_MANUAL_LORE_ALIASES) break;
+  }
+  return aliases;
+}
+
+function serializeManualLoreEntry(entry) {
+  return {
+    id: String(entry?._id || entry?.id || ''),
+    scope: normalizeManualLoreScope(entry?.scope),
+    subject: normalizeManualLoreSubject(entry?.subject),
+    aliases: normalizeManualLoreAliases(entry?.aliases),
+    text: String(entry?.text || ''),
+    enabled: entry?.enabled !== false,
+    createdAt: entry?.createdAt || null,
+    updatedAt: entry?.updatedAt || null
+  };
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function manualLoreCandidateMatchesText(candidate, sourceText) {
+  const value = String(candidate || '').replace(/^@+/, '').trim().toLowerCase();
+  const source = String(sourceText || '').toLowerCase();
+  if (!value || !source) return false;
+  const escaped = escapeRegExp(value);
+  return new RegExp(`(^|[^a-z0-9_])${escaped}([^a-z0-9_]|$)`, 'i').test(source);
+}
+
+function manualLoreEntryMatchesText(entry, sourceText) {
+  if (normalizeManualLoreScope(entry?.scope) !== 'subject') return false;
+  const candidates = [entry?.subject, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])];
+  return candidates.some((candidate) => manualLoreCandidateMatchesText(candidate, sourceText));
+}
+
+function formatManualLoreEntries(entries = []) {
+  const active = (Array.isArray(entries) ? entries : [])
+    .map(serializeManualLoreEntry)
+    .filter((entry) => entry.enabled && entry.text.trim());
+  if (!active.length) return '';
+
+  const globalEntries = active.filter((entry) => entry.scope === 'global');
+  const subjectEntries = active.filter((entry) => entry.scope === 'subject');
+  const blocks = [];
+
+  if (globalEntries.length) {
+    blocks.push([
+      'GLOBAL MANUAL LORE:',
+      ...globalEntries.map((entry) => `- ${entry.subject ? `[${entry.subject}] ` : ''}${entry.text.trim()}`)
+    ].join('\n'));
+  }
+
+  for (const entry of subjectEntries) {
+    const aliases = entry.aliases.length ? ` (aliases: ${entry.aliases.join(', ')})` : '';
+    blocks.push(`MANUAL LORE ABOUT ${entry.subject || 'UNLABELED SUBJECT'}${aliases}:\n- ${entry.text.trim()}`);
+  }
+
+  return blocks.join('\n\n');
+}
+
+function buildManualLoreContext(manualEntries = [], sourceText = '', options = {}) {
+  const includeGlobal = options.includeGlobal !== false;
+  const includeAllSubjects = options.includeAllSubjects === true;
+  const active = (Array.isArray(manualEntries) ? manualEntries : [])
+    .map(serializeManualLoreEntry)
+    .filter((entry) => entry.enabled && entry.text.trim());
+
+  const selected = active.filter((entry) => {
+    if (entry.scope === 'global') return includeGlobal;
+    if (includeAllSubjects) return true;
+    return manualLoreEntryMatchesText(entry, sourceText);
+  });
+
+  return formatManualLoreEntries(selected);
+}
+
+function buildLearnedLoreText(learnedObservations = []) {
+  const approved = (Array.isArray(learnedObservations) ? learnedObservations : [])
     .filter((observation) => inferApprovalStatus(observation) === 'approved' && observation?.enabled === true && String(observation?.text || '').trim())
     .map((observation) => `- ${String(observation.text).trim()}`);
-  return [manual, approved.length ? `AI-learned lore approved by a moderator:\n${approved.join('\n')}` : ''].filter(Boolean).join('\n\n');
+  return approved.length ? `AI-LEARNED STREAM LORE (GLOBAL):\n${approved.join('\n')}` : '';
+}
+
+function buildEffectiveLore(manualEntries = [], learnedObservations = [], sourceText = '', options = {}) {
+  const manual = buildManualLoreContext(manualEntries, sourceText, options);
+  const learned = buildLearnedLoreText(learnedObservations);
+  return [manual, learned].filter(Boolean).join('\n\n');
 }
 
 async function getStreamLore(channelName) {
   const normalizedChannelName = normalizeChannelName(channelName);
-  if (!normalizedChannelName) return { text: '', learnedObservations: [], effectiveText: '', updatedAt: null };
+  if (!normalizedChannelName) return { text: '', manualEntries: [], learnedObservations: [], manualText: '', learnedText: '', effectiveText: '', updatedAt: null };
 
   const doc = await StreamLore.findOne({ channelName: normalizedChannelName }).lean();
+  const manualEntries = (Array.isArray(doc?.manualEntries) ? doc.manualEntries : []).map(serializeManualLoreEntry);
   const learnedObservations = (Array.isArray(doc?.learnedObservations) ? doc.learnedObservations : []).map(serializeObservation);
-  const text = String(doc?.text || '');
+  const text = String(doc?.text || ''); // Legacy blob; intentionally excluded from active AI context.
 
   return {
     text,
+    manualEntries,
     learnedObservations,
-    effectiveText: buildEffectiveLore(text, learnedObservations),
+    manualText: buildManualLoreContext(manualEntries, '', { includeAllSubjects: true }),
+    learnedText: buildLearnedLoreText(learnedObservations),
+    effectiveText: buildEffectiveLore(manualEntries, learnedObservations, '', { includeAllSubjects: true }),
     updatedAt: doc?.updatedAt || null
   };
 }
 
+// Legacy blob save endpoint retained so older deployments/UI requests fail gracefully.
+// The legacy text is no longer included in Tagged Question or recap AI context.
 async function saveStreamLore(channelName, text) {
   const normalizedChannelName = normalizeChannelName(channelName);
   if (!normalizedChannelName) throw new Error('TWITCH_CHANNEL is not configured.');
@@ -96,19 +212,76 @@ async function saveStreamLore(channelName, text) {
     throw new Error(`Stream-specific lore cannot exceed ${MAX_STREAM_LORE_LENGTH} characters.`);
   }
 
-  const doc = await StreamLore.findOneAndUpdate(
+  await StreamLore.findOneAndUpdate(
     { channelName: normalizedChannelName },
     { $set: { text: normalizedText } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
-  ).lean();
+  );
+  return getStreamLore(normalizedChannelName);
+}
 
-  const learnedObservations = (Array.isArray(doc?.learnedObservations) ? doc.learnedObservations : []).map(serializeObservation);
-  return {
-    text: String(doc?.text || ''),
-    learnedObservations,
-    effectiveText: buildEffectiveLore(doc?.text || '', learnedObservations),
-    updatedAt: doc?.updatedAt || null
-  };
+async function saveManualLoreEntry(channelName, input = {}) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) throw new Error('TWITCH_CHANNEL is not configured.');
+
+  const scope = normalizeManualLoreScope(input.scope);
+  const subject = normalizeManualLoreSubject(input.subject);
+  const aliases = normalizeManualLoreAliases(input.aliases);
+  const text = normalizeManualLoreText(input.text);
+  const enabled = input.enabled !== false;
+  if (!text) throw new Error('Lore text is required.');
+  if (scope === 'subject' && !subject) throw new Error('Subject-specific lore requires a subject.');
+
+  let doc = await StreamLore.findOne({ channelName: channel });
+  if (!doc) doc = new StreamLore({ channelName: channel });
+  if (!Array.isArray(doc.manualEntries)) doc.manualEntries = [];
+
+  const entryId = String(input.id || input.entryId || '').trim();
+  let entry = null;
+  if (entryId && doc.manualEntries.id) {
+    try { entry = doc.manualEntries.id(entryId); } catch (_) { entry = null; }
+    if (!entry) throw new Error('Manual lore entry not found.');
+  }
+
+  if (!entry) {
+    if (doc.manualEntries.length >= MAX_MANUAL_LORE_ENTRIES) {
+      throw new Error(`Manual lore is limited to ${MAX_MANUAL_LORE_ENTRIES} entries.`);
+    }
+    doc.manualEntries.push({ scope, subject, aliases, text, enabled, createdAt: new Date(), updatedAt: new Date() });
+  } else {
+    entry.scope = scope;
+    entry.subject = subject;
+    entry.aliases = aliases;
+    entry.text = text;
+    entry.enabled = enabled;
+    entry.updatedAt = new Date();
+  }
+
+  await doc.save();
+  return getStreamLore(channel);
+}
+
+async function setManualLoreEntryEnabled(channelName, entryId, enabled) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await StreamLore.findOne({ channelName: channel });
+  if (!doc) throw new Error('Stream lore not found.');
+  const entry = doc.manualEntries.id(entryId);
+  if (!entry) throw new Error('Manual lore entry not found.');
+  entry.enabled = Boolean(enabled);
+  entry.updatedAt = new Date();
+  await doc.save();
+  return getStreamLore(channel);
+}
+
+async function deleteManualLoreEntry(channelName, entryId) {
+  const channel = normalizeChannelName(channelName);
+  const doc = await StreamLore.findOne({ channelName: channel });
+  if (!doc) throw new Error('Stream lore not found.');
+  const entry = doc.manualEntries.id(entryId);
+  if (!entry) throw new Error('Manual lore entry not found.');
+  entry.deleteOne();
+  await doc.save();
+  return getStreamLore(channel);
 }
 
 function findSimilarObservation(observations, text) {
@@ -334,9 +507,20 @@ async function deleteLearnedObservation(channelName, observationId) {
 
 module.exports = {
   MAX_STREAM_LORE_LENGTH,
+  MAX_MANUAL_LORE_ENTRIES,
+  MAX_MANUAL_LORE_TEXT_LENGTH,
+  MAX_MANUAL_LORE_SUBJECT_LENGTH,
+  MAX_MANUAL_LORE_ALIASES,
+  MAX_MANUAL_LORE_ALIAS_LENGTH,
   MAX_LEARNED_LORE,
   getStreamLore,
   saveStreamLore,
+  saveManualLoreEntry,
+  setManualLoreEntryEnabled,
+  deleteManualLoreEntry,
+  buildManualLoreContext,
+  buildLearnedLoreText,
+  buildEffectiveLore,
   applyStreamLoreObservations,
   approveLearnedObservation,
   rejectLearnedObservation,

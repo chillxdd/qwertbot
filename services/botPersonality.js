@@ -3,6 +3,7 @@ const { normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getRelevantViewerProfiles, formatViewerProfilesForPrompt } = require('./viewerProfiles');
 const { requestGeminiText, isRetryableGeminiError } = require('./geminiClient');
 const { detectPromptInjection, createUntrustedBlock, inspectModelOutputForLeak } = require('./promptSecurity');
+const { buildManualLoreContext, buildLearnedLoreText } = require('./streamLore');
 
 const MAX_BOT_PERSONALITY_NAME_LENGTH = 80;
 const MAX_BOT_PERSONALITY_LENGTH = 12000;
@@ -102,6 +103,18 @@ function isExplicitPersistentKnowledgeQuestion(question) {
   ].some((pattern) => pattern.test(text));
 }
 
+function isSelfReferentialKnowledgeQuestion(question) {
+  const text = String(question || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+  return [
+    /\bwho am i\b/,
+    /\bwhat do you (?:know|remember) about me\b/,
+    /\btell me about me\b/,
+    /\b(?:my|mine) (?:lore|profile|backstory|background)\b/,
+    /\bwhat am i known for\b/
+  ].some((pattern) => pattern.test(text));
+}
+
 function isCurrentStreamRecallQuestion(question) {
   const text = String(question || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (!text || isExplicitPersistentKnowledgeQuestion(text)) return false;
@@ -111,7 +124,10 @@ function isCurrentStreamRecallQuestion(question) {
     /\bwho\s+(?:said|mentioned|discussed|planned|decided|agreed)\b/,
     /\bwhat\s+happened\b/,
     /\b(?:what|which)\s+(?:was|were)\b.*\b(?:plan|plans|idea|ideas|topic|topics|thing|things)\b.*\b(?:discussed|mentioned|said|planned|decided|agreed)?\b/,
-    /\bwhat\s+(?:was|were)\s+the\s+(?:late[- ]?night|tonight(?:'s)?)\s+plans?\b/
+    /\bwhat\s+(?:was|were)\s+the\s+(?:late[- ]?night|tonight(?:'s)?)\s+plans?\b/,
+    /\bwhere(?:\s+the\s+f(?:uck|k)|\s+tf)?\s+(?:is|are)\b/,
+    /\b(?:is|was|has)\s+@[a-z0-9_]+\s+(?:here|around|gone|left)\b/,
+    /\bhas\s+[^?]{1,80}\b(?:been\s+around|left|gone|shown\s+up)\b/
   ];
   if (directRecallPatterns.some((pattern) => pattern.test(text))) return true;
 
@@ -646,6 +662,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
 
     const currentStreamRecallMode = isCurrentStreamRecallQuestion(question);
     const viewerIdentity = buildViewerIdentity(displayName, tags);
+    const selfKnowledgeQuestion = isSelfReferentialKnowledgeQuestion(question);
     const relayRecipientIdentity = detectRelayRecipient(question, viewerIdentity, normalizedBotUsername);
     const relayMode = Boolean(relayRecipientIdentity);
     const responseAddresseeIdentity = relayRecipientIdentity || viewerIdentity;
@@ -659,11 +676,16 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     if (!currentStreamRecallMode && typeof getStreamLore === 'function') {
       try {
         const loreRecord = await getStreamLore(normalizedChannel);
-        manualStreamLore = String(loreRecord?.text || '').trim();
-        learnedStreamLore = (Array.isArray(loreRecord?.learnedObservations) ? loreRecord.learnedObservations : [])
-          .filter((observation) => observation?.enabled === true && String(observation?.text || '').trim())
-          .map((observation) => `- ${String(observation.text).trim()}`)
-          .join('\n');
+        const loreMatchSource = [
+          question,
+          normalizedReplyContext?.parentBody || '',
+          relayRecipientIdentity?.displayName || '',
+          relayRecipientIdentity?.login || '',
+          selfKnowledgeQuestion ? viewerIdentity.displayName : '',
+          selfKnowledgeQuestion ? viewerIdentity.login : ''
+        ].filter(Boolean).join('\n');
+        manualStreamLore = buildManualLoreContext(loreRecord?.manualEntries || [], loreMatchSource, { includeGlobal: true });
+        learnedStreamLore = buildLearnedLoreText(loreRecord?.learnedObservations || []);
       } catch (err) {
         console.error('[Tagged Questions] Could not load stream lore for tagged question:', err?.message || err);
       }
@@ -710,7 +732,8 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     let viewerProfileContext = '';
     if (!currentStreamRecallMode) {
       try {
-        const relevantProfiles = await getRelevantViewerProfiles(normalizedChannel, question, 4);
+        const profileMatchQuestion = selfKnowledgeQuestion ? `${question} ${viewerIdentity.displayName || ''} ${viewerIdentity.login || ''}` : question;
+        const relevantProfiles = await getRelevantViewerProfiles(normalizedChannel, profileMatchQuestion, 4);
         viewerProfileContext = formatViewerProfilesForPrompt(relevantProfiles);
       } catch (err) {
         console.error('[Tagged Questions] Could not load relevant viewer profiles:', err?.message || err);
@@ -871,6 +894,7 @@ ${identityAnswerRules}
 - Never invent stream events, plans, games, quotes, or activities merely because the stream ended recently. If same-stream evidence is unavailable, say you do not have that detail rather than filling the gap from unrelated lore.
 - The current title/category are BACKGROUND METADATA only. They may help interpret what game or topic the viewer means, but they are NOT proof that a specific event, action, result, boss attempt, win, loss, joke, or gameplay moment happened.
 - You may use stream-specific lore to understand recurring jokes, people, terminology, history, and channel-specific context when it is relevant to the current stream context or explicitly referenced by the viewer.
+- Structured MANUAL STREAM LORE has already been filtered by scope before reaching you: GLOBAL entries are channel-wide background; MANUAL LORE ABOUT <subject> belongs only to that named subject. Never treat a Global entry as a personal fact about every viewer, and never transfer a subject-specific entry to another person.
 - Stream-specific lore is BACKGROUND CONTEXT, not proof that something is happening right now. Do not turn lore into a current event, current action, current fact, plan, motive, or prediction unless same-stream evidence or the viewer's question itself establishes it.
 - FACT OWNERSHIP IS STRICT: a preference, possession, habit, relationship, role, joke, or action stated about one named person/entity belongs only to that person/entity unless the source explicitly assigns it to someone else. Never transfer Motmo_'s facts to CoosGoose, Brookks, Qwert, or anyone else merely because those people appear in the same answer or context. Apply the same rule to every viewer and entity.
 - PRESERVE RELATIONSHIP DIRECTION AND GRAMMAR: keep subject, object, possessor, and pronoun relationships exactly as the source states them. Example: "Motmo_'s cats watch him cook" means the cats watch Motmo_; it does NOT mean Motmo_ watches cats. Never invert who owns, watches, likes, did, said, or experienced something.

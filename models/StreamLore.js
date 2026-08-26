@@ -29,6 +29,17 @@ const learnedLoreObservationSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: false }
 }, { _id: true });
 
+
+const manualLoreEntrySchema = new mongoose.Schema({
+  scope: { type: String, enum: ['global', 'subject'], default: 'global' },
+  subject: { type: String, default: '', trim: true, maxlength: 80 },
+  aliases: { type: [String], default: [] },
+  text: { type: String, required: true, maxlength: 2400 },
+  enabled: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { _id: true });
+
 const streamLoreSchema = new mongoose.Schema({
   channelName: {
     type: String,
@@ -43,6 +54,7 @@ const streamLoreSchema = new mongoose.Schema({
     default: '',
     maxlength: 12000
   },
+  manualEntries: { type: [manualLoreEntrySchema], default: [] },
   learnedObservations: { type: [learnedLoreObservationSchema], default: [] }
 }, {
   timestamps: true

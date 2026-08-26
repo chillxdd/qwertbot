@@ -108,11 +108,21 @@ function normalizeLogEntry(entry) {
     if (item?.name && item?.value !== undefined) labelMap[item.name] = String(item.value);
   }
 
+  const message = stripAnsiAndControlCodes(entry?.message || '');
+  let level = labelMap.level || null;
+
+  // Render can occasionally label a healthy summary line as error even when the
+  // application emitted it with console.log. Normalize explicit zero-error
+  // summaries so both styling and the visible [level] tag reflect the message.
+  if (/\b0\s+error(?:\(s\)|s?)\b/i.test(message) && /error|critical/i.test(String(level || ''))) {
+    level = 'info';
+  }
+
   return {
     id: String(entry?.id || ''),
     timestamp: entry?.timestamp || null,
-    message: stripAnsiAndControlCodes(entry?.message || ''),
-    level: labelMap.level || null,
+    message,
+    level,
     type: labelMap.type || null,
     instance: labelMap.instance || null
   };
