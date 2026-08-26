@@ -128,7 +128,10 @@ export function initRenderLogsSection({ $, postJson }) {
     for (const entry of visible) {
       const row = document.createElement('div');
       const level = String(entry.level || 'info').toLowerCase();
-      row.className = `log-line ${level.includes('error') || level.includes('critical') ? 'log-error' : level.includes('warn') ? 'log-warning' : 'log-info'}`;
+      const message = String(entry.message || '');
+      const explicitlyZeroErrors = /\b0\s+error(?:\(s\)|s?)\b/i.test(message);
+      const isError = (level.includes('error') || level.includes('critical')) && !explicitlyZeroErrors;
+      row.className = `log-line ${isError ? 'log-error' : level.includes('warn') ? 'log-warning' : 'log-info'}`;
       const stamp = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : '--:--:--';
       const levelText = entry.level ? ` [${entry.level}]` : '';
       row.textContent = `${stamp}${levelText} ${entry.message || ''}`;
