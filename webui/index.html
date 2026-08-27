@@ -738,28 +738,6 @@
             <div class="custom-response-heading"><strong>AI-Learned Stream Lore (Global)</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
             <div class="detail">This is channel-wide lore, not per-viewer memory. New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
 
-            <div class="learned-review-section lore-directive-settings">
-              <div class="custom-response-heading"><strong>Moderator Lore Directives</strong></div>
-              <div class="detail">Mods/Broadcaster can tag <code id="streamLoreDirectiveMention">@&lt;bot_username&gt;</code> without a trailing <code>?</code> and use a clear save/remember instruction such as <code>add the fire alarm to the lore</code>. Only recognized lore-save directives trigger this path. The bot makes one immediate Gemini extraction and sends the result to Pending Stream Lore for normal review.</div>
-              <div class="personality-controls">
-                <label class="inline-check"><input id="streamLoreDirectiveEnabled" type="checkbox" checked> Enable mod/broadcaster lore directives</label>
-                <label class="inline-check"><input id="streamLoreDirectiveSendResponses" type="checkbox" checked> Send chat responses for recognized directives</label>
-              </div>
-              <div id="streamLoreDirectiveResponsePanel">
-                <label class="prompt-label" for="streamLoreDirectiveSuccessResponse">Queued-for-review response</label>
-                <textarea id="streamLoreDirectiveSuccessResponse" maxlength="500" rows="2" placeholder="@$(user), got it — I queued that in Pending Stream Lore for review."></textarea>
-                <label class="prompt-label" for="streamLoreDirectiveAlreadyKnownResponse">Already-known response</label>
-                <textarea id="streamLoreDirectiveAlreadyKnownResponse" maxlength="500" rows="2" placeholder="@$(user), that already matches existing Stream Lore."></textarea>
-                <label class="prompt-label" for="streamLoreDirectiveFailureResponse">Could-not-extract response</label>
-                <textarea id="streamLoreDirectiveFailureResponse" maxlength="500" rows="2" placeholder="@$(user), I couldn't turn that into a lore proposal. Give me a little more context."></textarea>
-                <div class="detail">These are deterministic templates, not personality replies. Variables: <code>$(user)</code>, <code>$(lore)</code> (the exact generated pending wording), and <code>$(status)</code>. The defaults deliberately do not use <code>$(lore)</code>, so the confirmation stays simple.</div>
-              </div>
-              <div class="custom-editor-actions">
-                <button id="saveStreamLoreDirectiveSettingsBtn" type="button">Save Lore Directive Settings</button>
-              </div>
-              <div id="streamLoreDirectiveMsg" class="detail"></div>
-            </div>
-
             <div class="learned-review-section learned-review-pending">
               <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
               <div class="detail">Review both newly discovered lore and suggested revisions here. New lore can automatically refine while pending. Revision cards show the current approved wording beside the AI suggestion before you Accept Revision or Keep Current.</div>
@@ -807,6 +785,29 @@
               </div>
             </div>
             <div id="streamLoreObservationsMsg" class="detail"></div>
+
+            <div class="learned-review-section lore-directive-settings">
+              <div class="custom-response-heading"><strong>Moderator Lore Directives</strong></div>
+              <div class="detail">Mods/Broadcaster can tag <code id="streamLoreDirectiveMention">@&lt;bot_username&gt;</code> without a trailing <code>?</code> and use a clear save/remember instruction such as <code>add the fire alarm to the lore</code>. Only recognized lore-save directives trigger this path. The bot makes one immediate Gemini extraction and sends the result to Pending Stream Lore for normal review.</div>
+              <div class="personality-controls">
+                <label class="inline-check"><input id="streamLoreDirectiveEnabled" type="checkbox" checked> Enable mod/broadcaster lore directives</label>
+                <label class="inline-check"><input id="streamLoreDirectiveSendResponses" type="checkbox" checked> Send chat responses for recognized directives</label>
+              </div>
+              <div id="streamLoreDirectiveResponsePanel">
+                <label class="prompt-label" for="streamLoreDirectiveSuccessResponse">Queued-for-review response</label>
+                <textarea id="streamLoreDirectiveSuccessResponse" maxlength="500" rows="2" placeholder="@$(user), got it — I queued that in Pending Stream Lore for review."></textarea>
+                <label class="prompt-label" for="streamLoreDirectiveAlreadyKnownResponse">Already-known response</label>
+                <textarea id="streamLoreDirectiveAlreadyKnownResponse" maxlength="500" rows="2" placeholder="@$(user), that already matches existing Stream Lore."></textarea>
+                <label class="prompt-label" for="streamLoreDirectiveFailureResponse">Could-not-extract response</label>
+                <textarea id="streamLoreDirectiveFailureResponse" maxlength="500" rows="2" placeholder="@$(user), I couldn't turn that into a lore proposal. Give me a little more context."></textarea>
+                <div class="detail">These are deterministic templates, not personality replies. Variables: <code>$(user)</code>, <code>$(lore)</code> (the exact generated pending wording), and <code>$(status)</code>. The defaults deliberately do not use <code>$(lore)</code>, so the confirmation stays simple.</div>
+              </div>
+              <div class="custom-editor-actions">
+                <button id="saveStreamLoreDirectiveSettingsBtn" type="button">Save Lore Directive Settings</button>
+              </div>
+              <div id="streamLoreDirectiveMsg" class="detail"></div>
+            </div>
+
           </div>
         </div>
 

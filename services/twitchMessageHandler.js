@@ -20,7 +20,7 @@ function isPokemonCommunityGameCommand(message) {
 
 function isModOrBroadcaster(tags = {}) {
   const badges = tags.badges || {};
-  return badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
+  return badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || tags.mod === 1 || badges.moderator === '1';
 }
 
 function extractReplyContext(tags = {}) {

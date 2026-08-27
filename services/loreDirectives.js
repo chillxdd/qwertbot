@@ -53,6 +53,27 @@ function stripCourtesyTail(value) {
   return text.replace(/[.!]+\s*$/g, '').trim();
 }
 
+// Keep lore directives deterministic, but allow normal conversational lead-ins before
+// the actual save/learn command. This intentionally strips only a small allowlist of
+// wrappers rather than searching for a lore command anywhere in the message, which
+// avoids false positives such as "don't add that to the lore" or casual quotations.
+function stripDirectiveLeadIn(value) {
+  let text = String(value || '').trim();
+  let previous = '';
+
+  while (text && text !== previous) {
+    previous = text;
+    text = text
+      .replace(/^(?:ahem|ehem|uh|um|hey|yo|okay|ok)\b[\s,!.:\-/]*/i, '')
+      .replace(/^(?:i\s+said|i\s+said\s+it|i\s+mean|again)\b[\s,!.:\-/]*/i, '')
+      .replace(/^(?:(?:can|could|would|will)\s+you|would\s+you\s+mind)\s+(?:please\s+)?/i, '')
+      .replace(/^(?:please|pls)\s+/i, '')
+      .trim();
+  }
+
+  return text;
+}
+
 function parseLoreDirective(rawMessage, botUsername) {
   const raw = String(rawMessage || '').trim();
   const bot = String(botUsername || '').replace(/^@+/, '').trim();
@@ -63,7 +84,14 @@ function parseLoreDirective(rawMessage, botUsername) {
 
   const body = raw.replace(mention, '').trim();
   if (!body) return { matched: false };
-  const commandBody = stripCourtesyTail(body);
+  const commandBody = stripCourtesyTail(stripDirectiveLeadIn(body));
+  if (!commandBody) return { matched: false };
+
+  // Negated/quoted discussion is not a save instruction. The actual command still has
+  // to begin after the approved conversational wrappers above.
+  if (/^(?:do\s+not|don't|dont|never|stop|why\s+(?:did|would|should|could)|should(?:n't|nt)?)\b/i.test(commandBody)) {
+    return { matched: false };
+  }
 
   const patterns = [
     /^(?:please\s+)?(?:add|save|store|put)\s+(.+?)\s+(?:to|in|into)\s+(?:the\s+)?(?:stream\s+)?lore(?:\s+please)?[.!]*$/i,
@@ -215,7 +243,7 @@ async function tryHandleLoreDirective({ channel, rawMessage, displayName, tags =
   if (!parsedDirective.matched) return { matched: false };
 
   const badges = tags.badges || {};
-  const trusted = badges.broadcaster === '1' || tags.mod === true || badges.moderator === '1';
+  const trusted = badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || tags.mod === 1 || badges.moderator === '1';
   if (!trusted) return { matched: false };
 
   const lore = await getStreamLore(channel);
