@@ -35,6 +35,64 @@ function normalizeChannelName(value) {
   return String(value || '').replace(/^#/, '').toLowerCase().trim();
 }
 
+
+function indexKeyMatches(index, expectedKey) {
+  const key = index?.key || {};
+  const actualEntries = Object.entries(key);
+  const expectedEntries = Object.entries(expectedKey);
+  if (actualEntries.length !== expectedEntries.length) return false;
+  return expectedEntries.every(([name, value], idx) => {
+    const actual = actualEntries[idx];
+    return actual?.[0] === name && Number(actual?.[1]) === Number(value);
+  });
+}
+
+function hasDesiredViewerUserIdPartialIndex(index) {
+  if (!indexKeyMatches(index, { channelName: 1, twitchUserId: 1 })) return false;
+  if (index?.unique !== true) return false;
+  if (index?.sparse === true) return false;
+  const filter = index?.partialFilterExpression || {};
+  return filter?.twitchUserId?.$type === 'string';
+}
+
+async function ensureViewerProfileIndexes() {
+  const collection = ViewerProfile.collection;
+  let indexes = [];
+  try {
+    indexes = await collection.indexes();
+  } catch (err) {
+    // A brand-new collection may not exist until the first index/write. createIndex below is enough.
+    if (err?.codeName !== 'NamespaceNotFound' && Number(err?.code) !== 26) throw err;
+  }
+
+  const userIdIndex = indexes.find((index) => indexKeyMatches(index, { channelName: 1, twitchUserId: 1 }));
+  if (userIdIndex && !hasDesiredViewerUserIdPartialIndex(userIdIndex)) {
+    await collection.dropIndex(userIdIndex.name);
+    console.log(`[Viewer Profiles] Replaced legacy Twitch user-ID index ${userIdIndex.name}; null/missing IDs will no longer collide.`);
+  }
+
+  // Normalize legacy empty/null identity values before the new partial index is created.
+  await collection.updateMany(
+    { $or: [{ twitchUserId: null }, { twitchUserId: '' }] },
+    { $unset: { twitchUserId: '' } }
+  );
+
+  await collection.createIndex(
+    { channelName: 1, username: 1 },
+    { unique: true, name: 'channelName_1_username_1' }
+  );
+  await collection.createIndex(
+    { channelName: 1, twitchUserId: 1 },
+    {
+      unique: true,
+      name: 'channelName_1_twitchUserId_1',
+      partialFilterExpression: { twitchUserId: { $type: 'string' } }
+    }
+  );
+
+  console.log('[Viewer Profiles] Identity indexes ready: username unique, Twitch user ID unique only when present.');
+}
+
 function normalizeUsername(value) {
   return String(value || '').replace(/^@+/, '').toLowerCase().trim().replace(/[^a-z0-9_]/g, '');
 }
@@ -998,6 +1056,7 @@ module.exports = {
   MAX_FACTS,
   OPT_OUT_RETENTION_DAYS,
   OPT_OUT_RETENTION_MS,
+  ensureViewerProfileIndexes,
   getViewerProfileSettings,
   saveViewerProfileSettings,
   listViewerProfiles,

@@ -16,7 +16,7 @@ const { getEventReactionHoldStatus } = require('./services/eventReactionHold');
 const { getStreamLore } = require('./services/streamLore');
 const { createBotPersonalityManager } = require('./services/botPersonality');
 const { getRenderedNativeResponse } = require('./services/nativeCommandResponses');
-const { purgeExpiredOptedOutProfiles } = require('./services/viewerProfiles');
+const { ensureViewerProfileIndexes, purgeExpiredOptedOutProfiles } = require('./services/viewerProfiles');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
 const { REQUIRED_ANNOUNCEMENT_SCOPE, sendChatAnnouncement } = require('./services/twitchAnnouncements');
 const {
@@ -621,6 +621,7 @@ registerChatRoutes(app, {
 async function bootstrap() {
   try {
     await connectDatabase();
+    await ensureViewerProfileIndexes();
     databaseConnected = true;
   } catch (err) {
     databaseConnected = false;

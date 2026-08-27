@@ -47,7 +47,15 @@ const viewerProfileSchema = new mongoose.Schema({
   channelName: { type: String, required: true, lowercase: true, trim: true, index: true },
   username: { type: String, required: true, lowercase: true, trim: true },
   displayName: { type: String, default: '', trim: true, maxlength: 80 },
-  twitchUserId: { type: String, default: undefined, trim: true },
+  twitchUserId: {
+    type: String,
+    default: undefined,
+    trim: true,
+    set: (value) => {
+      const normalized = String(value ?? '').trim();
+      return normalized || undefined;
+    }
+  },
   optedOut: { type: Boolean, default: false },
   optedOutAt: { type: Date, default: null },
   profileDataPurgedAt: { type: Date, default: null },
@@ -62,9 +70,19 @@ const viewerProfileSchema = new mongoose.Schema({
   learningEnabled: { type: Boolean, default: true },
   firstSeenAt: { type: Date, default: Date.now },
   lastSeenAt: { type: Date, default: Date.now }
-}, { timestamps: true });
+}, { timestamps: true, autoIndex: false });
 
-viewerProfileSchema.index({ channelName: 1, username: 1 }, { unique: true });
-viewerProfileSchema.index({ channelName: 1, twitchUserId: 1 }, { unique: true, sparse: true });
+viewerProfileSchema.index(
+  { channelName: 1, username: 1 },
+  { unique: true, name: 'channelName_1_username_1' }
+);
+viewerProfileSchema.index(
+  { channelName: 1, twitchUserId: 1 },
+  {
+    unique: true,
+    name: 'channelName_1_twitchUserId_1',
+    partialFilterExpression: { twitchUserId: { $type: 'string' } }
+  }
+);
 
 module.exports = mongoose.models.ViewerProfile || mongoose.model('ViewerProfile', viewerProfileSchema);
