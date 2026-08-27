@@ -5,6 +5,14 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
   let learnedLoreObservations = [];
   let manualLoreEntries = [];
   let manualLoreLimits = { maxEntries: 100, maxTextLength: 2400, maxSubjectLength: 80, maxAliases: 12, maxAliasLength: 80 };
+  let loreDirectiveMaxResponseLength = 500;
+  const DEFAULT_LORE_DIRECTIVE_CONFIG = {
+    enabled: true,
+    sendResponses: true,
+    successResponse: '@$(user), got it — I queued that in Pending Stream Lore for review.',
+    alreadyKnownResponse: '@$(user), that already matches existing Stream Lore.',
+    failureResponse: '@$(user), I couldn\'t turn that into a lore proposal. Give me a little more context.'
+  };
   let approvedLorePage = 1;
   const APPROVED_LORE_PAGE_SIZES = new Set([10, 25, 50]);
   const APPROVED_LORE_SORTS = new Set(['recent_desc', 'text_asc', 'text_desc', 'evidence_desc', 'confidence_desc', 'revision_desc']);
@@ -13,6 +21,7 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
   $('sessionMemoryPromptInstructions').maxLength = sessionMemoryPromptMaxLength;
   const taggedMention = String(botUsername || '').replace(/^@+/, '').trim();
   if ($('botTaggedQuestionMention')) $('botTaggedQuestionMention').textContent = taggedMention ? `@${taggedMention}` : '@<bot_username>';
+  if ($('streamLoreDirectiveMention')) $('streamLoreDirectiveMention').textContent = taggedMention ? `@${taggedMention}` : '@<bot_username>';
 
   $('botPersonalityCooldown').min = 5;
   $('botPersonalityCooldown').max = Number(maxBotPersonalityCooldownSeconds) || 86400;
@@ -70,6 +79,54 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
 
   function syncAiRetryControls() {
     $('botPersonalityRetryCount').disabled = !$('botPersonalityRetryEnabled').checked;
+  }
+
+  function syncLoreDirectiveResponseVisibility() {
+    $('streamLoreDirectiveResponsePanel').hidden = !$('streamLoreDirectiveSendResponses').checked;
+  }
+
+  function setLoreDirectiveSettings(config = {}) {
+    const merged = { ...DEFAULT_LORE_DIRECTIVE_CONFIG, ...(config || {}) };
+    $('streamLoreDirectiveEnabled').checked = merged.enabled !== false;
+    $('streamLoreDirectiveSendResponses').checked = merged.sendResponses !== false;
+    $('streamLoreDirectiveSuccessResponse').value = merged.successResponse ?? DEFAULT_LORE_DIRECTIVE_CONFIG.successResponse;
+    $('streamLoreDirectiveAlreadyKnownResponse').value = merged.alreadyKnownResponse ?? DEFAULT_LORE_DIRECTIVE_CONFIG.alreadyKnownResponse;
+    $('streamLoreDirectiveFailureResponse').value = merged.failureResponse ?? DEFAULT_LORE_DIRECTIVE_CONFIG.failureResponse;
+    for (const id of ['streamLoreDirectiveSuccessResponse', 'streamLoreDirectiveAlreadyKnownResponse', 'streamLoreDirectiveFailureResponse']) {
+      $(id).maxLength = loreDirectiveMaxResponseLength;
+    }
+    syncLoreDirectiveResponseVisibility();
+  }
+
+  function getLoreDirectiveSettings() {
+    return {
+      enabled: $('streamLoreDirectiveEnabled').checked,
+      sendResponses: $('streamLoreDirectiveSendResponses').checked,
+      successResponse: $('streamLoreDirectiveSuccessResponse').value.trim(),
+      alreadyKnownResponse: $('streamLoreDirectiveAlreadyKnownResponse').value.trim(),
+      failureResponse: $('streamLoreDirectiveFailureResponse').value.trim()
+    };
+  }
+
+  async function saveLoreDirectiveSettings() {
+    $('saveStreamLoreDirectiveSettingsBtn').disabled = true;
+    $('streamLoreDirectiveMsg').textContent = 'Saving...';
+    try {
+      const d = await postJson('/stream-lore/directive-settings-save', getLoreDirectiveSettings());
+      if (!d.success) {
+        $('streamLoreDirectiveMsg').textContent = d.error || 'Could not save lore directive settings.';
+        return;
+      }
+      loreDirectiveMaxResponseLength = Number(d.directiveLimits?.maxResponseLength || loreDirectiveMaxResponseLength || 500);
+      setLoreDirectiveSettings(d.directiveConfig || {});
+      $('streamLoreDirectiveMsg').textContent = d.directiveConfig?.enabled === false
+        ? 'Lore directives disabled.'
+        : `Saved. Clear mod/broadcaster lore-save instructions are enabled${d.directiveConfig?.sendResponses === false ? ' without chat confirmations.' : ' with chat confirmations.'}`;
+    } catch (_) {
+      $('streamLoreDirectiveMsg').textContent = 'Could not save lore directive settings.';
+    } finally {
+      $('saveStreamLoreDirectiveSettingsBtn').disabled = false;
+    }
   }
 
   function setAiRetrySettings(aiRetry = {}) {
@@ -229,7 +286,7 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
       return `
       <div class="viewer-profile-fact" data-observation-id="${escLore(observation.id)}" data-review-type="new">
         <div class="viewer-profile-fact-copy">
-          <div class="learned-revision-title"><strong>New AI-learned lore</strong></div>
+          <div class="learned-revision-title"><strong>${observation.origin === 'moderator_directive' ? 'Moderator-directed lore' : 'New AI-learned lore'}</strong></div>
           <div>${escLore(observation.text)}</div>
           <div class="detail">${escLore(observation.confidence || 'medium')} confidence · support ${Math.max(1, Number(observation.evidenceCount || 1))}x across ${windows} window${windows === 1 ? '' : 's'}${refinements ? ` · auto-refined ${refinements}x` : ''}${observation.lastObservedAt ? ` · last ${escLore(new Date(observation.lastObservedAt).toLocaleDateString())}` : ''}</div>
           ${observation.evidenceSummary ? `<div class="detail">${escLore(observation.evidenceSummary)}</div>` : ''}
@@ -426,6 +483,8 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
       const d = await postJson('/stream-lore/get', {});
       if (!d.success) { $('loreMsg').textContent = d.error || 'Could not load lore.'; return; }
       manualLoreLimits = { ...manualLoreLimits, ...(d.manualLimits || {}) };
+      loreDirectiveMaxResponseLength = Number(d.directiveLimits?.maxResponseLength || loreDirectiveMaxResponseLength || 500);
+      setLoreDirectiveSettings(d.directiveConfig || {});
       $('manualLoreText').maxLength = Number(manualLoreLimits.maxTextLength || 2400);
       $('manualLoreSubject').maxLength = Number(manualLoreLimits.maxSubjectLength || 80);
       renderManualLore(d.manualEntries || []);
@@ -577,6 +636,8 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
   $('botPersonalityViewTab').onclick = () => selectMemoryView('personality');
   $('streamLoreAiTab').onclick = () => selectStreamLoreView('ai');
   $('streamLoreManualTab').onclick = () => selectStreamLoreView('manual');
+  $('streamLoreDirectiveSendResponses').onchange = syncLoreDirectiveResponseVisibility;
+  $('saveStreamLoreDirectiveSettingsBtn').onclick = saveLoreDirectiveSettings;
   $('addManualLoreBtn').onclick = () => openManualLoreEditor();
   $('manualLoreScope').onchange = syncManualLoreEditorScope;
   $('manualLoreText').oninput = updateManualLoreTextCount;
@@ -596,6 +657,7 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
   updateSessionMemoryPromptCount();
   syncCooldownResponseVisibility();
   syncAiRetryControls();
+  setLoreDirectiveSettings(DEFAULT_LORE_DIRECTIVE_CONFIG);
   toggleSessionMemoryAdvanced(false);
   selectStreamLoreView('ai');
   selectMemoryView('lore');

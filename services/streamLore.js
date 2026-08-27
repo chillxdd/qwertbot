@@ -23,9 +23,17 @@ const MAX_MANUAL_LORE_ALIASES = 12;
 const MAX_MANUAL_LORE_ALIAS_LENGTH = 80;
 const MAX_LEARNED_LORE = 80;
 const MAX_LEARNED_LORE_LENGTH = 400;
+const MAX_LORE_DIRECTIVE_RESPONSE_LENGTH = 500;
+const DEFAULT_LORE_DIRECTIVE_CONFIG = Object.freeze({
+  enabled: true,
+  sendResponses: true,
+  successResponse: '@$(user), got it — I queued that in Pending Stream Lore for review.',
+  alreadyKnownResponse: '@$(user), that already matches existing Stream Lore.',
+  failureResponse: '@$(user), I couldn\'t turn that into a lore proposal. Give me a little more context.'
+});
 
 function normalizeChannelName(channelName) {
-  return String(channelName || '').toLowerCase().trim();
+  return String(channelName || '').replace(/^#/, '').toLowerCase().trim();
 }
 
 function normalizeObservationText(value) {
@@ -51,6 +59,7 @@ function serializeObservation(observation) {
   const approvalStatus = inferApprovalStatus(observation);
   return {
     id: String(observation?._id || ''),
+    origin: observation?.origin === 'moderator_directive' ? 'moderator_directive' : 'hourly_ai',
     text: String(observation?.text || ''),
     confidence: normalizeConfidence(observation?.confidence),
     evidenceCount: Math.max(1, Number(observation?.evidenceCount || 1)),
@@ -65,6 +74,22 @@ function serializeObservation(observation) {
     revisionProposal: serializeRevisionProposal(observation?.revisionProposal),
     approvalStatus,
     enabled: approvalStatus === 'approved' && observation?.enabled === true
+  };
+}
+
+
+function normalizeLoreDirectiveResponse(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  return String(value).replace(/\r\n/g, '\n').trim().slice(0, MAX_LORE_DIRECTIVE_RESPONSE_LENGTH);
+}
+
+function normalizeLoreDirectiveConfig(value = {}) {
+  return {
+    enabled: value?.enabled !== false,
+    sendResponses: value?.sendResponses !== false,
+    successResponse: normalizeLoreDirectiveResponse(value?.successResponse, DEFAULT_LORE_DIRECTIVE_CONFIG.successResponse),
+    alreadyKnownResponse: normalizeLoreDirectiveResponse(value?.alreadyKnownResponse, DEFAULT_LORE_DIRECTIVE_CONFIG.alreadyKnownResponse),
+    failureResponse: normalizeLoreDirectiveResponse(value?.failureResponse, DEFAULT_LORE_DIRECTIVE_CONFIG.failureResponse)
   };
 }
 
@@ -183,7 +208,7 @@ function buildEffectiveLore(manualEntries = [], learnedObservations = [], source
 
 async function getStreamLore(channelName) {
   const normalizedChannelName = normalizeChannelName(channelName);
-  if (!normalizedChannelName) return { text: '', manualEntries: [], learnedObservations: [], manualText: '', learnedText: '', effectiveText: '', updatedAt: null };
+  if (!normalizedChannelName) return { text: '', manualEntries: [], learnedObservations: [], directiveConfig: normalizeLoreDirectiveConfig(), manualText: '', learnedText: '', effectiveText: '', updatedAt: null };
 
   const doc = await StreamLore.findOne({ channelName: normalizedChannelName }).lean();
   const manualEntries = (Array.isArray(doc?.manualEntries) ? doc.manualEntries : []).map(serializeManualLoreEntry);
@@ -194,6 +219,7 @@ async function getStreamLore(channelName) {
     text,
     manualEntries,
     learnedObservations,
+    directiveConfig: normalizeLoreDirectiveConfig(doc?.loreDirectives || {}),
     manualText: buildManualLoreContext(manualEntries, '', { includeAllSubjects: true }),
     learnedText: buildLearnedLoreText(learnedObservations),
     effectiveText: buildEffectiveLore(manualEntries, learnedObservations, '', { includeAllSubjects: true }),
@@ -203,6 +229,18 @@ async function getStreamLore(channelName) {
 
 // Legacy blob save endpoint retained so older deployments/UI requests fail gracefully.
 // The legacy text is no longer included in Tagged Question or recap AI context.
+async function saveLoreDirectiveConfig(channelName, input = {}) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) throw new Error('TWITCH_CHANNEL is not configured.');
+  const config = normalizeLoreDirectiveConfig(input);
+  await StreamLore.findOneAndUpdate(
+    { channelName: channel },
+    { $set: { loreDirectives: config } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  return config;
+}
+
 async function saveStreamLore(channelName, text) {
   const normalizedChannelName = normalizeChannelName(channelName);
   if (!normalizedChannelName) throw new Error('TWITCH_CHANNEL is not configured.');
@@ -318,6 +356,7 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     const confidence = normalizeConfidence(raw?.confidence);
     const supportCount = Math.max(1, Math.min(8, Number(raw?.supportCount || 1)));
     const reason = normalizeRevisionReason(raw?.reason);
+    const origin = raw?.origin === 'moderator_directive' ? 'moderator_directive' : 'hourly_ai';
     if (text && containsPromptInjectionLanguage(text)) { stats.skipped++; continue; }
 
     const match = resolveLoreObservationMatch(doc, raw, text);
@@ -325,6 +364,7 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     if (match) {
       if (!['approved', 'pending'].includes(match.approvalStatus)) match.approvalStatus = match.enabled === true ? 'approved' : 'pending';
       const status = inferApprovalStatus(match);
+      if (origin === 'moderator_directive' && status === 'pending') match.origin = 'moderator_directive';
       const key = String(match._id || match.id || match.text);
 
       if (relation === 'new') relation = text && !textsEquivalent(match.text, text) ? 'refine' : 'support';
@@ -405,13 +445,16 @@ async function applyStreamLoreObservations(channelName, observations = []) {
       continue;
     }
     doc.learnedObservations.push({
+      origin,
       text,
       confidence,
       evidenceCount: supportCount,
       supportingWindowCount: 1,
       contradictionCount: 0,
       revisionCount: 0,
-      evidenceSummary: `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} across 1 learning window.`,
+      evidenceSummary: origin === 'moderator_directive'
+        ? 'Proposed from an explicit moderator/broadcaster lore directive; awaiting review.'
+        : `Supported by ${supportCount} source-chat message${supportCount === 1 ? '' : 's'} across 1 learning window.`,
       firstObservedAt: now,
       lastObservedAt: now,
       approvalStatus: 'pending',
@@ -513,7 +556,11 @@ module.exports = {
   MAX_MANUAL_LORE_ALIASES,
   MAX_MANUAL_LORE_ALIAS_LENGTH,
   MAX_LEARNED_LORE,
+  MAX_LORE_DIRECTIVE_RESPONSE_LENGTH,
+  DEFAULT_LORE_DIRECTIVE_CONFIG,
   getStreamLore,
+  normalizeLoreDirectiveConfig,
+  saveLoreDirectiveConfig,
   saveStreamLore,
   saveManualLoreEntry,
   setManualLoreEntryEnabled,

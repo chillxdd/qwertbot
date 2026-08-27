@@ -1,4 +1,4 @@
-const { MAX_STREAM_LORE_LENGTH, MAX_MANUAL_LORE_ENTRIES, MAX_MANUAL_LORE_TEXT_LENGTH, MAX_MANUAL_LORE_SUBJECT_LENGTH, MAX_MANUAL_LORE_ALIASES, MAX_MANUAL_LORE_ALIAS_LENGTH, getStreamLore, saveStreamLore, saveManualLoreEntry, setManualLoreEntryEnabled, deleteManualLoreEntry, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
+const { MAX_STREAM_LORE_LENGTH, MAX_MANUAL_LORE_ENTRIES, MAX_MANUAL_LORE_TEXT_LENGTH, MAX_MANUAL_LORE_SUBJECT_LENGTH, MAX_MANUAL_LORE_ALIASES, MAX_MANUAL_LORE_ALIAS_LENGTH, MAX_LORE_DIRECTIVE_RESPONSE_LENGTH, getStreamLore, saveLoreDirectiveConfig, saveStreamLore, saveManualLoreEntry, setManualLoreEntryEnabled, deleteManualLoreEntry, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
 const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, approveViewerFact, rejectViewerFact, acceptViewerFactRevision, dismissViewerFactRevision, setFactEnabled, deleteViewerFact, deleteViewerProfile } = require('../services/viewerProfiles');
 
 function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
@@ -8,7 +8,7 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     }
     try {
       const lore = await getStreamLore(channelName);
-      return res.json({ success: true, text: lore.text, manualEntries: lore.manualEntries, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH, manualLimits: { maxEntries: MAX_MANUAL_LORE_ENTRIES, maxTextLength: MAX_MANUAL_LORE_TEXT_LENGTH, maxSubjectLength: MAX_MANUAL_LORE_SUBJECT_LENGTH, maxAliases: MAX_MANUAL_LORE_ALIASES, maxAliasLength: MAX_MANUAL_LORE_ALIAS_LENGTH } });
+      return res.json({ success: true, text: lore.text, manualEntries: lore.manualEntries, learnedObservations: lore.learnedObservations, directiveConfig: lore.directiveConfig, directiveLimits: { maxResponseLength: MAX_LORE_DIRECTIVE_RESPONSE_LENGTH }, updatedAt: lore.updatedAt, maxLength: MAX_STREAM_LORE_LENGTH, manualLimits: { maxEntries: MAX_MANUAL_LORE_ENTRIES, maxTextLength: MAX_MANUAL_LORE_TEXT_LENGTH, maxSubjectLength: MAX_MANUAL_LORE_SUBJECT_LENGTH, maxAliases: MAX_MANUAL_LORE_ALIASES, maxAliasLength: MAX_MANUAL_LORE_ALIAS_LENGTH } });
     } catch (err) {
       console.error('[Memory] Could not load stream-specific lore:', err.message || err);
       return res.status(500).json({ success: false, error: 'Could not load stream-specific lore.' });
@@ -33,6 +33,18 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
     }
   });
 
+
+  app.post('/stream-lore/directive-settings-save', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const directiveConfig = await saveLoreDirectiveConfig(channelName, req.body || {});
+      console.log(`[Lore Directive] Settings saved. Enabled=${directiveConfig.enabled}; responses=${directiveConfig.sendResponses}.`);
+      return res.json({ success: true, directiveConfig, directiveLimits: { maxResponseLength: MAX_LORE_DIRECTIVE_RESPONSE_LENGTH } });
+    } catch (err) {
+      console.error('[Lore Directive] Could not save settings:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not save lore directive settings.' });
+    }
+  });
 
   app.post('/stream-lore/manual-entry-save', requireModSession, async (req, res) => {
     if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });

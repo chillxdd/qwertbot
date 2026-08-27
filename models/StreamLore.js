@@ -13,6 +13,7 @@ const learnedLoreRevisionSchema = new mongoose.Schema({
 }, { _id: false });
 
 const learnedLoreObservationSchema = new mongoose.Schema({
+  origin: { type: String, enum: ['hourly_ai', 'moderator_directive'], default: 'hourly_ai' },
   text: { type: String, required: true, maxlength: 400 },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
@@ -29,6 +30,27 @@ const learnedLoreObservationSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: false }
 }, { _id: true });
 
+
+
+const loreDirectiveConfigSchema = new mongoose.Schema({
+  enabled: { type: Boolean, default: true },
+  sendResponses: { type: Boolean, default: true },
+  successResponse: {
+    type: String,
+    default: '@$(user), got it — I queued that in Pending Stream Lore for review.',
+    maxlength: 500
+  },
+  alreadyKnownResponse: {
+    type: String,
+    default: '@$(user), that already matches existing Stream Lore.',
+    maxlength: 500
+  },
+  failureResponse: {
+    type: String,
+    default: '@$(user), I couldn\'t turn that into a lore proposal. Give me a little more context.',
+    maxlength: 500
+  }
+}, { _id: false });
 
 const manualLoreEntrySchema = new mongoose.Schema({
   scope: { type: String, enum: ['global', 'subject'], default: 'global' },
@@ -55,7 +77,8 @@ const streamLoreSchema = new mongoose.Schema({
     maxlength: 12000
   },
   manualEntries: { type: [manualLoreEntrySchema], default: [] },
-  learnedObservations: { type: [learnedLoreObservationSchema], default: [] }
+  learnedObservations: { type: [learnedLoreObservationSchema], default: [] },
+  loreDirectives: { type: loreDirectiveConfigSchema, default: () => ({}) }
 }, {
   timestamps: true
 });

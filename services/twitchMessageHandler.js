@@ -1,4 +1,5 @@
 const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
+const { tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
 
 const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
@@ -187,12 +188,37 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
       if (chatTimerManager?.consumeOwnResponse(rawMessage)) return;
       if (botPersonalityManager?.consumeOwnResponse(rawMessage)) return;
+      if (consumeLoreDirectiveResponse(rawMessage)) return;
       recapManager.recordChatMessage({ displayName, rawMessage });
       return;
     }
 
     // Count real viewer chat once for timer activity gates. Bot/system messages were filtered above.
     chatTimerManager?.recordViewerActivity?.();
+
+    // A trusted mod/broadcaster can explicitly ask the bot to save/remember Stream Lore
+    // by tagging it without a trailing question mark. This is a separate side-path from
+    // Tagged Questions. Recognized directives still remain ordinary recap/session-memory
+    // source, but only the directive handler can create an immediate pending lore proposal.
+    try {
+      const loreDirectiveResult = await tryHandleLoreDirective({
+        channel,
+        rawMessage,
+        displayName,
+        tags,
+        botUsername,
+        recapManager,
+        sendMessage
+      });
+      if (loreDirectiveResult?.matched) {
+        recapManager.recordChatMessage({ displayName, rawMessage });
+        return;
+      }
+    } catch (err) {
+      console.error(`[Lore Directive] Unexpected directive handler failure for ${displayName}:`, err?.message || err);
+      recapManager.recordChatMessage({ displayName, rawMessage });
+      return;
+    }
 
     if (botPersonalityManager) {
       try {
