@@ -1,4 +1,4 @@
-const { setViewerProfileOptOut, recordViewerCommandUsage } = require('./viewerProfiles');
+const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
 
 const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
@@ -164,6 +164,20 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     if (POKEMON_COMMUNITY_GAME_USERNAMES.has(username)) return;
     if (isPokemonCommunityGameCommand(rawMessage)) return;
     if (isBotHourlyRecap(username, rawMessage)) return;
+
+    // Twitch user ID is the stable viewer identity. Keep an existing Viewer Profile
+    // synchronized with the mutable login/display name before any Tagged Question or
+    // learning path can use it. The service caches stable identities, so this does not
+    // become a Mongo query on every message once a viewer is synchronized.
+    try {
+      await syncViewerIdentity(channel, {
+        username,
+        displayName,
+        twitchUserId: tags['user-id'] || ''
+      });
+    } catch (err) {
+      console.error(`[Viewer Profiles] Could not synchronize Twitch identity for ${displayName}:`, err?.message || err);
+    }
 
     const customCommandManager = typeof getCustomCommandManager === 'function' ? getCustomCommandManager() : null;
     const chatTimerManager = typeof getChatTimerManager === 'function' ? getChatTimerManager() : null;

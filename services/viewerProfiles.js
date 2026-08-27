@@ -27,6 +27,9 @@ const FAKE_COMMAND_BEHAVIOR_MIN_DISTINCT = 2;
 const FAKE_COMMAND_BEHAVIOR_FACT = 'Frequently uses fake or unrecognized !commands in chat.';
 const OPT_OUT_RETENTION_DAYS = 30;
 const OPT_OUT_RETENTION_MS = OPT_OUT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const VIEWER_IDENTITY_POSITIVE_CACHE_MS = 6 * 60 * 60 * 1000;
+const VIEWER_IDENTITY_NEGATIVE_CACHE_MS = 5 * 60 * 1000;
+const viewerIdentityCache = new Map();
 
 function normalizeChannelName(value) {
   return String(value || '').replace(/^#/, '').toLowerCase().trim();
@@ -54,6 +57,204 @@ function normalizeAliases(value) {
     if (out.length >= MAX_ALIASES) break;
   }
   return out;
+}
+
+function mergeIdentityAliases(existingAliases, previousUsername, previousDisplayName, currentUsername, currentDisplayName) {
+  const currentKeys = new Set([
+    normalizeUsername(currentUsername),
+    normalizeDisplayName(currentDisplayName).toLowerCase()
+  ].filter(Boolean));
+  const aliases = normalizeAliases(existingAliases).filter((alias) => !currentKeys.has(alias.toLowerCase()));
+
+  for (const candidate of [previousUsername, previousDisplayName]) {
+    const alias = String(candidate || '').replace(/^@+/, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!alias || currentKeys.has(alias.toLowerCase())) continue;
+    if (aliases.some((existing) => existing.toLowerCase() === alias.toLowerCase())) continue;
+    if (aliases.length >= MAX_ALIASES) aliases.pop();
+    aliases.push(alias);
+  }
+  return aliases;
+}
+
+function applyViewerIdentity(profile, { username, displayName, twitchUserId, now = new Date() } = {}) {
+  if (!profile) return { changed: false, renamed: false, oldUsername: '', oldDisplayName: '' };
+  const normalizedUsername = normalizeUsername(username);
+  const normalizedDisplayName = normalizeDisplayName(displayName) || normalizedUsername;
+  const normalizedUserId = String(twitchUserId || '').trim();
+  if (!normalizedUsername) return { changed: false, renamed: false, oldUsername: '', oldDisplayName: '' };
+
+  const oldUsername = normalizeUsername(profile.username);
+  const oldDisplayName = normalizeDisplayName(profile.displayName) || oldUsername;
+  const renamed = Boolean(oldUsername && oldUsername !== normalizedUsername);
+  const displayChanged = Boolean(normalizedDisplayName && oldDisplayName !== normalizedDisplayName);
+  const userIdChanged = Boolean(normalizedUserId && String(profile.twitchUserId || '') !== normalizedUserId);
+
+  if (renamed && !profile.profileDataPurgedAt) {
+    profile.aliases = mergeIdentityAliases(
+      profile.aliases,
+      oldUsername,
+      oldDisplayName,
+      normalizedUsername,
+      normalizedDisplayName
+    );
+  } else if (Array.isArray(profile.aliases)) {
+    const currentKeys = new Set([normalizedUsername, normalizedDisplayName.toLowerCase()].filter(Boolean));
+    profile.aliases = normalizeAliases(profile.aliases).filter((alias) => !currentKeys.has(alias.toLowerCase()));
+  }
+
+  profile.username = normalizedUsername;
+  profile.displayName = normalizedDisplayName;
+  if (normalizedUserId) profile.twitchUserId = normalizedUserId;
+  profile.lastSeenAt = now;
+
+  return {
+    changed: renamed || displayChanged || userIdChanged,
+    renamed,
+    oldUsername,
+    oldDisplayName,
+    username: normalizedUsername,
+    displayName: normalizedDisplayName,
+    twitchUserId: normalizedUserId
+  };
+}
+
+async function syncViewerIdentity(channelName, { username, displayName, twitchUserId } = {}) {
+  const channel = normalizeChannelName(channelName);
+  const normalizedUsername = normalizeUsername(username);
+  const normalizedDisplayName = normalizeDisplayName(displayName) || normalizedUsername;
+  const normalizedUserId = String(twitchUserId || '').trim();
+  if (!channel || !normalizedUsername || !normalizedUserId) {
+    return { synced: false, profileFound: false, reason: 'missing_identity' };
+  }
+
+  const cacheKey = `${channel}:${normalizedUserId}`;
+  const nowMs = Date.now();
+  const cached = viewerIdentityCache.get(cacheKey) || null;
+  const sameCachedIdentity = Boolean(
+    cached &&
+    cached.username === normalizedUsername &&
+    cached.displayName === normalizedDisplayName
+  );
+  const cacheTtl = cached?.profileFound ? VIEWER_IDENTITY_POSITIVE_CACHE_MS : VIEWER_IDENTITY_NEGATIVE_CACHE_MS;
+  if (sameCachedIdentity && (nowMs - Number(cached.checkedAt || 0)) < cacheTtl) {
+    return { synced: false, cached: true, profileFound: cached.profileFound === true, renamed: false };
+  }
+
+  await purgeExpiredOptedOutProfiles(channel);
+
+  // Twitch user ID is the canonical identity. Username is only the current mutable login.
+  let profile = await ViewerProfile.findOne({ channelName: channel, twitchUserId: normalizedUserId });
+
+  // Legacy profiles may predate twitchUserId storage. Bind them on their current username.
+  if (!profile) {
+    profile = await ViewerProfile.findOne({ channelName: channel, username: normalizedUsername });
+  }
+
+  // If this process previously saw the same Twitch user ID under an older login, that old
+  // login is safe to use as a bridge for a legacy profile that still lacks twitchUserId.
+  if (!profile && cached?.username && cached.username !== normalizedUsername) {
+    profile = await ViewerProfile.findOne({
+      channelName: channel,
+      username: cached.username,
+      $or: [
+        { twitchUserId: normalizedUserId },
+        { twitchUserId: { $exists: false } },
+        { twitchUserId: null },
+        { twitchUserId: '' }
+      ]
+    });
+  }
+
+  if (!profile) {
+    viewerIdentityCache.set(cacheKey, {
+      username: normalizedUsername,
+      displayName: normalizedDisplayName,
+      checkedAt: nowMs,
+      profileFound: false
+    });
+    return { synced: false, profileFound: false, reason: 'no_profile' };
+  }
+
+  const storedUserId = String(profile.twitchUserId || '').trim();
+  if (storedUserId && storedUserId !== normalizedUserId) {
+    console.error(`[Viewer Profiles] Identity conflict for @${normalizedUsername}: profile has Twitch user ID ${storedUserId}, chat message has ${normalizedUserId}.`);
+    viewerIdentityCache.set(cacheKey, {
+      username: normalizedUsername,
+      displayName: normalizedDisplayName,
+      checkedAt: nowMs,
+      profileFound: false
+    });
+    return { synced: false, profileFound: false, reason: 'user_id_conflict' };
+  }
+
+  const oldUsername = normalizeUsername(profile.username);
+  if (oldUsername && oldUsername !== normalizedUsername) {
+    const usernameConflict = await ViewerProfile.findOne({
+      channelName: channel,
+      username: normalizedUsername,
+      _id: { $ne: profile._id }
+    }).lean();
+
+    if (usernameConflict) {
+      const conflictingUserId = String(usernameConflict.twitchUserId || '').trim();
+      // Never merge two records automatically when they can represent different Twitch accounts.
+      // Keep the canonical user-ID profile intact, but add the current login as an alias so
+      // Tagged Questions still resolve it while the conflict is visible in logs for manual review.
+      if (!profile.profileDataPurgedAt) {
+        profile.aliases = mergeIdentityAliases(
+          profile.aliases,
+          oldUsername,
+          profile.displayName,
+          oldUsername,
+          profile.displayName
+        );
+        const currentAlias = normalizeAliases([normalizedUsername])[0];
+        if (currentAlias && !profile.aliases.some((alias) => alias.toLowerCase() === currentAlias.toLowerCase())) {
+          if (profile.aliases.length >= MAX_ALIASES) profile.aliases.pop();
+          profile.aliases.push(currentAlias);
+        }
+      }
+      profile.displayName = normalizedDisplayName;
+      profile.twitchUserId = normalizedUserId;
+      profile.lastSeenAt = new Date(nowMs);
+      await profile.save();
+      console.error(`[Viewer Profiles] Could not rename @${oldUsername} to @${normalizedUsername} because another profile already uses that username${conflictingUserId ? ` (Twitch user ID ${conflictingUserId})` : ''}. Current login was retained as an alias instead.`);
+      viewerIdentityCache.set(cacheKey, {
+        username: normalizedUsername,
+        displayName: normalizedDisplayName,
+        checkedAt: nowMs,
+        profileFound: true
+      });
+      return { synced: true, profileFound: true, renamed: false, conflict: true };
+    }
+  }
+
+  const identityResult = applyViewerIdentity(profile, {
+    username: normalizedUsername,
+    displayName: normalizedDisplayName,
+    twitchUserId: normalizedUserId,
+    now: new Date(nowMs)
+  });
+  await profile.save();
+
+  if (identityResult.renamed) {
+    console.log(`[Viewer Profiles] Twitch rename detected: @${identityResult.oldUsername} -> @${normalizedUsername} (user ID ${normalizedUserId}). Old username kept as an alias.`);
+  }
+
+  viewerIdentityCache.set(cacheKey, {
+    username: normalizedUsername,
+    displayName: normalizedDisplayName,
+    checkedAt: nowMs,
+    profileFound: true
+  });
+
+  return {
+    synced: true,
+    profileFound: true,
+    renamed: identityResult.renamed,
+    oldUsername: identityResult.oldUsername,
+    username: normalizedUsername
+  };
 }
 
 function normalizeFactText(value) {
@@ -214,10 +415,17 @@ async function setViewerProfileOptOut(channelName, { username, displayName, twit
   if (!channel || !normalizedUsername) throw new Error('A valid channel and Twitch username are required.');
 
   await purgeExpiredOptedOutProfiles(channel);
-  const identityQuery = normalizedUserId
-    ? { channelName: channel, $or: [{ twitchUserId: normalizedUserId }, { username: normalizedUsername }] }
-    : { channelName: channel, username: normalizedUsername };
-  let profile = await ViewerProfile.findOne(identityQuery);
+  let profile = null;
+  if (normalizedUserId) {
+    profile = await ViewerProfile.findOne({ channelName: channel, twitchUserId: normalizedUserId });
+    if (!profile) {
+      const usernameProfile = await ViewerProfile.findOne({ channelName: channel, username: normalizedUsername });
+      const usernameProfileUserId = String(usernameProfile?.twitchUserId || '').trim();
+      if (!usernameProfileUserId || usernameProfileUserId === normalizedUserId) profile = usernameProfile;
+    }
+  } else {
+    profile = await ViewerProfile.findOne({ channelName: channel, username: normalizedUsername });
+  }
   const existedBefore = Boolean(profile);
   if (!profile) profile = new ViewerProfile({ channelName: channel, username: normalizedUsername, firstSeenAt: new Date() });
 
@@ -226,10 +434,12 @@ async function setViewerProfileOptOut(channelName, { username, displayName, twit
   const withinRetention = Boolean(profile.optedOut === true && previousOptedOutAt && !profile.profileDataPurgedAt && (now.getTime() - previousOptedOutAt.getTime()) < OPT_OUT_RETENTION_MS);
   const canReactivate = Boolean(withinRetention && profile.profileRetainedOnOptOut === true);
 
-  profile.username = normalizedUsername;
-  profile.displayName = normalizedDisplayName;
-  if (normalizedUserId) profile.twitchUserId = normalizedUserId;
-  profile.lastSeenAt = now;
+  applyViewerIdentity(profile, {
+    username: normalizedUsername,
+    displayName: normalizedDisplayName,
+    twitchUserId: normalizedUserId,
+    now
+  });
 
   if (optedOut) {
     if (profile.optedOut !== true) {
@@ -321,10 +531,17 @@ async function recordViewerCommandUsage(channelName, { username, displayName, tw
   const excludedUsers = new Set([channel, 'sqwertarmybot', 'nightbot', 'streamelements', 'pokemoncommunitygame']);
   if (excludedUsers.has(normalizedUsername)) return { recorded: false };
 
-  const identityQuery = normalizedUserId
-    ? { channelName: channel, $or: [{ twitchUserId: normalizedUserId }, { username: normalizedUsername }] }
-    : { channelName: channel, username: normalizedUsername };
-  let profile = await ViewerProfile.findOne(identityQuery);
+  let profile = null;
+  if (normalizedUserId) {
+    profile = await ViewerProfile.findOne({ channelName: channel, twitchUserId: normalizedUserId });
+    if (!profile) {
+      const usernameProfile = await ViewerProfile.findOne({ channelName: channel, username: normalizedUsername });
+      const usernameProfileUserId = String(usernameProfile?.twitchUserId || '').trim();
+      if (!usernameProfileUserId || usernameProfileUserId === normalizedUserId) profile = usernameProfile;
+    }
+  } else {
+    profile = await ViewerProfile.findOne({ channelName: channel, username: normalizedUsername });
+  }
   if (profile?.optedOut === true || profile?.learningEnabled === false) return { recorded: false };
 
   if (!profile) {
@@ -338,10 +555,12 @@ async function recordViewerCommandUsage(channelName, { username, displayName, tw
   }
 
   const now = new Date();
-  profile.username = normalizedUsername;
-  profile.displayName = normalizedDisplayName || profile.displayName || normalizedUsername;
-  if (normalizedUserId) profile.twitchUserId = normalizedUserId;
-  profile.lastSeenAt = now;
+  applyViewerIdentity(profile, {
+    username: normalizedUsername,
+    displayName: normalizedDisplayName,
+    twitchUserId: normalizedUserId,
+    now
+  });
   if (!Array.isArray(profile.commandUsage)) profile.commandUsage = [];
 
   let usage = profile.commandUsage.find((entry) => String(entry.command || '').toLowerCase() === normalizedCommand);
@@ -792,6 +1011,7 @@ module.exports = {
   deleteViewerFact,
   deleteViewerProfile,
   setViewerProfileOptOut,
+  syncViewerIdentity,
   recordViewerCommandUsage,
   purgeExpiredOptedOutProfiles,
   getViewerLearningContext,
