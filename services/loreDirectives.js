@@ -53,6 +53,24 @@ function stripCourtesyTail(value) {
   return text.replace(/[.!]+\s*$/g, '').trim();
 }
 
+// Once an explicit save-to-lore command has already been recognized, allow a short
+// conversational courtesy/snark tail after the word "lore". This keeps directives
+// natural ("..., please thanks clanker") without turning arbitrary tagged chatter
+// into commands. A tail must begin with a courtesy marker and cannot contain
+// negation, a question, or another action-like clause.
+function isAllowedDirectiveTail(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return true;
+  if (raw.includes('?')) return false;
+
+  const tail = raw.replace(/^[\s,!.:\-/]+/, '').trim();
+  if (!tail) return true;
+  if (!/^(?:please|pls|thanks|thank\s+you|ty)\b/i.test(tail)) return false;
+  if (/\b(?:not|don't|dont|never|cancel|ignore|instead|actually\s+don't|actually\s+dont)\b/i.test(tail)) return false;
+  if (/\b(?:add|save|store|put|learn|remember|delete|remove|forget|change|edit)\b/i.test(tail.replace(/^(?:please|pls|thanks|thank\s+you|ty)\b/i, ''))) return false;
+  return tail.length <= 100;
+}
+
 // Keep lore directives deterministic, but allow normal conversational lead-ins before
 // the actual save/learn command. This intentionally strips only a small allowlist of
 // wrappers rather than searching for a lore command anywhere in the message, which
@@ -93,8 +111,21 @@ function parseLoreDirective(rawMessage, botUsername) {
     return { matched: false };
   }
 
+  // Handle the most common explicit form separately so a natural courtesy tail
+  // after "lore" does not make an otherwise valid directive disappear.
+  const saveToLoreMatch = commandBody.match(
+    /^(?:please\s+)?(?:add|save|store|put)\s+(.+?)\s+(?:to|in|into)\s+(?:the\s+)?(?:stream\s+)?lore\b(.*)$/i
+  );
+  if (saveToLoreMatch && isAllowedDirectiveTail(saveToLoreMatch[2])) {
+    const target = stripCourtesyTail(saveToLoreMatch[1]);
+    return {
+      matched: true,
+      body: commandBody,
+      target: normalizeWhitespace(target).slice(0, MAX_DIRECTIVE_TEXT_LENGTH)
+    };
+  }
+
   const patterns = [
-    /^(?:please\s+)?(?:add|save|store|put)\s+(.+?)\s+(?:to|in|into)\s+(?:the\s+)?(?:stream\s+)?lore(?:\s+please)?[.!]*$/i,
     /^(?:please\s+)?(?:add|save|store|put)\s+(?:this|that)\s+(?:to|in|into)\s+(?:the\s+)?(?:stream\s+)?lore\s*[:\-]\s*(.+?)[.!]*$/i,
     /^(?:please\s+)?(?:add|save|store|put)\s+(?:to|in|into)\s+(?:the\s+)?(?:stream\s+)?lore\s*[:\-]\s*(.+?)[.!]*$/i,
     /^(?:please\s+)?(?:learn|remember)\s+(.+?)(?:\s+(?:as|for)\s+(?:the\s+)?(?:stream\s+)?lore)?[.!]*$/i,
