@@ -741,6 +741,16 @@
             <div class="learned-review-section learned-review-pending">
               <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
               <div class="detail">Review both newly discovered lore and suggested revisions here. New lore can automatically refine while pending. Revision cards show the current approved wording beside the AI suggestion before you Accept Revision or Keep Current.</div>
+              <div class="pending-confidence-filter-row">
+                <label class="custom-command-sort-label" for="streamLorePendingConfidenceFilter">Confidence
+                  <select id="streamLorePendingConfidenceFilter" aria-label="Filter pending stream lore by confidence">
+                    <option value="all">All</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+              </div>
               <div id="streamLorePendingList" class="viewer-profile-facts stream-lore-observations"></div>
             </div>
 
@@ -993,6 +1003,16 @@
           <div class="learned-review-section learned-review-pending viewer-profile-global-pending-review">
             <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending reviews</span></div>
             <div class="detail">Review newly learned viewer observations and suggested revisions here without opening each profile. Each item shows the viewer it belongs to. New observations use Approve/Reject; revisions use Accept Revision/Keep Current.</div>
+            <div class="pending-confidence-filter-row">
+              <label class="custom-command-sort-label" for="viewerProfilePendingConfidenceFilter">Confidence
+                <select id="viewerProfilePendingConfidenceFilter" aria-label="Filter pending viewer observations by confidence">
+                  <option value="all">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+            </div>
             <div id="viewerProfilePendingReviewList" class="viewer-profile-facts viewer-profile-global-pending-list"></div>
             <div id="viewerProfilePendingReviewMsg" class="detail"></div>
           </div>
@@ -1104,6 +1124,16 @@
             <div class="learned-review-section learned-review-pending viewer-profile-pending-review">
               <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingFactCount" class="detail">0 pending reviews</span></div>
               <div class="detail">This review queue contains both new observations and suggested revisions for this viewer. New observations can automatically refine while pending. Revision cards show the current approved wording beside the suggestion before you Accept Revision or Keep Current.</div>
+              <div class="pending-confidence-filter-row">
+                <label class="custom-command-sort-label" for="viewerProfilePendingFactConfidenceFilter">Confidence
+                  <select id="viewerProfilePendingFactConfidenceFilter" aria-label="Filter this viewer's pending observations by confidence">
+                    <option value="all">All</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+              </div>
               <div id="viewerProfilePendingFacts" class="viewer-profile-facts"></div>
             </div>
             <div class="custom-editor-actions">

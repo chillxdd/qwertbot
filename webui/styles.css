@@ -598,6 +598,9 @@ button.success{background:#16834a}
 .learned-review-pending{margin-top:20px}
 .learned-review-pending .viewer-profile-facts{margin-top:10px}
 .learned-review-pending .viewer-profile-fact{border-color:#3a3430}
+.pending-confidence-filter-row{display:flex;justify-content:flex-end;align-items:center;margin-top:10px}
+.pending-confidence-filter-row .custom-command-sort-label select{min-width:140px}
+@media(max-width:600px){.pending-confidence-filter-row{justify-content:flex-start}.pending-confidence-filter-row .custom-command-sort-label{width:100%}.pending-confidence-filter-row .custom-command-sort-label select{width:100%;min-width:0}}
 .viewer-profile-learned-review .custom-command-list-controls{max-width:100%}
 .viewer-profile-dialog .learned-review-header{display:flex;flex-wrap:wrap;gap:12px}
 .viewer-profile-dialog .learned-review-header>.custom-command-list-controls{margin-left:auto;flex-wrap:wrap}

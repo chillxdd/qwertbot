@@ -9,6 +9,9 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
   const FACT_SORTS = new Set(['recent_desc', 'text_asc', 'text_desc', 'evidence_desc', 'confidence_desc', 'revision_desc']);
   const PAGE_SIZE_STORAGE_KEY = 'sqwert-viewer-profile-page-size';
   const SORT_STORAGE_KEY = 'sqwert-viewer-profile-sort';
+  const PENDING_CONFIDENCE_FILTERS = new Set(['all', 'high', 'medium', 'low']);
+  const PENDING_CONFIDENCE_STORAGE_KEY = 'sqwert-viewer-pending-confidence-filter';
+  const PENDING_FACT_CONFIDENCE_STORAGE_KEY = 'sqwert-viewer-profile-pending-confidence-filter';
   const VALID_PAGE_SIZES = new Set([10, 25, 50]);
   const VALID_SORTS = new Set(['updated_desc', 'name_asc', 'name_desc', 'facts_desc']);
   const dialog = $('viewerProfileDialog');
@@ -38,6 +41,21 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     el.classList.toggle('bad', Boolean(isError));
   }
 
+  function selectedPendingConfidence() {
+    const value = String($('viewerProfilePendingConfidenceFilter')?.value || 'all').toLowerCase();
+    return PENDING_CONFIDENCE_FILTERS.has(value) ? value : 'all';
+  }
+
+  function selectedPendingFactConfidence() {
+    const value = String($('viewerProfilePendingFactConfidenceFilter')?.value || 'all').toLowerCase();
+    return PENDING_CONFIDENCE_FILTERS.has(value) ? value : 'all';
+  }
+
+  function pendingReviewConfidence(type, fact) {
+    if (type === 'revision') return String(fact?.revisionProposal?.confidence || 'medium').toLowerCase();
+    return String(fact?.confidence || 'medium').toLowerCase();
+  }
+
   function pendingReviewsAcrossProfiles() {
     return profiles.flatMap((profile) => {
       const facts = Array.isArray(profile.facts) ? profile.facts : [];
@@ -55,8 +73,14 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     const listEl = $('viewerProfilePendingReviewList');
     const countEl = $('viewerProfilePendingReviewCount');
     if (!listEl || !countEl) return;
-    const pending = pendingReviewsAcrossProfiles();
-    countEl.textContent = `${pending.length} pending review${pending.length === 1 ? '' : 's'}`;
+    const pendingAll = pendingReviewsAcrossProfiles();
+    const pendingConfidence = selectedPendingConfidence();
+    const pending = pendingConfidence === 'all'
+      ? pendingAll
+      : pendingAll.filter(({ type, fact }) => pendingReviewConfidence(type, fact) === pendingConfidence);
+    countEl.textContent = pendingConfidence === 'all'
+      ? `${pendingAll.length} pending review${pendingAll.length === 1 ? '' : 's'}`
+      : `${pending.length} of ${pendingAll.length} pending reviews`;
     listEl.innerHTML = pending.length ? pending.map(({ type, profile, fact }) => {
       const displayName = profile.displayName || profile.username || 'Unknown viewer';
       const disabled = profile.optedOut === true ? 'disabled' : '';
@@ -97,7 +121,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
           <button class="danger viewer-global-fact-reject" type="button" ${disabled}>Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No pending AI viewer observations or suggested revisions.</div>';
+    }).join('') : `<div class="detail custom-empty-state">${pendingConfidence === 'all' ? 'No pending AI viewer observations or suggested revisions.' : `No ${esc(pendingConfidence)}-confidence pending viewer observations or revisions.`}</div>`;
 
     listEl.querySelectorAll('.viewer-global-fact-approve, .viewer-global-fact-reject').forEach((button) => {
       button.onclick = async () => {
@@ -269,13 +293,19 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     const approvedAll = currentProfileFacts.filter((fact) => factApprovalStatus(fact) === 'approved');
     const pendingNew = currentProfileFacts.filter((fact) => factApprovalStatus(fact) === 'pending');
     const pendingRevisions = approvedAll.filter((fact) => fact.source !== 'deterministic' && fact.revisionProposal?.text);
-    const pendingReviews = [
+    const pendingReviewsAll = [
       ...pendingNew.map((fact) => ({ type: 'new', fact, sortAt: fact.lastObservedAt || fact.firstObservedAt })),
       ...pendingRevisions.map((fact) => ({ type: 'revision', fact, sortAt: fact.revisionProposal?.lastProposedAt || fact.lastObservedAt || fact.firstObservedAt }))
     ].sort((a, b) => new Date(b.sortAt || 0).getTime() - new Date(a.sortAt || 0).getTime());
+    const pendingConfidence = selectedPendingFactConfidence();
+    const pendingReviews = pendingConfidence === 'all'
+      ? pendingReviewsAll
+      : pendingReviewsAll.filter(({ type, fact }) => pendingReviewConfidence(type, fact) === pendingConfidence);
 
     $('viewerProfileFactCount').textContent = `${approvedAll.length} approved`;
-    $('viewerProfilePendingFactCount').textContent = `${pendingReviews.length} pending review${pendingReviews.length === 1 ? '' : 's'}`;
+    $('viewerProfilePendingFactCount').textContent = pendingConfidence === 'all'
+      ? `${pendingReviewsAll.length} pending review${pendingReviewsAll.length === 1 ? '' : 's'}`
+      : `${pendingReviews.length} of ${pendingReviewsAll.length} pending reviews`;
 
     const approved = filteredApprovedFacts();
     const pageSize = selectedFactPageSize();
@@ -343,7 +373,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
           <button class="danger viewer-profile-fact-reject" type="button" ${profile?.optedOut === true ? 'disabled' : ''}>Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No pending AI observations or suggested revisions.</div>';
+    }).join('') : `<div class="detail custom-empty-state">${pendingConfidence === 'all' ? 'No pending AI observations or suggested revisions.' : `No ${esc(pendingConfidence)}-confidence pending observations or revisions for this viewer.`}</div>`;
 
     $('viewerProfileFacts').querySelectorAll('.viewer-profile-fact-toggle').forEach((toggle) => {
       toggle.onchange = async () => {
@@ -572,8 +602,21 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     if (VALID_PAGE_SIZES.has(savedPageSize)) $('viewerProfilePageSize').value = String(savedPageSize);
     const savedSort = localStorage.getItem(SORT_STORAGE_KEY);
     if (VALID_SORTS.has(savedSort)) $('viewerProfileSort').value = savedSort;
+    const savedPendingConfidence = localStorage.getItem(PENDING_CONFIDENCE_STORAGE_KEY);
+    if (PENDING_CONFIDENCE_FILTERS.has(savedPendingConfidence)) $('viewerProfilePendingConfidenceFilter').value = savedPendingConfidence;
+    const savedPendingFactConfidence = localStorage.getItem(PENDING_FACT_CONFIDENCE_STORAGE_KEY);
+    if (PENDING_CONFIDENCE_FILTERS.has(savedPendingFactConfidence)) $('viewerProfilePendingFactConfidenceFilter').value = savedPendingFactConfidence;
   } catch {}
 
+  $('viewerProfilePendingConfidenceFilter').onchange = () => {
+    try { localStorage.setItem(PENDING_CONFIDENCE_STORAGE_KEY, selectedPendingConfidence()); } catch {}
+    renderPendingReview();
+  };
+  $('viewerProfilePendingFactConfidenceFilter').onchange = () => {
+    try { localStorage.setItem(PENDING_FACT_CONFIDENCE_STORAGE_KEY, selectedPendingFactConfidence()); } catch {}
+    const profile = profiles.find((item) => item.id === editingId) || { facts: currentProfileFacts };
+    renderFacts(profile);
+  };
   $('viewerProfileFactSearch').oninput = () => { factCurrentPage = 1; const profile = profiles.find((item) => item.id === editingId) || { facts: currentProfileFacts }; renderFacts(profile); };
   $('viewerProfileFactSort').onchange = () => { factCurrentPage = 1; const profile = profiles.find((item) => item.id === editingId) || { facts: currentProfileFacts }; renderFacts(profile); };
   $('viewerProfileFactPageSize').onchange = () => { factCurrentPage = 1; const profile = profiles.find((item) => item.id === editingId) || { facts: currentProfileFacts }; renderFacts(profile); };

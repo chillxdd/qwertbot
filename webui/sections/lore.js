@@ -16,6 +16,8 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
   let approvedLorePage = 1;
   const APPROVED_LORE_PAGE_SIZES = new Set([10, 25, 50]);
   const APPROVED_LORE_SORTS = new Set(['recent_desc', 'text_asc', 'text_desc', 'evidence_desc', 'confidence_desc', 'revision_desc']);
+  const PENDING_LORE_CONFIDENCE_FILTERS = new Set(['all', 'high', 'medium', 'low']);
+  const PENDING_LORE_CONFIDENCE_STORAGE_KEY = 'sqwert-stream-lore-pending-confidence-filter';
   $('botPersonalityName').maxLength = personalityNameMaxLength;
   $('botPersonality').maxLength = personalityMaxLength;
   $('sessionMemoryPromptInstructions').maxLength = sessionMemoryPromptMaxLength;
@@ -194,6 +196,16 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
     return APPROVED_LORE_SORTS.has(value) ? value : 'recent_desc';
   }
 
+  function selectedPendingLoreConfidence() {
+    const value = String($('streamLorePendingConfidenceFilter')?.value || 'all').toLowerCase();
+    return PENDING_LORE_CONFIDENCE_FILTERS.has(value) ? value : 'all';
+  }
+
+  function pendingLoreReviewConfidence(review) {
+    if (review?.type === 'revision') return String(review.observation?.revisionProposal?.confidence || 'medium').toLowerCase();
+    return String(review?.observation?.confidence || 'medium').toLowerCase();
+  }
+
   function filteredApprovedLore() {
     const query = String($('streamLoreApprovedSearch')?.value || '').trim().toLowerCase();
     const list = learnedLoreObservations.filter((item) => {
@@ -221,14 +233,20 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
     const approvedAll = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'approved');
     const pendingNew = learnedLoreObservations.filter((item) => loreApprovalStatus(item) === 'pending');
     const pendingRevisions = approvedAll.filter((item) => item.revisionProposal?.text);
-    const pendingReviews = [
+    const pendingReviewsAll = [
       ...pendingNew.map((observation) => ({ type: 'new', observation, sortAt: observation.lastObservedAt || observation.firstObservedAt })),
       ...pendingRevisions.map((observation) => ({ type: 'revision', observation, sortAt: observation.revisionProposal?.lastProposedAt || observation.lastObservedAt || observation.firstObservedAt }))
     ].sort((a, b) => new Date(b.sortAt || 0).getTime() - new Date(a.sortAt || 0).getTime());
+    const pendingConfidence = selectedPendingLoreConfidence();
+    const pendingReviews = pendingConfidence === 'all'
+      ? pendingReviewsAll
+      : pendingReviewsAll.filter((review) => pendingLoreReviewConfidence(review) === pendingConfidence);
 
     $('streamLoreObservationCount').textContent = `${learnedLoreObservations.length} observation${learnedLoreObservations.length === 1 ? '' : 's'}`;
     $('streamLoreApprovedCount').textContent = `${approvedAll.length} approved`;
-    $('streamLorePendingCount').textContent = `${pendingReviews.length} pending review${pendingReviews.length === 1 ? '' : 's'}`;
+    $('streamLorePendingCount').textContent = pendingConfidence === 'all'
+      ? `${pendingReviewsAll.length} pending review${pendingReviewsAll.length === 1 ? '' : 's'}`
+      : `${pendingReviews.length} of ${pendingReviewsAll.length} pending reviews`;
 
     const approved = filteredApprovedLore();
     const pageSize = approvedLorePageSize();
@@ -296,7 +314,7 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
           <button class="danger stream-lore-observation-reject" type="button">Reject</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No pending AI-learned lore or suggested revisions.</div>';
+    }).join('') : `<div class="detail custom-empty-state">${pendingConfidence === 'all' ? 'No pending AI-learned lore or suggested revisions.' : `No ${escLore(pendingConfidence)}-confidence pending lore or revisions.`}</div>`;
 
     $('streamLoreApprovedList').querySelectorAll('.stream-lore-observation-toggle').forEach((toggle) => {
       toggle.onchange = async () => {
@@ -626,6 +644,15 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
     }
   }
 
+  try {
+    const savedPendingConfidence = localStorage.getItem(PENDING_LORE_CONFIDENCE_STORAGE_KEY);
+    if (PENDING_LORE_CONFIDENCE_FILTERS.has(savedPendingConfidence)) $('streamLorePendingConfidenceFilter').value = savedPendingConfidence;
+  } catch {}
+
+  $('streamLorePendingConfidenceFilter').onchange = () => {
+    try { localStorage.setItem(PENDING_LORE_CONFIDENCE_STORAGE_KEY, selectedPendingLoreConfidence()); } catch {}
+    renderLearnedLore();
+  };
   $('streamLoreApprovedSearch').oninput = () => { approvedLorePage = 1; renderLearnedLore(); };
   $('streamLoreApprovedSort').onchange = () => { approvedLorePage = 1; renderLearnedLore(); };
   $('streamLoreApprovedPageSize').onchange = () => { approvedLorePage = 1; renderLearnedLore(); };
