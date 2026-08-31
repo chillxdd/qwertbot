@@ -26,6 +26,65 @@ function predictionWinner(event = {}) {
   return cleanInline(outcomes.find((item) => String(item?.id || '') === winningId)?.title || '', 80);
 }
 
+const REDEMPTION_EVENT_TYPES = new Set([
+  'channel.channel_points_custom_reward_redemption.add',
+  'channel.channel_points_automatic_reward_redemption.add'
+]);
+const REDEMPTION_BURST_THRESHOLD = 3;
+const REDEMPTION_BURST_WINDOW_MS = 2 * 60 * 1000;
+const REDEMPTION_BURST_RESET_GAP_MS = 3 * 60 * 1000;
+
+function redemptionRewardLabel(type, event = {}) {
+  if (type === 'channel.channel_points_custom_reward_redemption.add') {
+    return cleanInline(event?.reward?.title || 'a custom Channel Points reward', 120);
+  }
+  return cleanInline(String(event?.reward?.type || 'automatic reward').replace(/_/g, ' '), 120);
+}
+
+function createRedemptionRecapFilter({
+  threshold = REDEMPTION_BURST_THRESHOLD,
+  windowMs = REDEMPTION_BURST_WINDOW_MS,
+  resetGapMs = REDEMPTION_BURST_RESET_GAP_MS
+} = {}) {
+  const bursts = new Map();
+
+  function reset() {
+    bursts.clear();
+  }
+
+  function note(type, event = {}, timestamp = Date.now()) {
+    if (!REDEMPTION_EVENT_TYPES.has(type)) return null;
+
+    const now = Number(timestamp || Date.now()) || Date.now();
+    const reward = redemptionRewardLabel(type, event);
+    const key = `${type}:${reward.toLowerCase()}`;
+    let state = bursts.get(key);
+
+    if (!state || now - state.lastAt > resetGapMs) {
+      state = { entries: [], lastAt: now, announced: false };
+    }
+
+    state.lastAt = now;
+    const userKey = String(event?.user_id || event?.user_login || event?.user_name || '').trim().toLowerCase();
+    state.entries = state.entries.filter((entry) => now - entry.at <= windowMs);
+    state.entries.push({ at: now, userKey });
+    bursts.set(key, state);
+
+    // Routine one-off redemptions are intentionally excluded from recap context.
+    // A burst is promoted once, then remains quiet until the reward has been idle
+    // long enough to count as a new burst.
+    if (state.announced || state.entries.length < threshold) return null;
+
+    state.announced = true;
+    const count = state.entries.length;
+    const distinctUsers = new Set(state.entries.map((entry) => entry.userKey).filter(Boolean)).size;
+    const viewerText = distinctUsers > 1 ? ` by ${distinctUsers} viewers` : '';
+    return `Noteworthy Channel Points burst: "${reward}" was redeemed ${count} times${viewerText} within about ${Math.max(1, Math.round(windowMs / 60000))} minutes.`;
+  }
+
+  return { note, reset };
+}
+
 function formatEventSubForRecap(type, event) {
   const name = event?.user_name || event?.user_login || 'A viewer';
 
@@ -140,6 +199,7 @@ function formatEventSubForRecap(type, event) {
 function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager }) {
   const recentMessageIds = new Map();
   const recapProgressSnapshots = new Map();
+  const redemptionRecapFilter = createRedemptionRecapFilter();
   const PROGRESS_RECAP_THROTTLE_MS = 60 * 1000;
   const PROGRESS_EVENT_TYPES = new Set([
     'channel.poll.progress',
@@ -203,14 +263,22 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
       const messageTimestamp = Date.parse(req.get('Twitch-Eventsub-Message-Timestamp') || '');
       const lifecycleTimestamp = Number.isNaN(messageTimestamp) ? Date.now() : messageTimestamp;
 
+      if (type === 'stream.online' || type === 'stream.offline') {
+        redemptionRecapFilter.reset();
+      }
+
       if ((type === 'stream.online' || type === 'stream.offline') && recapManager?.noteStreamLifecycleEvent) {
         void recapManager.noteStreamLifecycleEvent({ type, event, timestamp: lifecycleTimestamp }).catch((lifecycleErr) => {
           console.error('[Stream Lifecycle] EventSub lifecycle handling failed:', lifecycleErr?.message || lifecycleErr);
         });
       }
 
-      if (text && recapManager && shouldRecordRecapEvent(type, event)) {
-        recapManager.recordTwitchEvent({ type, text, timestamp: Date.now() });
+      const recapText = REDEMPTION_EVENT_TYPES.has(type)
+        ? redemptionRecapFilter.note(type, event, lifecycleTimestamp)
+        : text;
+
+      if (recapText && recapManager && shouldRecordRecapEvent(type, event)) {
+        recapManager.recordTwitchEvent({ type, text: recapText, timestamp: lifecycleTimestamp });
       }
 
       if (reactionManager) {
@@ -228,4 +296,8 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
   });
 }
 
-module.exports = { registerEventSubRoutes, formatEventSubForRecap };
+module.exports = {
+  registerEventSubRoutes,
+  formatEventSubForRecap,
+  createRedemptionRecapFilter
+};
