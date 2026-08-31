@@ -11,6 +11,7 @@ const MAX_RECENT_CONTEXT_MESSAGES = 80;
 const MAX_RECENT_CONTEXT_CHARACTERS = 12000;
 const MAX_SESSION_CONTEXT_CHARACTERS = 14000;
 const MAX_DIRECTIVE_TEXT_LENGTH = 1000;
+const MAX_DIRECTIVE_CONTEXT_LENGTH = 700;
 const MAX_PROPOSED_LORE_LENGTH = 400;
 const TWITCH_SAFE_MESSAGE_LENGTH = 480;
 const OWN_RESPONSE_TTL_MS = 15000;
@@ -71,6 +72,36 @@ function isAllowedDirectiveTail(value) {
   return tail.length <= 100;
 }
 
+// A moderator may explain the lore immediately after the explicit command, e.g.
+// `add "Barry and Briar" to the lore. Qwert met them on the flight back.`
+// Keep that explanatory sentence as trusted directive context, while still rejecting
+// cancellations, questions, and a second command appended after the first directive.
+function parseDirectiveTail(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { allowed: true, context: '' };
+  if (raw.includes('?')) return { allowed: false, context: '' };
+
+  // Preserve the existing courtesy/snark behavior without treating it as lore content.
+  if (isAllowedDirectiveTail(raw)) return { allowed: true, context: '' };
+
+  const tail = raw.replace(/^[\s,!.:\-/]+/, '').trim();
+  if (!tail) return { allowed: true, context: '' };
+  if (tail.length > MAX_DIRECTIVE_CONTEXT_LENGTH) return { allowed: false, context: '' };
+
+  // Do not reinterpret a cancellation/correction as supporting context.
+  if (/^(?:actually\s+)?(?:do\s+not|don't|dont|never\s*mind|nevermind|cancel|ignore\s+(?:that|this|it)|forget\s+(?:that|this|it)|scratch\s+(?:that|this|it)|instead\b)/i.test(tail)) {
+    return { allowed: false, context: '' };
+  }
+
+  // A second imperative is a separate command, not evidence for the first one.
+  if (/(?:^|[.!;]\s+)(?:and\s+|then\s+)?(?:add|save|store|put|learn|remember|delete|remove|forget|change|edit)\b/i.test(tail)) {
+    return { allowed: false, context: '' };
+  }
+
+  const context = normalizeWhitespace(stripCourtesyTail(tail)).slice(0, MAX_DIRECTIVE_CONTEXT_LENGTH);
+  return { allowed: Boolean(context), context };
+}
+
 // Keep lore directives deterministic, but allow normal conversational lead-ins before
 // the actual save/learn command. This intentionally strips only a small allowlist of
 // wrappers rather than searching for a lore command anywhere in the message, which
@@ -116,13 +147,17 @@ function parseLoreDirective(rawMessage, botUsername) {
   const saveToLoreMatch = commandBody.match(
     /^(?:please\s+)?(?:add|save|store|put)\s+(.+?)\s+(?:to|in|into)\s+(?:the\s+)?(?:stream\s+)?lore\b(.*)$/i
   );
-  if (saveToLoreMatch && isAllowedDirectiveTail(saveToLoreMatch[2])) {
-    const target = stripCourtesyTail(saveToLoreMatch[1]);
-    return {
-      matched: true,
-      body: commandBody,
-      target: normalizeWhitespace(target).slice(0, MAX_DIRECTIVE_TEXT_LENGTH)
-    };
+  if (saveToLoreMatch) {
+    const parsedTail = parseDirectiveTail(saveToLoreMatch[2]);
+    if (parsedTail.allowed) {
+      const target = stripCourtesyTail(saveToLoreMatch[1]);
+      return {
+        matched: true,
+        body: commandBody,
+        target: normalizeWhitespace(target).slice(0, MAX_DIRECTIVE_TEXT_LENGTH),
+        context: parsedTail.context
+      };
+    }
   }
 
   const patterns = [
@@ -180,7 +215,9 @@ function trimRecentLogs(logs = []) {
 
 async function extractLoreProposal({ directive, recentChatLogs = [], sessionMemoryText = '', streamStatus = {}, existingLore = {} }) {
   const directiveTarget = normalizeWhitespace(directive?.target || directive?.body || '').slice(0, MAX_DIRECTIVE_TEXT_LENGTH);
+  const directiveContext = normalizeWhitespace(directive?.context || '').slice(0, MAX_DIRECTIVE_CONTEXT_LENGTH);
   if (!directiveTarget || containsPromptInjectionLanguage(directiveTarget)) return null;
+  if (directiveContext && containsPromptInjectionLanguage(directiveContext)) return null;
 
   const recentChat = trimRecentLogs(recentChatLogs);
   const sessionMemory = String(sessionMemoryText || '').slice(0, MAX_SESSION_CONTEXT_CHARACTERS) || '(none)';
@@ -204,8 +241,11 @@ SECURITY / EVIDENCE RULES:
 JSON SHAPE:
 {"fact":"concise pending lore or empty","confidence":"low|medium|high","alreadyKnown":false,"reason":"short moderator-facing reason"}
 
-MODERATOR DIRECTIVE INTENT:
+MODERATOR DIRECTIVE REQUEST:
 ${directiveTarget}
+
+ADDITIONAL MODERATOR CONTEXT:
+${directiveContext || '(none)'}
 
 STREAM STATE:
 live=${Boolean(streamStatus?.streamLive)}
@@ -283,7 +323,10 @@ async function tryHandleLoreDirective({ channel, rawMessage, displayName, tags =
 
   try {
     const recentChatLogs = recapManager?.getCurrentWindowLogs?.() || [];
-    const memory = await Promise.resolve(recapManager?.getSessionMemoryContext?.(parsedDirective.target || parsedDirective.body) || { text: '' });
+    const memoryQuery = [parsedDirective.target || parsedDirective.body, parsedDirective.context]
+      .filter(Boolean)
+      .join(' ');
+    const memory = await Promise.resolve(recapManager?.getSessionMemoryContext?.(memoryQuery) || { text: '' });
     const streamStatus = recapManager?.getStatus?.() || {};
     const proposal = await extractLoreProposal({
       directive: parsedDirective,
