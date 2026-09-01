@@ -639,3 +639,6 @@ button.success{background:#16834a}
 
 /* Structured manual lore cards */
 .manual-lore-guidance{margin:10px 0 14px}.manual-lore-list{display:flex;flex-direction:column;gap:10px;margin-top:10px}.manual-lore-card{background:#0e0e10;border:1px solid #2a2a30;border-radius:7px;padding:12px}.manual-lore-card.disabled{opacity:.55}.manual-lore-card-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.manual-lore-card-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;color:#fff}.manual-lore-badge{display:inline-flex;padding:3px 7px;border:1px solid #4a4a57;border-radius:999px;font-size:11px;font-weight:700}.manual-lore-card-text{margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}.manual-lore-card-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}.manual-lore-dialog{width:min(720px,calc(100vw - 36px));max-height:calc(100vh - 50px);overflow:auto}.manual-lore-dialog textarea{min-height:180px}
+
+/* Persistent pin compact textarea */
+#persistentPinMessageInput{min-height:88px;resize:vertical}

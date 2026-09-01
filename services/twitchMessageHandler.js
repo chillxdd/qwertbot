@@ -1,10 +1,10 @@
 const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
 const { tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
 
-const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin']);
+const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
-const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap']);
+const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin']);
 
 function getCommandName(message) {
   return String(message || '').trim().split(/\s+/)[0].toLowerCase();
@@ -43,7 +43,7 @@ function extractReplyContext(tags = {}) {
   };
 }
 
-function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, getNativeCommandResponse = null, sendMessage, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, getPersistentPinManager = null, getNativeCommandResponse = null, sendMessage, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -183,11 +183,13 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const customCommandManager = typeof getCustomCommandManager === 'function' ? getCustomCommandManager() : null;
     const chatTimerManager = typeof getChatTimerManager === 'function' ? getChatTimerManager() : null;
     const botPersonalityManager = typeof getBotPersonalityManager === 'function' ? getBotPersonalityManager() : null;
+    const persistentPinManager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
 
     if (username === botUsername) {
       if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
       if (chatTimerManager?.consumeOwnResponse(rawMessage)) return;
       if (botPersonalityManager?.consumeOwnResponse(rawMessage)) return;
+      if (persistentPinManager?.consumeOwnResponse(rawMessage)) return;
       if (consumeLoreDirectiveResponse(rawMessage)) return;
       recapManager.recordChatMessage({ displayName, rawMessage });
       return;
@@ -249,6 +251,19 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     }
 
     if (isKnownBotCommand(rawMessage)) {
+      if (lowerMsg === '!repin' || lowerMsg === '!unpin') {
+        if (!isModOrBroadcaster(tags) || !persistentPinManager) return;
+        try {
+          if (lowerMsg === '!repin') await persistentPinManager.repin?.();
+          else await persistentPinManager.unpin?.();
+        } catch (err) {
+          // Built-in pin controls are intentionally silent in chat. Operational
+          // failures belong in diagnostics/logs rather than creating chat noise.
+          console.error(`[Persistent Pin] ${lowerMsg} command failed:`, err?.message || err);
+        }
+        return;
+      }
+
       if (lowerMsg === '!optout' || lowerMsg === '!optin') {
         const optingOut = lowerMsg === '!optout';
         try {

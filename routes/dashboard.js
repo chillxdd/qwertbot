@@ -10,6 +10,7 @@ const {
   DEFAULT_GLOBAL_COOLDOWN_SECONDS
 } = require('../services/customCommands');
 const { MAX_STREAM_LORE_LENGTH } = require('../services/streamLore');
+const { MAX_PERSISTENT_PIN_MESSAGE_LENGTH, DEFAULT_PERSISTENT_PIN_HOLD_SECONDS, MAX_PERSISTENT_PIN_HOLD_SECONDS } = require('../services/persistentStreamPin');
 const {
   MAX_TIMER_NAME_LENGTH, MIN_TIMER_INTERVAL_SECONDS, MAX_TIMER_INTERVAL_SECONDS, MAX_TIMER_RESPONSES, MAX_TIMER_RESPONSE_LENGTH,
   MAX_START_DELAY_SECONDS, MAX_JITTER_SECONDS, MAX_MINIMUM_CHAT_MESSAGES, MAX_MINIMUM_VIEWERS
@@ -61,7 +62,10 @@ function registerDashboardRoutes(app, options) {
         maxStartDelaySeconds: MAX_START_DELAY_SECONDS,
         maxJitterSeconds: MAX_JITTER_SECONDS,
         maxMinimumChatMessages: MAX_MINIMUM_CHAT_MESSAGES,
-        maxMinimumViewers: MAX_MINIMUM_VIEWERS
+        maxMinimumViewers: MAX_MINIMUM_VIEWERS,
+        maxPersistentPinMessageLength: MAX_PERSISTENT_PIN_MESSAGE_LENGTH,
+        defaultPersistentPinHoldSeconds: DEFAULT_PERSISTENT_PIN_HOLD_SECONDS,
+        maxPersistentPinHoldSeconds: MAX_PERSISTENT_PIN_HOLD_SECONDS
       },
       customCommands: {
         maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,

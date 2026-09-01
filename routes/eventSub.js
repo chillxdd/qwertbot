@@ -196,7 +196,7 @@ function formatEventSubForRecap(type, event) {
   }
 }
 
-function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager }) {
+function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager, getPersistentPinManager }) {
   const recentMessageIds = new Map();
   const recapProgressSnapshots = new Map();
   const redemptionRecapFilter = createRedemptionRecapFilter();
@@ -281,11 +281,26 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
         recapManager.recordTwitchEvent({ type, text: recapText, timestamp: lifecycleTimestamp });
       }
 
-      if (reactionManager) {
-        void reactionManager.handleEvent(type, event).catch((reactionErr) => {
-          console.error('[EventSub Reactions] Event handling failed:', reactionErr?.message || reactionErr);
-        });
-      }
+      const pinManager = getPersistentPinManager?.();
+      const runStreamAutomations = async () => {
+        if (type === 'stream.online' && pinManager?.handleStreamOnline) {
+          // Persistent Stream Pin is the highest-priority stream-start automation.
+          // It intentionally ignores global Automation Spacing and does not resolve
+          // until its own configured post-pin hold clears, so stream.online reactions
+          // always come after the configured pinned message.
+          await pinManager.handleStreamOnline({ event, timestamp: lifecycleTimestamp });
+        } else if (type === 'stream.offline' && pinManager?.handleStreamOffline) {
+          await pinManager.handleStreamOffline({ event, timestamp: lifecycleTimestamp });
+        }
+
+        if (reactionManager) {
+          await reactionManager.handleEvent(type, event);
+        }
+      };
+
+      void runStreamAutomations().catch((automationErr) => {
+        console.error('[EventSub Automations] Event handling failed:', automationErr?.message || automationErr);
+      });
 
       console.log(`[EventSub] ${type}: ${text || 'event received'}`);
       return res.sendStatus(204);

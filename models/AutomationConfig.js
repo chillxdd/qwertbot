@@ -21,7 +21,7 @@ const automationConfigSchema = new mongoose.Schema({
   },
   lastEngine: {
     type: String,
-    enum: ['', 'recap', 'timer', 'eventsub'],
+    enum: ['', 'recap', 'timer', 'eventsub', 'stream_pin'],
     default: ''
   }
 }, { timestamps: true });

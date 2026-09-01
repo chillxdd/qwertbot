@@ -12,6 +12,7 @@ const { createCustomCommandManager } = require('./services/customCommands');
 const { createChatTimerManager } = require('./services/chatTimers');
 const { createEventSubReactionManager } = require('./services/eventSubReactions');
 const { createAutomationSpacingManager } = require('./services/automationSpacing');
+const { createPersistentPinManager } = require('./services/persistentStreamPin');
 const { getEventReactionHoldStatus } = require('./services/eventReactionHold');
 const { getStreamLore } = require('./services/streamLore');
 const { createBotPersonalityManager } = require('./services/botPersonality');
@@ -30,8 +31,10 @@ const {
 const { getValidBroadcasterAccessToken } = require('./services/twitchBroadcasterAuth');
 const {
   getPinnedChatMessage,
+  pinChatMessage,
   sendChatMessageViaApi,
-  startTemporaryChatPin
+  startTemporaryChatPin,
+  unpinChatMessage
 } = require('./services/twitchChat');
 const { ensureEventSubSubscriptions } = require('./services/twitchEventSub');
 
@@ -100,6 +103,7 @@ let customCommandManager = null;
 let chatTimerManager = null;
 let eventSubReactionManager = null;
 let automationSpacingManager = null;
+let persistentPinManager = null;
 let botPersonalityManager = null;
 let twitchReconnectInProgress = false;
 let twitchAuthRecoveryInProgress = false;
@@ -212,6 +216,17 @@ const requireModSession = modSessionManager.requireSession;
 
 automationSpacingManager = createAutomationSpacingManager({ channelName });
 
+persistentPinManager = createPersistentPinManager({
+  channelName,
+  sendMessageViaApi: (message) => sendChatMessageViaApi(message),
+  getPinnedChatMessage,
+  pinChatMessage,
+  unpinChatMessage,
+  beginPriorityAutomationHold: (engine) => automationSpacingManager?.beginPriorityHold?.(engine),
+  endPriorityAutomationHold: (engine) => automationSpacingManager?.endPriorityHold?.(engine),
+  getStreamStatus: () => recapManager?.getStatus?.() || {}
+});
+
 customCommandManager = createCustomCommandManager({
   channelName,
   sendMessage: (channel, message, options = {}) => chatClientProxy.say(channel, message, options),
@@ -237,7 +252,8 @@ eventSubReactionManager = createEventSubReactionManager({
   getBotAccessToken,
   getCustomCommandManager: () => customCommandManager,
   noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve(),
-  getAutomationSpacingSeconds: () => automationSpacingManager?.getSettings?.().minimumSpacingSeconds || 0
+  getAutomationSpacingSeconds: () => automationSpacingManager?.getSettings?.().minimumSpacingSeconds || 0,
+  getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false }
 });
 
 botPersonalityManager = createBotPersonalityManager({
@@ -266,6 +282,7 @@ const twitchMessageHandler = createTwitchMessageHandler({
   getCustomCommandManager: () => customCommandManager,
   getChatTimerManager: () => chatTimerManager,
   getBotPersonalityManager: () => botPersonalityManager,
+  getPersistentPinManager: () => persistentPinManager,
   getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables),
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
   botUsername,
@@ -528,7 +545,8 @@ async function reconnectTwitchClient(reason = 'manual reconnect', { accessToken 
 
 registerEventSubRoutes(app, {
   getRecapManager: () => recapManager,
-  getEventSubReactionManager: () => eventSubReactionManager
+  getEventSubReactionManager: () => eventSubReactionManager,
+  getPersistentPinManager: () => persistentPinManager
 });
 
 registerDashboardRoutes(app, {
@@ -590,7 +608,8 @@ registerCustomCommandRoutes(app, {
 registerTimerRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => databaseConnected,
-  getChatTimerManager: () => chatTimerManager
+  getChatTimerManager: () => chatTimerManager,
+  getPersistentPinManager: () => persistentPinManager
 });
 
 registerAutomationRoutes(app, {
@@ -646,6 +665,14 @@ async function bootstrap() {
     }
   }
 
+  if (databaseConnected && persistentPinManager) {
+    try {
+      await persistentPinManager.initialize();
+    } catch (err) {
+      console.error('[Persistent Pin] Startup load failed:', err.message || err);
+    }
+  }
+
   if (databaseConnected && customCommandManager) {
     try {
       await customCommandManager.initialize();
@@ -698,6 +725,9 @@ async function bootstrap() {
     try {
       await createAndConnectTwitchClient(accessToken);
       await recapManager.start();
+      if (persistentPinManager?.syncLiveState) {
+        await persistentPinManager.syncLiveState();
+      }
     } catch (err) {
       botConnected = false;
       console.error('[Bot] Twitch startup failed:', err.message || err);

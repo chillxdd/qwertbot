@@ -2,7 +2,7 @@ const AutomationConfig = require('../models/AutomationConfig');
 
 const DEFAULT_AUTOMATION_SPACING_SECONDS = 30;
 const MAX_AUTOMATION_SPACING_SECONDS = 3600;
-const VALID_ENGINES = new Set(['recap', 'timer', 'eventsub']);
+const VALID_ENGINES = new Set(['recap', 'timer', 'eventsub', 'stream_pin']);
 
 function normalizeSeconds(value) {
   const seconds = Math.round(Number(value));
@@ -21,6 +21,8 @@ function createAutomationSpacingManager({ channelName }) {
   };
   let initialized = false;
   let reservationBusy = false;
+  let priorityHoldEngine = '';
+
 
   function dateMs(value) {
     if (!value) return 0;
@@ -73,15 +75,31 @@ function createAutomationSpacingManager({ channelName }) {
     const lastEngine = String(state.lastEngine || '');
     const applies = Boolean(normalizedEngine && lastEngine);
     const availableAt = applies && lastAtMs ? lastAtMs + spacingMs : 0;
-    const remainingMs = availableAt ? Math.max(0, availableAt - Date.now()) : 0;
+    const spacingRemainingMs = availableAt ? Math.max(0, availableAt - Date.now()) : 0;
+    const blockedByPriority = Boolean(priorityHoldEngine && normalizedEngine && normalizedEngine !== priorityHoldEngine);
+    const remainingMs = blockedByPriority ? Math.max(250, spacingRemainingMs) : spacingRemainingMs;
     return {
-      active: remainingMs > 0,
+      active: blockedByPriority || remainingMs > 0,
       remainingMs,
-      availableAt: remainingMs > 0 ? availableAt : 0,
+      availableAt: !blockedByPriority && spacingRemainingMs > 0 ? availableAt : 0,
       minimumSpacingSeconds: Number(state.minimumSpacingSeconds ?? DEFAULT_AUTOMATION_SPACING_SECONDS),
       lastAutomationAt: state.lastAutomationAt || null,
-      lastEngine
+      lastEngine,
+      blockedByPriority,
+      priorityHoldEngine
     };
+  }
+
+  function beginPriorityHold(engine) {
+    if (!VALID_ENGINES.has(engine)) return false;
+    if (priorityHoldEngine && priorityHoldEngine !== engine) return false;
+    priorityHoldEngine = engine;
+    return true;
+  }
+
+  function endPriorityHold(engine) {
+    if (!engine || priorityHoldEngine === engine) priorityHoldEngine = '';
+    return getStatus(engine);
   }
 
   async function noteAutomation(engine) {
@@ -99,6 +117,8 @@ function createAutomationSpacingManager({ channelName }) {
 
   async function tryReserve(engine) {
     if (!VALID_ENGINES.has(engine)) return { allowed: true, status: getStatus(engine) };
+    const initialStatus = getStatus(engine);
+    if (initialStatus.blockedByPriority) return { allowed: false, status: initialStatus };
     if (reservationBusy) return { allowed: false, status: { ...getStatus(engine), remainingMs: Math.max(250, getStatus(engine).remainingMs || 0) } };
     reservationBusy = true;
     try {
@@ -111,7 +131,7 @@ function createAutomationSpacingManager({ channelName }) {
     }
   }
 
-  return { initialize, getSettings, saveSettings, getStatus, noteAutomation, tryReserve, isInitialized: () => initialized };
+  return { initialize, getSettings, saveSettings, getStatus, noteAutomation, tryReserve, beginPriorityHold, endPriorityHold, isInitialized: () => initialized };
 }
 
 module.exports = {

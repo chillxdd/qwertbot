@@ -195,7 +195,7 @@ function renderEventTemplate(template, type, event = {}) {
   return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
-function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null }) {
+function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null, getAutomationSpacingStatus = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
 
@@ -341,8 +341,19 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     }
   }
 
+  async function waitForHigherPriorityAutomation() {
+    if (typeof getAutomationSpacingStatus !== 'function') return;
+    while (true) {
+      let status = { blockedByPriority: false };
+      try { status = getAutomationSpacingStatus('eventsub') || status; } catch (_) {}
+      if (!status.blockedByPriority) return;
+      await sleep(Math.max(250, Math.min(1000, Number(status.remainingMs || 250))));
+    }
+  }
+
   async function handleEvent(type, event = {}) {
     if (!EVENT_TYPE_SET.has(type)) return;
+    await waitForHigherPriorityAutomation();
     const candidates = cache.filter((reaction) => reaction.enabled !== false && reaction.eventType === type);
     for (const reaction of candidates) {
       const minimum = Number(reaction.minimumValue || 0);
