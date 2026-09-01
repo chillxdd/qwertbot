@@ -371,27 +371,6 @@
 
         <div class="custom-editor-block timer-global-settings">
           <div class="custom-response-heading">
-            <strong>Persistent Stream Pin</strong>
-            <button id="savePersistentPinBtn" class="secondary" type="button">Save Pin</button>
-          </div>
-          <div class="detail">Configure one message once and keep it as the stream's default pin. It posts immediately at stream start with the highest automation priority and does not use global Automation Spacing.</div>
-          <label class="inline-check custom-enabled-check"><input id="persistentPinEnabled" type="checkbox"> Enabled</label>
-          <label class="prompt-label" for="persistentPinMessageInput">Pinned Message</label>
-          <textarea id="persistentPinMessageInput" rows="3" maxlength="500" placeholder="Message to post and keep as the default stream pin"></textarea>
-          <div class="timer-settings-grid">
-            <div>
-              <label class="prompt-label" for="persistentPinStartupHold">Post-Pin Automation Hold</label>
-              <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
-              <div class="detail">After the persistent pin is posted/restored with <code>!repin</code>, hold other automations for this long. The Stream Online reaction runs after this hold.</div>
-            </div>
-          </div>
-          <div class="detail">Persistence checks the current Twitch pin while live. If another message is pinned, SqwertArmyBot leaves it alone. When that replacement is removed or expires, the persistent pin returns automatically. <code>!repin</code> and <code>!unpin</code> are always-available broadcaster/mod controls: <code>!repin</code> enables this setting and force-restores the configured pin; <code>!unpin</code> removes the current pin and disables this setting. Both commands stay silent in chat.</div>
-          <div id="persistentPinRuntime" class="detail"></div>
-          <div id="persistentPinMsg" class="detail custom-field-message"></div>
-        </div>
-
-        <div class="custom-editor-block timer-global-settings">
-          <div class="custom-response-heading">
             <strong>Timer Settings</strong>
             <button id="saveTimerSettingsBtn" class="secondary" type="button">Save Settings</button>
           </div>
@@ -581,6 +560,29 @@
           <button id="addEventReactionBtn" type="button">Add EventSub Reaction</button>
         </div>
 
+        <dialog id="persistentPinEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog">
+          <div class="custom-editor-header">
+            <h3>Edit Persistent Stream Pin</h3>
+            <div class="custom-editor-header-actions">
+              <label class="inline-check custom-enabled-check"><input id="persistentPinEnabled" type="checkbox"> Enabled</label>
+              <button id="closePersistentPinEditorBtn" class="secondary" type="button">Close</button>
+            </div>
+          </div>
+          <div class="custom-editor-block persistent-pin-editor-grid">
+            <label>Pinned Message
+              <textarea id="persistentPinMessageInput" rows="3" maxlength="500" placeholder="Message to post and keep as the default stream pin"></textarea>
+            </label>
+            <label>Post-Pin Hold
+              <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
+            </label>
+          </div>
+          <div class="custom-editor-actions">
+            <button id="savePersistentPinBtn" type="button">Save</button>
+            <button id="cancelPersistentPinBtn" class="secondary" type="button">Cancel</button>
+            <div id="persistentPinMsg" class="detail"></div>
+          </div>
+        </dialog>
+
         <dialog id="eventReactionEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog">
           <div class="custom-editor-header">
             <h3 id="eventReactionEditorTitle">Add EventSub Reaction</h3>
@@ -700,6 +702,22 @@
               <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="repin" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!repin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Enables Persistent Stream Pin and restores the configured pin immediately.</div>
+            </div>
+            <div class="custom-command-actions"><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="unpin" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!unpin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Unpins the current message and disables Persistent Stream Pin.</div>
+            </div>
+            <div class="custom-command-actions"><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
           <div class="native-command-card" data-native-command="optout" data-user-level="everyone">

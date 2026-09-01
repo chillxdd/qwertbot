@@ -1,6 +1,6 @@
 const { EVENT_TYPES, MAX_ACTIONS, MAX_HOLD_SECONDS, MAX_ACTION_DELAY_SECONDS } = require('../services/eventSubReactions');
 
-function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseConnected, getEventSubReactionManager }) {
+function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseConnected, getEventSubReactionManager, getPersistentPinManager = null }) {
   const unavailable = (res) => res.status(503).json({ success: false, error: 'EventSub Reactions require MongoDB to be connected.' });
 
   app.post('/eventsub-reactions/list', requireModSession, async (req, res) => {
@@ -8,12 +8,22 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
     if (!getDatabaseConnected() || !manager) return unavailable(res);
     try {
       const reactions = await manager.listReactions();
-      return res.json({ success: true, reactions, eventTypes: EVENT_TYPES, automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0), limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS } });
+      const persistentPinManager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
+      const persistentPin = persistentPinManager?.getConfig?.() || null;
+      return res.json({ success: true, reactions, persistentPin, eventTypes: EVENT_TYPES, automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0), limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS } });
     } catch (err) {
       return res.status(500).json({ success: false, error: err.message || 'Could not load EventSub reactions.' });
     }
   });
 
+
+  app.post('/eventsub-reactions/persistent-pin', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return unavailable(res);
+    const manager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
+    if (!manager?.saveConfig) return res.status(503).json({ success: false, error: 'Persistent Stream Pin is unavailable.' });
+    try { return res.json({ success: true, persistentPin: await manager.saveConfig(req.body || {}) }); }
+    catch (err) { return res.status(400).json({ success: false, error: err.message || 'Could not save Persistent Stream Pin.' }); }
+  });
   app.post('/eventsub-reactions/save', requireModSession, async (req, res) => {
     const manager = getEventSubReactionManager();
     if (!getDatabaseConnected() || !manager) return unavailable(res);

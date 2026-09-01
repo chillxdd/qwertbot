@@ -642,3 +642,11 @@ button.success{background:#16834a}
 
 /* Persistent pin compact textarea */
 #persistentPinMessageInput{min-height:88px;resize:vertical}
+
+/* Built-in Persistent Stream Pin editor */
+.persistent-pin-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:12px;align-items:start}
+.persistent-pin-editor-grid label{margin:0}
+.persistent-pin-editor-grid textarea{min-height:92px;margin:5px 0 0;resize:vertical}
+.persistent-pin-editor-grid .duration-field{margin-top:5px}
+.event-reaction-card button:disabled{cursor:not-allowed}
+@media(max-width:700px){.persistent-pin-editor-grid{grid-template-columns:1fr}}

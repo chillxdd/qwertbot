@@ -621,7 +621,8 @@ registerAutomationRoutes(app, {
 registerEventSubReactionRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => databaseConnected,
-  getEventSubReactionManager: () => eventSubReactionManager
+  getEventSubReactionManager: () => eventSubReactionManager,
+  getPersistentPinManager: () => persistentPinManager
 });
 
 

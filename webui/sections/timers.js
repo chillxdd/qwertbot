@@ -8,13 +8,9 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const maxJitterSeconds = Number(config.maxJitterSeconds || 86400);
   const maxMinimumChatMessages = Number(config.maxMinimumChatMessages || 100000);
   const maxMinimumViewers = Number(config.maxMinimumViewers || 1000000);
-  const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
-  const defaultPersistentPinHoldSeconds = Number(config.defaultPersistentPinHoldSeconds ?? 10);
-  const maxPersistentPinHoldSeconds = Number(config.maxPersistentPinHoldSeconds || 3600);
 
   let timers = [];
   let settings = { globalStartDelaySeconds: 0 };
-  let persistentPin = { enabled: false, message: '', startupHoldSeconds: defaultPersistentPinHoldSeconds, activeStreamId: '', activeMessageId: '', lastPinnedAt: null, monitorActive: false };
   let editingId = null;
   let loaded = false;
   let currentPage = 1;
@@ -29,7 +25,6 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const responsesEl = $('timerResponses');
   const msgEl = $('timersMsg');
   const settingsMsgEl = $('timerSettingsMsg');
-  const persistentPinMsgEl = $('persistentPinMsg');
   const editorMsgEl = $('timerEditorMsg');
   const scheduleMsgEl = $('timerScheduleMsg');
   const activityMsgEl = $('timerActivityMsg');
@@ -42,7 +37,6 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
 
   const setListMessage = (text, isError = false) => setMessage(msgEl, text, isError);
   const setSettingsMessage = (text, isError = false) => setMessage(settingsMsgEl, text, isError);
-  const setPersistentPinMessage = (text, isError = false) => setMessage(persistentPinMsgEl, text, isError);
   const setEditorMessage = (text, isError = false) => setMessage(editorMsgEl, text, isError);
   const setScheduleMessage = (text, isError = false) => setMessage(scheduleMsgEl, text, isError);
   const setActivityMessage = (text, isError = false) => setMessage(activityMsgEl, text, isError);
@@ -211,19 +205,6 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     $('timerStartDelay').min = String(Number(settings.globalStartDelaySeconds || 0));
   }
 
-  function applyPersistentPinToUi() {
-    $('persistentPinEnabled').checked = persistentPin.enabled === true;
-    $('persistentPinMessageInput').value = String(persistentPin.message || '');
-    $('persistentPinStartupHold').value = String(Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds));
-    const active = Boolean(persistentPin.activeMessageId);
-    const monitoring = persistentPin.monitorActive === true;
-    const lastPinned = persistentPin.lastPinnedAt ? formatDate(persistentPin.lastPinnedAt) : 'Never';
-    const monitorText = monitoring ? ' Persistence monitor is active.' : '';
-    $('persistentPinRuntime').textContent = active
-      ? `Persistent message ID is saved. Last pinned: ${lastPinned}.${monitorText}`
-      : `No current-stream persistent message ID is saved. Last pinned: ${lastPinned}.${monitorText}`;
-  }
-
   async function loadTimers() {
     setListMessage('Loading timers...');
     try {
@@ -231,10 +212,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       if (!d.success) throw new Error(d.error || 'Could not load timers.');
       timers = Array.isArray(d.timers) ? d.timers : [];
       settings = { ...settings, ...(d.settings || {}) };
-      persistentPin = { ...persistentPin, ...(d.persistentPin || {}) };
       loaded = true;
       applySettingsToUi();
-      applyPersistentPinToUi();
       renderList();
       setListMessage(`${timers.length} timer${timers.length === 1 ? '' : 's'}.`);
     } catch (err) {
@@ -242,36 +221,6 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     }
   }
 
-
-  async function savePersistentPin() {
-    setPersistentPinMessage('');
-    const enabled = $('persistentPinEnabled').checked;
-    const message = String($('persistentPinMessageInput').value || '').trim();
-    const startupHoldSeconds = Number($('persistentPinStartupHold').value);
-
-    if (Array.from(message).length > maxPersistentPinMessageLength) return setPersistentPinMessage(`Pinned message can contain at most ${maxPersistentPinMessageLength} characters.`, true);
-    if (enabled && !message) return setPersistentPinMessage('Enter a pinned message before enabling Persistent Stream Pin.', true);
-    if (!Number.isInteger(startupHoldSeconds) || startupHoldSeconds < 0 || startupHoldSeconds > maxPersistentPinHoldSeconds) {
-      return setPersistentPinMessage(`Post-pin hold must be a whole number between 0 and ${maxPersistentPinHoldSeconds} seconds.`, true);
-    }
-
-    $('savePersistentPinBtn').disabled = true;
-    try {
-      const d = await postJson('/timers/persistent-pin', {
-        enabled,
-        message,
-        startupHoldSeconds
-      });
-      if (!d.success) throw new Error(d.error || 'Could not save Persistent Stream Pin settings.');
-      persistentPin = { ...persistentPin, ...(d.persistentPin || {}) };
-      applyPersistentPinToUi();
-      setPersistentPinMessage('Persistent Stream Pin settings saved.');
-    } catch (err) {
-      setPersistentPinMessage(err.message || 'Could not save Persistent Stream Pin settings.', true);
-    } finally {
-      $('savePersistentPinBtn').disabled = false;
-    }
-  }
 
   async function saveSettings() {
     setSettingsMessage('');
@@ -592,9 +541,6 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   $('timerPrevPage').onclick = () => { if (currentPage > 1) { currentPage -= 1; renderList(); } };
   $('timerNextPage').onclick = () => { currentPage += 1; renderList(); };
 
-  $('persistentPinMessageInput').maxLength = maxPersistentPinMessageLength;
-  $('persistentPinStartupHold').max = String(maxPersistentPinHoldSeconds);
-  $('savePersistentPinBtn').onclick = savePersistentPin;
   $('saveTimerSettingsBtn').onclick = saveSettings;
   $('addTimerBtn').onclick = () => openEditor();
   $('refreshTimersBtn').onclick = loadTimers;

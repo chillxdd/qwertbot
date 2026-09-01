@@ -1,12 +1,17 @@
-export function initEventSubReactionsSection({ $, esc, postJson }) {
+export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) {
   let reactions = [];
   let eventTypes = [];
   let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300 };
   let automationSpacingSeconds = 0;
+  const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
+  const defaultPersistentPinHoldSeconds = Number(config.defaultPersistentPinHoldSeconds ?? 10);
+  const maxPersistentPinHoldSeconds = Number(config.maxPersistentPinHoldSeconds || 3600);
+  let persistentPin = { enabled: false, message: '', startupHoldSeconds: defaultPersistentPinHoldSeconds };
   let editingId = null;
   let page = 1;
   let loaded = false;
   const editor = $('eventReactionEditor');
+  const persistentPinEditor = $('persistentPinEditor');
   const variablesDialog = $('eventReactionVariablesDialog');
   const actionsEl = $('eventReactionActions');
   const PAGE_SIZE_STORAGE_KEY = 'qwertbot.eventSubReactions.pageSize';
@@ -16,7 +21,6 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
   function typeMeta(type) { return eventTypes.find((item) => item.type === type) || { type, label: type, threshold: null }; }
   function setMsg(text, bad = false) { const el=$('eventReactionsMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
   function setEditorMsg(text, bad = false) { const el=$('eventReactionEditorMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
-  function formatDate(value) { if (!value) return ''; const d=new Date(value); return Number.isNaN(d.getTime())?'':d.toLocaleString(); }
   function updateHoldUi() {
     const holdEl = $('eventReactionHold');
     holdEl.max = String(limits.maxHoldSeconds);
@@ -35,6 +39,73 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
       return `Automation Spacing is currently ${spacing} seconds. Leave Post-Reaction Hold blank to use global spacing, or enter ${spacing} seconds or more.`;
     }
     return '';
+  }
+
+  function setPersistentPinMsg(text, bad = false) {
+    const el = $('persistentPinMsg');
+    el.textContent = text || '';
+    el.classList.toggle('bad', bad);
+  }
+
+  function applyPersistentPinToUi() {
+    $('persistentPinEnabled').checked = persistentPin.enabled === true;
+    $('persistentPinMessageInput').value = String(persistentPin.message || '');
+    $('persistentPinMessageInput').maxLength = maxPersistentPinMessageLength;
+    $('persistentPinStartupHold').value = String(Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds));
+    $('persistentPinStartupHold').max = String(maxPersistentPinHoldSeconds);
+  }
+
+  function openPersistentPinEditor() {
+    applyPersistentPinToUi();
+    setPersistentPinMsg('');
+    persistentPinEditor.classList.add('open');
+    if (typeof persistentPinEditor.showModal === 'function' && !persistentPinEditor.open) persistentPinEditor.showModal();
+    else persistentPinEditor.setAttribute('open', '');
+    $('persistentPinMessageInput').focus();
+  }
+
+  function closePersistentPinEditor() {
+    persistentPinEditor.classList.remove('open');
+    if (persistentPinEditor.open && typeof persistentPinEditor.close === 'function') persistentPinEditor.close();
+    else persistentPinEditor.removeAttribute('open');
+    setPersistentPinMsg('');
+  }
+
+  async function savePersistentPinConfig(overrides = {}, { closeAfter = false } = {}) {
+    const enabled = overrides.enabled ?? $('persistentPinEnabled').checked;
+    const message = overrides.message ?? String($('persistentPinMessageInput').value || '').trim();
+    const startupHoldSeconds = overrides.startupHoldSeconds ?? Number($('persistentPinStartupHold').value);
+    if (Array.from(message).length > maxPersistentPinMessageLength) {
+      const error = `Pinned message can contain at most ${maxPersistentPinMessageLength} characters.`;
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+    if (enabled && !message) {
+      const error = 'Enter a pinned message before enabling Persistent Stream Pin.';
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+    if (!Number.isInteger(Number(startupHoldSeconds)) || Number(startupHoldSeconds) < 0 || Number(startupHoldSeconds) > maxPersistentPinHoldSeconds) {
+      const error = `Post-Pin Hold must be a whole number between 0 and ${maxPersistentPinHoldSeconds} seconds.`;
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+    const saveButton = $('savePersistentPinBtn');
+    if (saveButton) saveButton.disabled = true;
+    try {
+      const d = await postJson('/eventsub-reactions/persistent-pin', { enabled: Boolean(enabled), message, startupHoldSeconds: Number(startupHoldSeconds) });
+      if (!d.success) throw new Error(d.error || 'Could not save Persistent Stream Pin.');
+      persistentPin = { ...persistentPin, ...(d.persistentPin || {}) };
+      if (closeAfter) closePersistentPinEditor();
+      await load();
+      return true;
+    } catch (err) {
+      const error = err.message || 'Could not save Persistent Stream Pin.';
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    } finally {
+      if (saveButton) saveButton.disabled = false;
+    }
   }
 
   function renderTypeOptions() {
@@ -178,7 +249,20 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
     page = Math.max(1, Math.min(page, pages));
     const visible = items.slice((page-1)*pageSize, page*pageSize);
-    $('eventReactionList').innerHTML = visible.length ? visible.map((r) => {
+
+    const persistentPinCard = `<div class="custom-command-card event-reaction-card persistent-pin-reaction-card" data-system="persistent-pin">
+      <div class="custom-command-card-main">
+        <div class="custom-command-title-row"><strong class="custom-command-name">Persistent Stream Pin</strong><span class="custom-command-state ${persistentPin.enabled?'enabled':'disabled'}">${persistentPin.enabled?'Enabled':'Disabled'}</span></div>
+        <div class="detail">Stream Online · 1 action · bypasses global post-hold</div>
+      </div>
+      <div class="custom-command-actions">
+        <button class="secondary persistent-pin-edit" type="button">Edit</button>
+        <button class="secondary persistent-pin-toggle" type="button">${persistentPin.enabled?'Disable':'Enable'}</button>
+        <button class="danger persistent-pin-delete" type="button" disabled title="Built-in reaction">Delete</button>
+      </div>
+    </div>`;
+
+    const regularCards = visible.map((r) => {
       const enabledActions = (r.actions||[]).filter((a)=>a.enabled!==false).length;
       const threshold = r.minimumValue > 0 && typeMeta(r.eventType).threshold ? ` · min ${r.minimumValue} ${typeMeta(r.eventType).threshold.toLowerCase()}` : '';
       const holdLabel = Number(r.holdSeconds) > 0 ? `${Number(r.holdSeconds)}s post-hold` : 'global post-hold';
@@ -186,7 +270,6 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
         <div class="custom-command-card-main">
           <div class="custom-command-title-row"><strong class="custom-command-name">${esc(r.name)}</strong><span class="custom-command-state ${r.enabled?'enabled':'disabled'}">${r.enabled?'Enabled':'Disabled'}</span></div>
           <div class="detail">${esc(typeMeta(r.eventType).label)}${esc(threshold)} · ${enabledActions} action${enabledActions===1?'':'s'} · ${esc(holdLabel)}</div>
-          <div class="detail">Updated ${esc(formatDate(r.updatedAt) || '—')}</div>
         </div>
         <div class="custom-command-actions">
           <button class="secondary event-reaction-edit" type="button">Edit</button>
@@ -194,13 +277,26 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
           <button class="danger event-reaction-delete" type="button">Delete</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail empty-list-message">No EventSub reactions found.</div>';
+    }).join('');
+
+    $('eventReactionList').innerHTML = persistentPinCard + regularCards;
     $('eventReactionPageLabel').textContent = `Page ${page} of ${pages}`;
     $('eventReactionPrevPage').disabled = page <= 1;
     $('eventReactionNextPage').disabled = page >= pages;
     $('eventReactionPagination').hidden = items.length === 0;
 
-    $('eventReactionList').querySelectorAll('.event-reaction-card').forEach((card) => {
+    const pinCard = $('eventReactionList').querySelector('.persistent-pin-reaction-card');
+    pinCard.querySelector('.persistent-pin-edit').onclick = openPersistentPinEditor;
+    pinCard.querySelector('.persistent-pin-toggle').onclick = async () => {
+      setMsg('');
+      await savePersistentPinConfig({
+        enabled: !persistentPin.enabled,
+        message: String(persistentPin.message || '').trim(),
+        startupHoldSeconds: Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds)
+      });
+    };
+
+    $('eventReactionList').querySelectorAll('.event-reaction-card[data-id]').forEach((card) => {
       const reaction = reactions.find((r)=>r.id===card.dataset.id); if (!reaction) return;
       card.querySelector('.event-reaction-edit').onclick = () => openEditor(reaction);
       card.querySelector('.event-reaction-toggle').onclick = async () => {
@@ -221,6 +317,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
     const d = await postJson('/eventsub-reactions/list', {});
     if (!d.success) { setMsg(d.error || 'Could not load EventSub reactions.', true); return; }
     reactions = d.reactions || [];
+    persistentPin = { ...persistentPin, ...(d.persistentPin || {}) };
     eventTypes = d.eventTypes || [];
     limits = { ...limits, ...(d.limits||{}) };
     automationSpacingSeconds = Math.max(0, Number(d.automationSpacingSeconds) || 0);
@@ -239,6 +336,11 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
       setEditorMsg(error, Boolean(error));
     }
   });
+  $('savePersistentPinBtn').onclick = () => savePersistentPinConfig({}, { closeAfter: true });
+  $('closePersistentPinEditorBtn').onclick = closePersistentPinEditor;
+  $('cancelPersistentPinBtn').onclick = closePersistentPinEditor;
+  persistentPinEditor.addEventListener('click', (event) => { if (event.target === persistentPinEditor) closePersistentPinEditor(); });
+  persistentPinEditor.addEventListener('cancel', (event) => { event.preventDefault(); closePersistentPinEditor(); });
   $('eventReactionType').addEventListener('change', updateThresholdUi);
   $('eventReactionHold').addEventListener('input', () => {
     const raw = $('eventReactionHold').value.trim();
@@ -289,7 +391,7 @@ export function initEventSubReactionsSection({ $, esc, postJson }) {
 
   return {
     onVisibilityChange(visible) {
-      if (!visible) { if (variablesDialog.open && typeof variablesDialog.close === 'function') variablesDialog.close(); if (editor.open) closeEditor(); return; }
+      if (!visible) { if (variablesDialog.open && typeof variablesDialog.close === 'function') variablesDialog.close(); if (editor.open) closeEditor(); if (persistentPinEditor.open) closePersistentPinEditor(); return; }
       if (!loaded) void load();
     },
     load
