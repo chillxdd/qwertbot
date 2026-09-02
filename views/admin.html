@@ -660,7 +660,7 @@
         <div class="custom-command-header">
           <div>
             <h3>Native Commands</h3>
-            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they perform bot actions; their user-facing responses can be customized here.</div>
+            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they belong to bot features; user-facing responses can be customized here.</div>
           </div>
           <div class="custom-command-list-controls">
             <label class="custom-command-sort-label" for="nativeCommandUserLevelFilter">User Level
@@ -677,6 +677,14 @@
         </div>
 
         <div id="nativeCommandList" class="native-command-list">
+          <div class="native-command-card" data-native-command="commands" data-user-level="everyone">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!commands</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
+              <div class="detail">Links viewers to the public SqwertArmyBot command directory.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
           <div class="native-command-card" data-native-command="recap" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!recap</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
@@ -751,7 +759,7 @@
           <div id="nativeResponseMsg" class="detail"></div>
         </dialog>
 
-        <div class="native-command-note detail">Native Commands is intentionally for stateful or privileged bot actions. Ordinary text responses, counters, random replies, and inline triggers should stay in Custom Commands.</div>
+        <div class="native-command-note detail">Native Commands is for built-in bot features and controls. Ordinary user-defined text responses, counters, random replies, and inline triggers should stay in Custom Commands.</div>
       </div>
     </div>
 

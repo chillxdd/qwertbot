@@ -2,6 +2,9 @@ const NativeCommandConfig = require('../models/NativeCommandConfig');
 
 const MAX_RESPONSE_LENGTH = 450;
 const DEFAULT_NATIVE_RESPONSES = Object.freeze({
+  commands: {
+    response: 'All SqwertArmyBot commands: https://sqwertarmybot.onrender.com/commands'
+  },
   optout: {
     success: '@$(user), you\'ve opted out of Viewer Profiles. Learning and profile use stop immediately. Your existing profile will be deleted after 30 days unless you opt back in.',
     error: '@$(user), I couldn\'t update your Viewer Profile preference right now. Please try again later.'

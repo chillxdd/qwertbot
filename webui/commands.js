@@ -6,6 +6,7 @@ let customPage = 1;
 let nativePage = 1;
 
 const nativeCommands = [
+  { name: '!commands', userLevel: 'everyone', description: 'Links to this public SqwertArmyBot command directory.' },
   { name: '!recap', userLevel: 'everyone', description: 'Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.' },
   { name: '!optout', userLevel: 'everyone', description: 'Opts you out of Viewer Profiles immediately. Learning and AI use stop at once; your existing profile is retained for 30 days in case you opt back in, then its stored profile content is deleted.' },
   { name: '!optin', userLevel: 'everyone', description: 'Opts you back into Viewer Profiles. If you return within 30 days, your retained profile is reactivated; after that, a new profile starts fresh.' }

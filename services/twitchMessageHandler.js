@@ -1,7 +1,7 @@
 const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
 const { tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
 
-const KNOWN_BOT_COMMANDS = new Set(['!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin']);
+const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
 const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin']);
@@ -251,6 +251,16 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     }
 
     if (isKnownBotCommand(rawMessage)) {
+      if (lowerMsg === '!commands' || lowerMsg.startsWith('!commands ')) {
+        if (typeof sendMessage === 'function') {
+          const text = typeof getNativeCommandResponse === 'function'
+            ? await getNativeCommandResponse('commands', 'response', { user: displayName })
+            : 'All SqwertArmyBot commands: https://sqwertarmybot.onrender.com/commands';
+          if (text) await sendMessage(channel, text);
+        }
+        return;
+      }
+
       if (lowerMsg === '!repin' || lowerMsg === '!unpin') {
         if (!isModOrBroadcaster(tags) || !persistentPinManager) return;
         try {

@@ -113,6 +113,9 @@ async function status() {
 
 
 const NATIVE_RESPONSE_FIELDS = {
+  commands: [
+    ['response', 'Response', 'Variable: $(user)']
+  ],
   recap: [
     ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
     ['offline', 'Offline', 'Variable: $(user)'],
