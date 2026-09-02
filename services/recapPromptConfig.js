@@ -18,17 +18,21 @@ Prioritize:
 - Clear wins, losses, mistakes, discoveries, or reactions when chat actually supports them.
 - Useful context about what chat was broadly focused on.
 - Sexual jokes, innuendo, suggestive fake commands, or mildly NSFW humor when genuinely noteworthy.
+- Concrete details of funny, flirty, suggestive, quirky, or memorable viewer conversations when supported.
 
 Deprioritize:
 - Routine greetings/farewells.
 - Someone leaving for work, a meeting, food, sleep, lurking, or returning.
 - Mundane one-off personal updates.
 - Weak isolated comments or generic filler.
+- Routine EventSub/platform telemetry, individual subscriptions, follows, small cheers, and support roll calls.
 
 OVERALL PICTURE:
 - Summarize broad repeated topics once instead of listing every message.
 - Mention usernames only when genuinely notable or useful.
 - Balance concrete highlights with the overall picture.
+- Treat noteworthy EventSub activity as supporting context, not a checklist; do not enumerate routine supporter names.
+- When space is limited, prefer a specific worthwhile chat detail over platform telemetry.
 - Do not force unrelated topics into one story.
 
 SEXUAL / SUGGESTIVE CHAT:
@@ -56,7 +60,8 @@ const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap to use more of the avai
 
 - Keep accurate existing facts and correct unsupported implications.
 - Add only noteworthy details directly supported by current chat or verified Twitch events.
-- Actively scan for notable topics, jokes, reactions, gameplay details, predictions, or recurring themes omitted from the current recap.
+- Treat EventSub activity as supporting context rather than a checklist; do not add routine support telemetry or enumerate supporters merely to increase length.
+- Actively scan for specific notable conversations, jokes, flirty/suggestive exchanges, reactions, gameplay details, predictions, or recurring themes omitted from the current recap.
 - Prefer adding a genuinely different useful detail over merely rewording an existing one.
 - Every added detail should introduce a distinct topic, event, joke, reaction, conclusion, or fact not already represented.
 - Do not count narrower wording as a new detail. If a broad idea is already covered, do not repeat a narrower version unless it adds a clearly different supported event, conclusion, or reaction.

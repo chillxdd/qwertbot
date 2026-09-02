@@ -85,10 +85,125 @@ function createRedemptionRecapFilter({
   return { note, reset };
 }
 
+const SUBSCRIPTION_EVENT_TYPES = new Set([
+  'channel.subscribe',
+  'channel.subscription.message',
+  'channel.subscription.gift'
+]);
+const SUBSCRIPTION_WAVE_THRESHOLD = 5;
+const SUBSCRIPTION_WAVE_WINDOW_MS = 5 * 60 * 1000;
+const SUBSCRIPTION_WAVE_RESET_GAP_MS = 5 * 60 * 1000;
+const LARGE_GIFT_SUB_THRESHOLD = 10;
+const SIGNIFICANT_CHEER_BITS = 1000;
+
+function subscriptionUnitCount(type, event = {}) {
+  if (type === 'channel.subscribe') return event?.is_gift ? 0 : 1;
+  if (type === 'channel.subscription.message') return 1;
+  if (type === 'channel.subscription.gift') {
+    const total = Math.floor(Number(event?.total || 0));
+    return Math.max(1, Number.isFinite(total) ? total : 0);
+  }
+  return 0;
+}
+
+function formatLargeGiftForRecap(event = {}) {
+  const total = Math.max(0, Math.floor(Number(event?.total || 0)) || 0);
+  const name = cleanInline(event?.user_name || event?.user_login || 'A viewer', 80);
+  const actor = event?.is_anonymous ? 'An anonymous viewer' : name;
+  return `${actor} gifted ${total} subscriptions to Qwert's channel.`;
+}
+
+function createSubscriptionRecapFilter({
+  waveThreshold = SUBSCRIPTION_WAVE_THRESHOLD,
+  windowMs = SUBSCRIPTION_WAVE_WINDOW_MS,
+  resetGapMs = SUBSCRIPTION_WAVE_RESET_GAP_MS,
+  largeGiftThreshold = LARGE_GIFT_SUB_THRESHOLD
+} = {}) {
+  let entries = [];
+  let lastAt = 0;
+  let announced = false;
+
+  function reset() {
+    entries = [];
+    lastAt = 0;
+    announced = false;
+  }
+
+  function note(type, event = {}, timestamp = Date.now()) {
+    if (!SUBSCRIPTION_EVENT_TYPES.has(type)) return null;
+
+    const now = Number(timestamp || Date.now()) || Date.now();
+    if (lastAt && now - lastAt > resetGapMs) reset();
+    lastAt = now;
+
+    const giftTotal = type === 'channel.subscription.gift'
+      ? Math.max(0, Math.floor(Number(event?.total || 0)) || 0)
+      : 0;
+
+    // A genuinely large gift is useful on its own. It also owns this support
+    // cluster, so the same gift cannot immediately create a duplicate generic
+    // subscription-wave recap event.
+    if (giftTotal >= largeGiftThreshold) {
+      entries = [];
+      announced = true;
+      return {
+        type: 'channel.subscription.gift',
+        text: formatLargeGiftForRecap(event)
+      };
+    }
+
+    const units = subscriptionUnitCount(type, event);
+    if (units <= 0) return null;
+
+    entries = entries.filter((entry) => now - entry.at <= windowMs);
+    entries.push({ at: now, units });
+
+    const totalUnits = entries.reduce((sum, entry) => sum + entry.units, 0);
+    if (announced || totalUnits < waveThreshold) return null;
+
+    announced = true;
+    return {
+      type: 'channel.subscription.wave',
+      text: `A noteworthy subscription wave reached at least ${waveThreshold} subscriptions or resubscriptions within about ${Math.max(1, Math.round(windowMs / 60000))} minutes.`
+    };
+  }
+
+  return { note, reset };
+}
+
 function goalRecapDecision(type, event = {}) {
   if (type === 'channel.goal.begin' || type === 'channel.goal.progress') return false;
   if (type === 'channel.goal.end') return event?.is_achieved === true;
   return null;
+}
+
+function shouldRecordStandaloneRecapEvent(type, event = {}) {
+  const goalDecision = goalRecapDecision(type, event);
+  if (goalDecision !== null) return goalDecision;
+
+  // Subscriptions and Channel Points have their own aggregation filters. Raw
+  // events must never bypass those filters and enter recap context individually.
+  if (SUBSCRIPTION_EVENT_TYPES.has(type) || REDEMPTION_EVENT_TYPES.has(type)) return false;
+
+  switch (type) {
+    case 'channel.cheer':
+      return Number(event?.bits || 0) >= SIGNIFICANT_CHEER_BITS;
+    case 'channel.raid':
+      return true;
+    case 'channel.follow':
+    case 'stream.online':
+    case 'stream.offline':
+    case 'channel.poll.begin':
+    case 'channel.poll.progress':
+    case 'channel.prediction.begin':
+    case 'channel.prediction.progress':
+    case 'channel.prediction.lock':
+    case 'channel.ad_break.begin':
+    case 'channel.hype_train.begin':
+      return false;
+    default:
+      return true;
+  }
 }
 
 function formatEventSubForRecap(type, event) {
@@ -204,41 +319,14 @@ function formatEventSubForRecap(type, event) {
 
 function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager, getPersistentPinManager }) {
   const recentMessageIds = new Map();
-  const recapProgressSnapshots = new Map();
   const redemptionRecapFilter = createRedemptionRecapFilter();
-  const PROGRESS_RECAP_THROTTLE_MS = 60 * 1000;
-  const PROGRESS_EVENT_TYPES = new Set([
-    'channel.poll.progress',
-    'channel.prediction.progress'
-  ]);
+  const subscriptionRecapFilter = createSubscriptionRecapFilter();
 
   function cleanupRecentIds() {
     const cutoff = Date.now() - 10 * 60 * 1000;
     for (const [id, seenAt] of recentMessageIds.entries()) {
       if (seenAt < cutoff) recentMessageIds.delete(id);
     }
-  }
-
-  function shouldRecordRecapEvent(type, event = {}) {
-    // Goal telemetry is background state, not recap material. Only a goal that
-    // actually ends as achieved is promoted into the hourly recap. Chat can
-    // still independently make a goal discussion noteworthy through chat logs.
-    const goalDecision = goalRecapDecision(type, event);
-    if (goalDecision !== null) return goalDecision;
-
-    if (!PROGRESS_EVENT_TYPES.has(type)) return true;
-    const eventId = String(event?.id || event?.broadcaster_user_id || 'unknown');
-    const key = `${type}:${eventId}`;
-    const now = Date.now();
-    const previous = recapProgressSnapshots.get(key) || 0;
-    if (now - previous < PROGRESS_RECAP_THROTTLE_MS) return false;
-    recapProgressSnapshots.set(key, now);
-
-    const cutoff = now - 30 * 60 * 1000;
-    for (const [snapshotKey, seenAt] of recapProgressSnapshots.entries()) {
-      if (seenAt < cutoff) recapProgressSnapshots.delete(snapshotKey);
-    }
-    return true;
   }
 
   app.post('/eventsub/twitch', (req, res) => {
@@ -276,6 +364,7 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
 
       if (type === 'stream.online' || type === 'stream.offline') {
         redemptionRecapFilter.reset();
+        subscriptionRecapFilter.reset();
       }
 
       if ((type === 'stream.online' || type === 'stream.offline') && recapManager?.noteStreamLifecycleEvent) {
@@ -284,12 +373,22 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
         });
       }
 
-      const recapText = REDEMPTION_EVENT_TYPES.has(type)
-        ? redemptionRecapFilter.note(type, event, lifecycleTimestamp)
-        : text;
+      let recapEvent = null;
+      if (REDEMPTION_EVENT_TYPES.has(type)) {
+        const redemptionText = redemptionRecapFilter.note(type, event, lifecycleTimestamp);
+        if (redemptionText) recapEvent = { type, text: redemptionText };
+      } else if (SUBSCRIPTION_EVENT_TYPES.has(type)) {
+        recapEvent = subscriptionRecapFilter.note(type, event, lifecycleTimestamp);
+      } else if (text && shouldRecordStandaloneRecapEvent(type, event)) {
+        recapEvent = { type, text };
+      }
 
-      if (recapText && recapManager && shouldRecordRecapEvent(type, event)) {
-        recapManager.recordTwitchEvent({ type, text: recapText, timestamp: lifecycleTimestamp });
+      if (recapEvent?.text && recapManager) {
+        recapManager.recordTwitchEvent({
+          type: recapEvent.type || type,
+          text: recapEvent.text,
+          timestamp: lifecycleTimestamp
+        });
       }
 
       const pinManager = getPersistentPinManager?.();
@@ -326,5 +425,11 @@ module.exports = {
   registerEventSubRoutes,
   formatEventSubForRecap,
   createRedemptionRecapFilter,
-  goalRecapDecision
+  createSubscriptionRecapFilter,
+  goalRecapDecision,
+  shouldRecordStandaloneRecapEvent,
+  // Exported for lightweight regression tests.
+  SUBSCRIPTION_WAVE_THRESHOLD,
+  LARGE_GIFT_SUB_THRESHOLD,
+  SIGNIFICANT_CHEER_BITS
 };
