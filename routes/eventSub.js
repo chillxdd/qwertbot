@@ -85,6 +85,12 @@ function createRedemptionRecapFilter({
   return { note, reset };
 }
 
+function goalRecapDecision(type, event = {}) {
+  if (type === 'channel.goal.begin' || type === 'channel.goal.progress') return false;
+  if (type === 'channel.goal.end') return event?.is_achieved === true;
+  return null;
+}
+
 function formatEventSubForRecap(type, event) {
   const name = event?.user_name || event?.user_login || 'A viewer';
 
@@ -203,8 +209,7 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
   const PROGRESS_RECAP_THROTTLE_MS = 60 * 1000;
   const PROGRESS_EVENT_TYPES = new Set([
     'channel.poll.progress',
-    'channel.prediction.progress',
-    'channel.goal.progress'
+    'channel.prediction.progress'
   ]);
 
   function cleanupRecentIds() {
@@ -215,6 +220,12 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
   }
 
   function shouldRecordRecapEvent(type, event = {}) {
+    // Goal telemetry is background state, not recap material. Only a goal that
+    // actually ends as achieved is promoted into the hourly recap. Chat can
+    // still independently make a goal discussion noteworthy through chat logs.
+    const goalDecision = goalRecapDecision(type, event);
+    if (goalDecision !== null) return goalDecision;
+
     if (!PROGRESS_EVENT_TYPES.has(type)) return true;
     const eventId = String(event?.id || event?.broadcaster_user_id || 'unknown');
     const key = `${type}:${eventId}`;
@@ -314,5 +325,6 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
 module.exports = {
   registerEventSubRoutes,
   formatEventSubForRecap,
-  createRedemptionRecapFilter
+  createRedemptionRecapFilter,
+  goalRecapDecision
 };

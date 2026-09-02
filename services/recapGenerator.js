@@ -111,6 +111,21 @@ function formatStreamContext(streamContexts = []) {
 }
 
 
+
+function filterGoalTelemetryForRecap(twitchEvents = []) {
+  const events = Array.isArray(twitchEvents) ? twitchEvents : [];
+  return events.filter((event) => {
+    const type = String(event?.type || '');
+    if (type === 'channel.goal.begin' || type === 'channel.goal.progress') return false;
+    if (type !== 'channel.goal.end') return true;
+
+    // Current ingestion records channel.goal.end only when Twitch explicitly says
+    // it was achieved. This text check also protects the first recap after a
+    // deploy from older persisted unachieved goal-end records.
+    return /\b(?:achieved|goal\s+(?:was\s+)?met|target\s+(?:was\s+)?reached)\b/i.test(String(event?.text || ''));
+  });
+}
+
 function formatTwitchEvents(twitchEvents = []) {
   if (!Array.isArray(twitchEvents) || twitchEvents.length === 0) {
     return `VERIFIED TWITCH EVENTS:\nNo verified Twitch EventSub events were supplied for this recap.`;
@@ -121,7 +136,7 @@ function formatTwitchEvents(twitchEvents = []) {
     return `- [${when}] ${String(event?.text || '').trim()}`;
   }).filter((line) => !line.endsWith('] '));
 
-  return `VERIFIED TWITCH EVENTS DURING THIS RECAP WINDOW:\n${lines.join('\n')}\n\nTWITCH EVENT RULES:\n- These EventSub records are verified Twitch facts and may be stated as facts.\n- Chat is still the source for viewer reactions, jokes, interpretations, and surrounding discussion.\n- Do not invent a reaction to an event unless chat supports it.\n- Do not infer that an event caused a separate chat topic merely because they occurred near each other.\n- Group routine follows rather than listing every follower unless an individual follow became relevant in chat.\n- Channel Points redemptions are filtered upstream. Routine one-off redeems are intentionally omitted. If a Channel Points burst appears here, mention it only when it materially helps summarize the hour, and describe the burst once rather than listing individual redeems.\n- Subs, gift subs, cheers, raids, and Hype Trains may be named when useful and supported by these verified records.`;
+  return `VERIFIED TWITCH EVENTS DURING THIS RECAP WINDOW:\n${lines.join('\n')}\n\nTWITCH EVENT RULES:\n- These EventSub records are verified Twitch facts and may be stated as facts.\n- Chat is still the source for viewer reactions, jokes, interpretations, and surrounding discussion.\n- Do not invent a reaction to an event unless chat supports it.\n- Do not infer that an event caused a separate chat topic merely because they occurred near each other.\n- Group routine follows rather than listing every follower unless an individual follow became relevant in chat.\n- Channel Points redemptions are filtered upstream. Routine one-off redeems are intentionally omitted. If a Channel Points burst appears here, mention it only when it materially helps summarize the hour, and describe the burst once rather than listing individual redeems.\n- Twitch goal starts, routine progress updates, and goals that end without being achieved are intentionally excluded upstream because they are background telemetry, not recap events. Only a verified goal that was actually achieved may appear as a goal event.\n- Do not add filler such as \"as the subscription goal progressed\", \"while goals progressed\", or similar background-goal wording. If viewer chat itself makes a goal a real discussion topic, summarize that discussion without inventing or emphasizing routine progress unless a verified achieved-goal event is present.\n- Subs, gift subs, cheers, raids, and Hype Trains may be named when useful and supported by these verified records.`;
 }
 
 
@@ -482,6 +497,7 @@ NON-NEGOTIABLE SOURCE-OF-TRUTH AND ACCURACY RULES:
 - Twitch title/category metadata is background context only and is never proof that an event happened.
 - STREAM UPTIME is authoritative only for the current stream's elapsed live time and may be used to interpret duration-related chat without guessing.
 - Every factual detail about what happened must be directly supported by supplied current chat or verified Twitch EventSub records.
+- Routine Twitch goal progress is not recap-worthy. Do not mention a goal merely because it advanced, was active, neared completion, or ended unachieved. A goal may be treated as a platform event only when VERIFIED TWITCH EVENTS explicitly show that it was achieved. Viewer-authored chat may still make the goal itself a discussion topic, but do not turn that into unsupported progress telemetry.
 - Never fill missing context with assumptions, outside knowledge, common game knowledge, or what seems likely.
 - Never turn speculation, jokes, guesses, predictions, questions, or suggestions into established facts.
 - Do not combine unrelated messages in a way that creates a new implied fact.
@@ -562,6 +578,7 @@ ${createUntrustedBlock('EXPANSION_SOURCE_CHAT', chatLogs.join('\n'))}
 
 NON-NEGOTIABLE EXPANSION RULES:
 - Chat and VERIFIED TWITCH EVENTS are the only sources of truth for current-hour events and claims. Stream metadata, previous recaps, and lore are context only. STREAM UPTIME is authoritative only for exact elapsed stream time.
+- Routine Twitch goal progress is not recap-worthy. Do not add or preserve goal-progress filler such as "as goals progressed". Treat a goal as a platform event only when VERIFIED TWITCH EVENTS explicitly show it was achieved. Viewer chat may still support a genuine discussion about the goal itself.
 - Lore may clarify a current reference but cannot prove that a lore event happened again now.
 - Preserve ambiguity and exact labels. Do not infer what left/middle/right, first/second/third, colors, numbers, or other vague choices represent unless the current source says so.
 - Do not infer chronology from message order or causation from proximity/order.
@@ -756,6 +773,11 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   }
 
   chatLogs = Array.isArray(chatLogs) ? chatLogs : [];
+  const originalTwitchEventCount = Array.isArray(twitchEvents) ? twitchEvents.length : 0;
+  twitchEvents = filterGoalTelemetryForRecap(twitchEvents);
+  if (twitchEvents.length !== originalTwitchEventCount) {
+    console.log(`[Recap Gemini] Filtered ${originalTwitchEventCount - twitchEvents.length} routine/unachieved Twitch goal event(s) from recap input.`);
+  }
 
   let promptConfig = getDefaultRecapPromptConfig();
   if (recapChannelName) {
@@ -920,5 +942,6 @@ module.exports = {
   findNamedViewerAttributions,
   auditNamedViewerAttributions,
   recapReferencesBot,
-  partitionBotContext
+  partitionBotContext,
+  filterGoalTelemetryForRecap
 };
