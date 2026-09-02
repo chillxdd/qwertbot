@@ -1,7 +1,51 @@
 const { noteEventReceived, verifyEventSubRequest } = require('../services/twitchEventSub');
+const { normalizeIdentity, numberOrNull } = require('../services/sourceRecords');
 
 function cleanInline(value, max = 240) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+
+function identityFromEvent(event = {}, prefix = 'user', role = 'viewer') {
+  const key = String(prefix || 'user').replace(/_+$/g, '');
+  return normalizeIdentity({
+    userId: event?.[`${key}_id`] || '',
+    login: event?.[`${key}_login`] || '',
+    displayName: event?.[`${key}_name`] || event?.[`${key}_login`] || '',
+    role
+  });
+}
+
+function eventTargetIdentity(type, event = {}) {
+  if (type === 'channel.raid') {
+    return identityFromEvent(event, 'to_broadcaster_user', 'broadcaster');
+  }
+  if (event?.broadcaster_user_id || event?.broadcaster_user_login || event?.broadcaster_user_name) {
+    return identityFromEvent(event, 'broadcaster_user', 'broadcaster');
+  }
+  return normalizeIdentity({});
+}
+
+function eventActorIdentity(type, event = {}) {
+  if (type === 'channel.raid') return identityFromEvent(event, 'from_broadcaster_user', 'broadcaster');
+  return identityFromEvent(event, 'user', 'viewer');
+}
+
+function buildStructuredRecapEvent(type, event = {}, text = '', options = {}) {
+  const anonymous = options.anonymous === true || event?.is_anonymous === true;
+  return {
+    type: String(options.type || type || 'twitch_event'),
+    text: cleanInline(text, 1600),
+    actor: anonymous ? normalizeIdentity({}) : (options.actor || eventActorIdentity(type, event)),
+    target: options.target || eventTargetIdentity(type, event),
+    anonymous,
+    amount: numberOrNull(options.amount),
+    quantity: numberOrNull(options.quantity),
+    rewardId: cleanInline(options.rewardId || event?.reward?.id || '', 160),
+    metadata: {
+      ...(options.metadata && typeof options.metadata === 'object' ? options.metadata : {})
+    }
+  };
 }
 
 function pollChoices(event = {}, includeVotes = false) {
@@ -79,7 +123,16 @@ function createRedemptionRecapFilter({
     const count = state.entries.length;
     const distinctUsers = new Set(state.entries.map((entry) => entry.userKey).filter(Boolean)).size;
     const viewerText = distinctUsers > 1 ? ` by ${distinctUsers} viewers` : '';
-    return `Noteworthy Channel Points burst: "${reward}" was redeemed ${count} times${viewerText} within about ${Math.max(1, Math.round(windowMs / 60000))} minutes.`;
+    return buildStructuredRecapEvent(type, event,
+      `Noteworthy Channel Points burst: "${reward}" was redeemed ${count} times${viewerText} within about ${Math.max(1, Math.round(windowMs / 60000))} minutes.`,
+      {
+        quantity: count,
+        rewardId: event?.reward?.id || '',
+        // This is an aggregate burst, not an attribution to the final redeemer.
+        actor: normalizeIdentity({}),
+        metadata: { noteworthyBurst: true, distinctUsers, reward }
+      }
+    );
   }
 
   return { note, reset };
@@ -146,10 +199,13 @@ function createSubscriptionRecapFilter({
     if (giftTotal >= largeGiftThreshold) {
       entries = [];
       announced = true;
-      return {
+      return buildStructuredRecapEvent('channel.subscription.gift', event, formatLargeGiftForRecap(event), {
         type: 'channel.subscription.gift',
-        text: formatLargeGiftForRecap(event)
-      };
+        actor: event?.is_anonymous ? normalizeIdentity({}) : eventActorIdentity('channel.subscription.gift', event),
+        anonymous: event?.is_anonymous === true,
+        quantity: giftTotal,
+        metadata: { largeGift: true }
+      });
     }
 
     const units = subscriptionUnitCount(type, event);
@@ -162,10 +218,14 @@ function createSubscriptionRecapFilter({
     if (announced || totalUnits < waveThreshold) return null;
 
     announced = true;
-    return {
-      type: 'channel.subscription.wave',
-      text: `A noteworthy subscription wave reached at least ${waveThreshold} subscriptions or resubscriptions within about ${Math.max(1, Math.round(windowMs / 60000))} minutes.`
-    };
+    return buildStructuredRecapEvent('channel.subscription.wave', {},
+      `A noteworthy subscription wave reached at least ${waveThreshold} subscriptions or resubscriptions within about ${Math.max(1, Math.round(windowMs / 60000))} minutes.`,
+      {
+        type: 'channel.subscription.wave',
+        quantity: totalUnits,
+        metadata: { aggregate: true, windowMs, threshold: waveThreshold }
+      }
+    );
   }
 
   return { note, reset };
@@ -375,18 +435,26 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
 
       let recapEvent = null;
       if (REDEMPTION_EVENT_TYPES.has(type)) {
-        const redemptionText = redemptionRecapFilter.note(type, event, lifecycleTimestamp);
-        if (redemptionText) recapEvent = { type, text: redemptionText };
+        recapEvent = redemptionRecapFilter.note(type, event, lifecycleTimestamp);
       } else if (SUBSCRIPTION_EVENT_TYPES.has(type)) {
         recapEvent = subscriptionRecapFilter.note(type, event, lifecycleTimestamp);
       } else if (text && shouldRecordStandaloneRecapEvent(type, event)) {
-        recapEvent = { type, text };
+        recapEvent = buildStructuredRecapEvent(type, event, text, {
+          amount: type === 'channel.cheer' ? Number(event?.bits || 0) : null,
+          quantity: type === 'channel.raid' ? Number(event?.viewers || 0) : null,
+          anonymous: event?.is_anonymous === true,
+          metadata: {
+            isAchieved: type === 'channel.goal.end' ? event?.is_achieved === true : undefined,
+            title: cleanInline(event?.title || event?.description || '', 180),
+            status: cleanInline(event?.status || '', 40)
+          }
+        });
       }
 
       if (recapEvent?.text && recapManager) {
         recapManager.recordTwitchEvent({
-          type: recapEvent.type || type,
-          text: recapEvent.text,
+          ...recapEvent,
+          sourceEventId: messageId,
           timestamp: lifecycleTimestamp
         });
       }
@@ -428,6 +496,10 @@ module.exports = {
   createSubscriptionRecapFilter,
   goalRecapDecision,
   shouldRecordStandaloneRecapEvent,
+  identityFromEvent,
+  eventActorIdentity,
+  eventTargetIdentity,
+  buildStructuredRecapEvent,
   // Exported for lightweight regression tests.
   SUBSCRIPTION_WAVE_THRESHOLD,
   LARGE_GIFT_SUB_THRESHOLD,

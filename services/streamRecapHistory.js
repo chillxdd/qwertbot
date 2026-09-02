@@ -71,6 +71,14 @@ async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block 
     compactSummary: String(block.compactSummary || block.detailedSummary || '').trim(),
     topics: Array.isArray(block.topics) ? block.topics : [],
     people: Array.isArray(block.people) ? block.people : [],
+    claims: Array.isArray(block.claims) ? block.claims.map((claim) => ({
+      text: String(claim?.text || '').trim(),
+      sourceIds: Array.isArray(claim?.sourceIds) ? claim.sourceIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
+      people: Array.isArray(claim?.people) ? claim.people.map((name) => String(name || '').trim()).filter(Boolean) : []
+    })).filter((claim) => claim.text) : [],
+    sourceMessageIds: Array.isArray(block.sourceMessageIds) ? block.sourceMessageIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
+    sourceEventIds: Array.isArray(block.sourceEventIds) ? block.sourceEventIds.map((id) => String(id || '').trim()).filter(Boolean) : [],
+    attributionAudited: block.attributionAudited === true,
     createdAt: new Date()
   };
 

@@ -2,6 +2,13 @@ const ViewerProfile = require('../models/ViewerProfile');
 const ViewerProfileSettings = require('../models/ViewerProfileSettings');
 const { containsPromptInjectionLanguage } = require('./promptSecurity');
 const {
+  normalizeChatRecords,
+  normalizeIdentity: normalizeSourceIdentity,
+  identityKey: sourceIdentityKey,
+  sameIdentity,
+  textMentionsAlias
+} = require('./sourceRecords');
+const {
   normalizeConfidence,
   normalizeLearningRelation,
   textsEquivalent,
@@ -837,17 +844,75 @@ async function clearAllViewerProfiles(channelName) {
 function buildParticipantCounts(chatLogs = []) {
   const counts = new Map();
   const displayNames = new Map();
-  for (const line of Array.isArray(chatLogs) ? chatLogs : []) {
-    const match = String(line || '').match(/^([^:\n]{1,80}):\s+/);
-    if (!match) continue;
-    const displayName = match[1].trim();
-    if (displayName.startsWith('[')) continue;
-    const username = normalizeUsername(displayName);
-    if (!username) continue;
-    counts.set(username, (counts.get(username) || 0) + 1);
-    if (!displayNames.has(username)) displayNames.set(username, displayName);
+  const participantsByKey = new Map();
+  const participantsByUsername = new Map();
+
+  for (const record of normalizeChatRecords(chatLogs)) {
+    if (record.kind === 'bot_context' || record.author.role === 'bot') continue;
+    const identity = normalizeSourceIdentity(record.author);
+    const username = normalizeUsername(identity.login || identity.displayName);
+    const key = sourceIdentityKey(identity) || (username ? `login:${username}` : '');
+    if (!key || !username) continue;
+
+    let participant = participantsByKey.get(key);
+    if (!participant) {
+      participant = {
+        key,
+        identity,
+        username,
+        displayName: normalizeDisplayName(identity.displayName) || username,
+        count: 0,
+        records: []
+      };
+      participantsByKey.set(key, participant);
+    } else {
+      participant.identity = normalizeSourceIdentity({
+        userId: identity.userId || participant.identity.userId,
+        login: identity.login || participant.identity.login,
+        displayName: identity.displayName || participant.identity.displayName,
+        role: identity.role !== 'unknown' ? identity.role : participant.identity.role,
+        aliases: [...(participant.identity.aliases || []), ...(identity.aliases || [])]
+      });
+      participant.username = normalizeUsername(identity.login || participant.username || identity.displayName);
+      participant.displayName = normalizeDisplayName(identity.displayName) || participant.displayName;
+    }
+
+    participant.count += 1;
+    participant.records.push(record);
+    counts.set(participant.username, (counts.get(participant.username) || 0) + 1);
+    if (!displayNames.has(participant.username)) displayNames.set(participant.username, participant.displayName);
+    participantsByUsername.set(participant.username, participant);
   }
-  return { counts, displayNames };
+
+  return {
+    counts,
+    displayNames,
+    participants: [...participantsByKey.values()],
+    participantsByKey,
+    participantsByUsername
+  };
+}
+
+function participantForUpdate(rawUpdate, participantIndex) {
+  const updateIdentity = normalizeSourceIdentity({
+    userId: rawUpdate?.twitchUserId || rawUpdate?.userId || '',
+    login: rawUpdate?.username || rawUpdate?.login || '',
+    displayName: rawUpdate?.displayName || '',
+    aliases: rawUpdate?.aliases || []
+  });
+  const requestedKey = String(rawUpdate?.viewerId || rawUpdate?.participantKey || '').trim();
+  if (requestedKey && participantIndex.participantsByKey.has(requestedKey)) {
+    return participantIndex.participantsByKey.get(requestedKey);
+  }
+  if (updateIdentity.userId) {
+    const byId = participantIndex.participants.find((item) => item.identity.userId === updateIdentity.userId);
+    if (byId) return byId;
+  }
+  if (updateIdentity.login) {
+    const byLogin = participantIndex.participantsByUsername.get(normalizeUsername(updateIdentity.login));
+    if (byLogin) return byLogin;
+  }
+  return participantIndex.participants.find((item) => sameIdentity(item.identity, updateIdentity)) || null;
 }
 
 function findSimilarFact(facts, text, kind = '') {
@@ -862,16 +927,22 @@ function findSimilarFact(facts, text, kind = '') {
 async function getViewerLearningContext(channelName, chatLogs = []) {
   const channel = normalizeChannelName(channelName);
   if (!channel) return {};
-  const { counts } = buildParticipantCounts(chatLogs);
-  const usernames = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 40)
-    .map(([username]) => username);
-  if (!usernames.length) return {};
+  const index = buildParticipantCounts(chatLogs);
+  const participants = index.participants
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 40);
+  if (!participants.length) return {};
+
+  const userIds = participants.map((item) => item.identity.userId).filter(Boolean);
+  const usernames = participants.map((item) => item.username).filter(Boolean);
+  const identityClauses = [];
+  if (userIds.length) identityClauses.push({ twitchUserId: { $in: userIds } });
+  if (usernames.length) identityClauses.push({ username: { $in: usernames } });
+  if (!identityClauses.length) return {};
 
   const docs = await ViewerProfile.find({
     channelName: channel,
-    username: { $in: usernames },
+    $or: identityClauses,
     optedOut: { $ne: true },
     learningEnabled: { $ne: false }
   }).lean();
@@ -895,11 +966,23 @@ async function getViewerLearningContext(channelName, chatLogs = []) {
         revisionProposal: serializeRevisionProposal(fact.revisionProposal, { includeKind: true }),
         lastObservedAt: fact.lastObservedAt || fact.firstObservedAt || null
       }));
-    context[String(doc.username || '').toLowerCase()] = {
-      username: String(doc.username || '').toLowerCase(),
-      displayName: String(doc.displayName || doc.username || ''),
+    const profileIdentity = normalizeSourceIdentity({
+      userId: doc.twitchUserId || '',
+      login: doc.username || '',
+      displayName: doc.displayName || doc.username || '',
+      aliases: doc.aliases || []
+    });
+    const entry = {
+      viewerId: sourceIdentityKey(profileIdentity),
+      twitchUserId: profileIdentity.userId,
+      username: profileIdentity.login,
+      displayName: profileIdentity.displayName,
+      aliases: profileIdentity.aliases,
       facts
     };
+    for (const key of [entry.viewerId, entry.username, entry.twitchUserId ? `uid:${entry.twitchUserId}` : '', entry.username ? `login:${entry.username}` : ''].filter(Boolean)) {
+      context[key] = entry;
+    }
   }
   return context;
 }
@@ -926,21 +1009,35 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
   const channel = normalizeChannelName(channelName);
   await purgeExpiredOptedOutProfiles(channel);
   const excludedUsers = new Set([channel, 'sqwertarmybot', 'nightbot', 'streamelements', 'pokemoncommunitygame']);
-  const { counts, displayNames } = buildParticipantCounts(chatLogs);
+  const participantIndex = buildParticipantCounts(chatLogs);
   const stats = { applied: 0, skipped: 0, created: 0, reinforced: 0, refined: 0, revisionsProposed: 0, contradictions: 0 };
   const relationPriority = { new: 0, support: 1, refine: 2, contradict: 3 };
 
   for (const rawUpdate of Array.isArray(updates) ? updates : []) {
-    const username = normalizeUsername(rawUpdate?.username);
-    if (!username || excludedUsers.has(username) || !counts.has(username)) { stats.skipped++; continue; }
-    const existing = await ViewerProfile.findOne({ channelName: channel, username });
+    const participant = participantForUpdate(rawUpdate, participantIndex);
+    if (!participant) { stats.skipped++; continue; }
+    const username = participant.username;
+    if (!username || excludedUsers.has(username)) { stats.skipped++; continue; }
+
+    let existing = null;
+    if (participant.identity.userId) {
+      existing = await ViewerProfile.findOne({ channelName: channel, twitchUserId: participant.identity.userId });
+    }
+    if (!existing) existing = await ViewerProfile.findOne({ channelName: channel, username });
     if (existing?.optedOut === true || existing?.learningEnabled === false) { stats.skipped++; continue; }
 
     const profile = existing || new ViewerProfile({
       channelName: channel,
       username,
-      displayName: normalizeDisplayName(rawUpdate?.displayName) || displayNames.get(username) || username,
+      displayName: participant.displayName || username,
+      twitchUserId: participant.identity.userId || undefined,
       firstSeenAt: new Date()
+    });
+    applyViewerIdentity(profile, {
+      username,
+      displayName: participant.displayName,
+      twitchUserId: participant.identity.userId,
+      now: new Date()
     });
     const supportTouchedThisWindow = new Set();
     const proposalTouchedThisWindow = new Set();
@@ -1069,7 +1166,8 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
 
     // Do not persist empty profiles merely because the AI returned an unusable candidate.
     if (!profileChanged) continue;
-    profile.displayName = normalizeDisplayName(rawUpdate?.displayName) || profile.displayName || displayNames.get(username) || username;
+    profile.displayName = participant.displayName || normalizeDisplayName(rawUpdate?.displayName) || profile.displayName || username;
+    if (participant.identity.userId) profile.twitchUserId = participant.identity.userId;
     profile.lastSeenAt = new Date();
     await profile.save();
     stats.applied++;
@@ -1077,26 +1175,99 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
   return stats;
 }
 
-function escapeRegExp(value) {
-  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function profileMatchesQuestion(profile, question) {
-  const q = String(question || '').toLowerCase();
-  const candidates = [profile.username, profile.displayName, ...(profile.aliases || [])].map((v) => String(v || '').trim()).filter(Boolean);
-  return candidates.some((candidate) => {
-    const escaped = escapeRegExp(candidate.toLowerCase());
-    return new RegExp(`(^|[^a-z0-9_])${escaped}([^a-z0-9_]|$)`, 'i').test(q);
+function profileIdentity(profile = {}) {
+  return normalizeSourceIdentity({
+    userId: profile.twitchUserId || '',
+    login: profile.username || '',
+    displayName: profile.displayName || profile.username || '',
+    aliases: profile.aliases || []
   });
 }
 
-async function getRelevantViewerProfiles(channelName, question, limit = 4) {
+function profileMatchesQuestion(profile, question) {
+  const q = String(question || '');
+  return profileIdentity(profile).aliases.some((candidate) => textMentionsAlias(q, candidate));
+}
+
+function profileIdentityRank(profile, exactIdentities = []) {
+  const identity = profileIdentity(profile);
+  let best = 0;
+  for (const requestedValue of exactIdentities) {
+    const requested = normalizeSourceIdentity(requestedValue);
+    if (requested.userId && identity.userId === requested.userId) best = Math.max(best, 100);
+    else if (requested.login && identity.login === requested.login) best = Math.max(best, 90);
+    else if (requested.displayName && identity.displayName.normalize('NFKC').toLocaleLowerCase('en-US') === requested.displayName.normalize('NFKC').toLocaleLowerCase('en-US')) best = Math.max(best, 80);
+    else if (sameIdentity(identity, requested)) best = Math.max(best, 70);
+  }
+  return best;
+}
+
+async function getViewerProfileByIdentity(channelName, identityValue, { requireTaggedQuestionSetting = false } = {}) {
+  const channel = normalizeChannelName(channelName);
+  const identity = normalizeSourceIdentity(identityValue);
+  if (!channel || (!identity.userId && !identity.login)) return null;
+  if (requireTaggedQuestionSetting) {
+    const settings = await getViewerProfileSettings(channel);
+    if (!settings.useInTaggedQuestions) return null;
+  }
+  let doc = null;
+  if (identity.userId) {
+    doc = await ViewerProfile.findOne({ channelName: channel, twitchUserId: identity.userId, enabled: { $ne: false }, optedOut: { $ne: true } }).lean();
+  }
+  if (!doc && identity.login) {
+    doc = await ViewerProfile.findOne({ channelName: channel, username: normalizeUsername(identity.login), enabled: { $ne: false }, optedOut: { $ne: true } }).lean();
+  }
+  return doc ? serializeProfile(doc) : null;
+}
+
+async function getRelevantViewerProfiles(channelName, question, limit = 4, options = {}) {
   await purgeExpiredOptedOutProfiles(channelName);
   const settings = await getViewerProfileSettings(channelName);
   if (!settings.useInTaggedQuestions) return [];
   const channel = normalizeChannelName(channelName);
-  const docs = await ViewerProfile.find({ channelName: channel, enabled: { $ne: false }, optedOut: { $ne: true } }).lean();
-  return docs.filter((profile) => profileMatchesQuestion(profile, question)).slice(0, Math.max(1, Math.min(8, Number(limit) || 4))).map(serializeProfile);
+  const maxProfiles = Math.max(1, Math.min(8, Number(limit) || 4));
+  const exactIdentities = [options.requesterIdentity, options.recipientIdentity, ...(options.extraIdentities || [])]
+    .filter(Boolean)
+    .map((value) => normalizeSourceIdentity(value));
+
+  const exactClauses = [];
+  for (const identity of exactIdentities) {
+    if (identity.userId) exactClauses.push({ twitchUserId: identity.userId });
+    if (identity.login) exactClauses.push({ username: normalizeUsername(identity.login) });
+  }
+
+  const docsById = new Map();
+  if (exactClauses.length) {
+    const exactDocs = await ViewerProfile.find({
+      channelName: channel,
+      enabled: { $ne: false },
+      optedOut: { $ne: true },
+      $or: exactClauses
+    }).lean();
+    for (const doc of exactDocs) docsById.set(String(doc._id), doc);
+  }
+
+  // Aliases are not indexed, so question-subject matching still needs a bounded
+  // channel scan. Exact requester/recipient records are ranked first and cannot
+  // be displaced by database order or alias collisions.
+  const candidates = await ViewerProfile.find({
+    channelName: channel,
+    enabled: { $ne: false },
+    optedOut: { $ne: true }
+  }).lean();
+  for (const doc of candidates) {
+    if (profileMatchesQuestion(doc, question)) docsById.set(String(doc._id), doc);
+  }
+
+  return [...docsById.values()]
+    .map((profile) => ({
+      profile,
+      exactRank: profileIdentityRank(profile, exactIdentities),
+      questionRank: profileMatchesQuestion(profile, question) ? 1 : 0
+    }))
+    .sort((a, b) => b.exactRank - a.exactRank || b.questionRank - a.questionRank || String(a.profile.username).localeCompare(String(b.profile.username)))
+    .slice(0, maxProfiles)
+    .map((item) => serializeProfile(item.profile));
 }
 
 function formatViewerProfilesForPrompt(profiles = []) {
@@ -1159,8 +1330,14 @@ module.exports = {
   syncViewerIdentity,
   recordViewerCommandUsage,
   purgeExpiredOptedOutProfiles,
+  buildParticipantCounts,
+  participantForUpdate,
   getViewerLearningContext,
   applyViewerProfileUpdates,
+  getViewerProfileByIdentity,
+  profileIdentity,
+  profileMatchesQuestion,
+  profileIdentityRank,
   getRelevantViewerProfiles,
   formatViewerProfilesForPrompt
 };

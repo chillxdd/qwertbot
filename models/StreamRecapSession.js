@@ -1,5 +1,19 @@
 const mongoose = require('mongoose');
 
+const identitySchema = new mongoose.Schema({
+  userId: { type: String, default: '' },
+  login: { type: String, default: '' },
+  displayName: { type: String, default: '' },
+  role: { type: String, enum: ['viewer', 'moderator', 'broadcaster', 'bot', 'system', 'unknown'], default: 'unknown' },
+  aliases: { type: [String], default: [] }
+}, { _id: false });
+
+const replyReferenceSchema = new mongoose.Schema({
+  messageId: { type: String, default: '' },
+  text: { type: String, default: '' },
+  author: { type: identitySchema, default: null }
+}, { _id: false });
+
 const recapEntrySchema = new mongoose.Schema(
   {
     sequence: { type: Number, required: true },
@@ -11,9 +25,15 @@ const recapEntrySchema = new mongoose.Schema(
 
 const recapMessageSchema = new mongoose.Schema({
   id: { type: Number, required: true },
+  twitchMessageId: { type: String, default: '' },
   timestamp: { type: Number, required: true },
+  // Kept for backwards compatibility with persisted pre-structured sessions.
   text: { type: String, required: true },
-  kind: { type: String, enum: ['viewer', 'bot_context'], default: 'viewer' }
+  body: { type: String, default: '' },
+  kind: { type: String, enum: ['viewer', 'bot_context', 'moderator_announcement'], default: 'viewer' },
+  author: { type: identitySchema, default: null },
+  replyTo: { type: replyReferenceSchema, default: null },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { _id: false });
 
 const recapContextSchema = new mongoose.Schema({
@@ -26,11 +46,24 @@ const recapContextSchema = new mongoose.Schema({
 
 const recapEventSchema = new mongoose.Schema({
   id: { type: Number, required: true },
+  sourceEventId: { type: String, default: '' },
   timestamp: { type: Number, required: true },
   type: { type: String, default: '' },
-  text: { type: String, required: true }
+  text: { type: String, required: true },
+  actor: { type: identitySchema, default: null },
+  target: { type: identitySchema, default: null },
+  anonymous: { type: Boolean, default: false },
+  amount: { type: Number, default: null },
+  quantity: { type: Number, default: null },
+  rewardId: { type: String, default: '' },
+  metadata: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { _id: false });
 
+const sessionMemoryClaimSchema = new mongoose.Schema({
+  text: { type: String, required: true, maxlength: 700 },
+  sourceIds: { type: [String], default: [] },
+  people: { type: [String], default: [] }
+}, { _id: false });
 
 const sessionMemoryBlockSchema = new mongoose.Schema({
   sequence: { type: Number, required: true },
@@ -40,6 +73,10 @@ const sessionMemoryBlockSchema = new mongoose.Schema({
   compactSummary: { type: String, required: true, maxlength: 550 },
   topics: { type: [String], default: [] },
   people: { type: [String], default: [] },
+  claims: { type: [sessionMemoryClaimSchema], default: [] },
+  sourceMessageIds: { type: [String], default: [] },
+  sourceEventIds: { type: [String], default: [] },
+  attributionAudited: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 }, { _id: false });
 

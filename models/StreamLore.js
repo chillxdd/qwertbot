@@ -2,6 +2,13 @@ const mongoose = require('mongoose');
 
 const learnedLoreRevisionSchema = new mongoose.Schema({
   text: { type: String, required: true, maxlength: 400 },
+  scope: { type: String, enum: ['global', 'subject'], default: 'global' },
+  subject: { type: String, default: '', trim: true, maxlength: 80 },
+  aliases: { type: [String], default: [] },
+  // Added after the ownership/attribution hardening pass. Leaving the default
+  // undefined lets the service distinguish legacy proposals from newly
+  // source-verified ones.
+  ownershipVerified: { type: Boolean, default: undefined },
   relation: { type: String, enum: ['refine', 'contradict'], default: 'refine' },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
@@ -15,6 +22,13 @@ const learnedLoreRevisionSchema = new mongoose.Schema({
 const learnedLoreObservationSchema = new mongoose.Schema({
   origin: { type: String, enum: ['hourly_ai', 'moderator_directive'], default: 'hourly_ai' },
   text: { type: String, required: true, maxlength: 400 },
+  scope: { type: String, enum: ['global', 'subject'], default: 'global' },
+  subject: { type: String, default: '', trim: true, maxlength: 80 },
+  aliases: { type: [String], default: [] },
+  // Legacy global observations did not record who/what owned a fact. They are
+  // kept for moderator review but are not injected into AI context until new
+  // source evidence or an explicit moderator action verifies the ownership.
+  ownershipVerified: { type: Boolean, default: undefined },
   confidence: { type: String, enum: ['low', 'medium', 'high'], default: 'medium' },
   evidenceCount: { type: Number, min: 1, default: 1 },
   supportingWindowCount: { type: Number, min: 1, default: 1 },

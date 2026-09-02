@@ -55,12 +55,29 @@ function refreshObservationEvidenceSummary(observation) {
   observation.evidenceSummary = buildEvidenceSummary(observation);
 }
 
+function isObservationOwnershipVerified(observation) {
+  if (observation?.ownershipVerified === true) return true;
+  if (observation?.ownershipVerified === false) return false;
+
+  // Records created before ownershipVerified existed can still be considered
+  // safe when they already have an explicit subject owner or came from a
+  // trusted moderator/broadcaster directive. Legacy unscoped AI observations
+  // remain visible in the dashboard but are quarantined from AI context.
+  return normalizeManualLoreScope(observation?.scope) === 'subject'
+    || observation?.origin === 'moderator_directive';
+}
+
 function serializeObservation(observation) {
   const approvalStatus = inferApprovalStatus(observation);
+  const ownershipVerified = isObservationOwnershipVerified(observation);
   return {
     id: String(observation?._id || ''),
     origin: observation?.origin === 'moderator_directive' ? 'moderator_directive' : 'hourly_ai',
     text: String(observation?.text || ''),
+    scope: normalizeManualLoreScope(observation?.scope),
+    subject: normalizeManualLoreSubject(observation?.subject),
+    aliases: normalizeManualLoreAliases(observation?.aliases),
+    ownershipVerified,
     confidence: normalizeConfidence(observation?.confidence),
     evidenceCount: Math.max(1, Number(observation?.evidenceCount || 1)),
     supportingWindowCount: Math.max(1, Number(observation?.supportingWindowCount || 1)),
@@ -71,9 +88,15 @@ function serializeObservation(observation) {
     lastObservedAt: observation?.lastObservedAt || null,
     lastRefinedAt: observation?.lastRefinedAt || null,
     lastContradictedAt: observation?.lastContradictedAt || null,
-    revisionProposal: serializeRevisionProposal(observation?.revisionProposal),
+    revisionProposal: observation?.revisionProposal?.text ? {
+      ...serializeRevisionProposal(observation.revisionProposal),
+      scope: normalizeManualLoreScope(observation.revisionProposal.scope ?? observation.scope),
+      subject: normalizeManualLoreSubject(observation.revisionProposal.subject ?? observation.subject),
+      aliases: normalizeManualLoreAliases(observation.revisionProposal.aliases ?? observation.aliases),
+      ownershipVerified: observation.revisionProposal.ownershipVerified === true
+    } : null,
     approvalStatus,
-    enabled: approvalStatus === 'approved' && observation?.enabled === true
+    enabled: approvalStatus === 'approved' && observation?.enabled === true && ownershipVerified
   };
 }
 
@@ -193,16 +216,37 @@ function buildManualLoreContext(manualEntries = [], sourceText = '', options = {
   return formatManualLoreEntries(selected);
 }
 
-function buildLearnedLoreText(learnedObservations = []) {
+function buildLearnedLoreText(learnedObservations = [], sourceText = '', options = {}) {
+  const includeGlobal = options.includeGlobal !== false;
+  const includeAllSubjects = options.includeAllSubjects === true;
   const approved = (Array.isArray(learnedObservations) ? learnedObservations : [])
-    .filter((observation) => inferApprovalStatus(observation) === 'approved' && observation?.enabled === true && String(observation?.text || '').trim())
-    .map((observation) => `- ${String(observation.text).trim()}`);
-  return approved.length ? `AI-LEARNED STREAM LORE (GLOBAL):\n${approved.join('\n')}` : '';
+    .map(serializeObservation)
+    .filter((observation) => observation.approvalStatus === 'approved'
+      && observation.enabled === true
+      && observation.ownershipVerified === true
+      && observation.text.trim())
+    .filter((observation) => {
+      if (observation.scope === 'global') return includeGlobal;
+      if (includeAllSubjects) return true;
+      return manualLoreEntryMatchesText(observation, sourceText);
+    });
+  if (!approved.length) return '';
+
+  const blocks = [];
+  const globalEntries = approved.filter((entry) => entry.scope === 'global');
+  if (globalEntries.length) {
+    blocks.push(`AI-LEARNED STREAM LORE (GLOBAL):\n${globalEntries.map((entry) => `- ${entry.text.trim()}`).join('\n')}`);
+  }
+  for (const entry of approved.filter((item) => item.scope === 'subject')) {
+    const aliases = entry.aliases.length ? ` (aliases: ${entry.aliases.join(', ')})` : '';
+    blocks.push(`AI-LEARNED LORE ABOUT ${entry.subject || 'UNLABELED SUBJECT'}${aliases}:\n- ${entry.text.trim()}`);
+  }
+  return blocks.join('\n\n');
 }
 
 function buildEffectiveLore(manualEntries = [], learnedObservations = [], sourceText = '', options = {}) {
   const manual = buildManualLoreContext(manualEntries, sourceText, options);
-  const learned = buildLearnedLoreText(learnedObservations);
+  const learned = buildLearnedLoreText(learnedObservations, sourceText, options);
   return [manual, learned].filter(Boolean).join('\n\n');
 }
 
@@ -221,7 +265,7 @@ async function getStreamLore(channelName) {
     learnedObservations,
     directiveConfig: normalizeLoreDirectiveConfig(doc?.loreDirectives || {}),
     manualText: buildManualLoreContext(manualEntries, '', { includeAllSubjects: true }),
-    learnedText: buildLearnedLoreText(learnedObservations),
+    learnedText: buildLearnedLoreText(learnedObservations, '', { includeAllSubjects: true }),
     effectiveText: buildEffectiveLore(manualEntries, learnedObservations, '', { includeAllSubjects: true }),
     updatedAt: doc?.updatedAt || null
   };
@@ -322,8 +366,23 @@ async function deleteManualLoreEntry(channelName, entryId) {
   return getStreamLore(channel);
 }
 
-function findSimilarObservation(observations, text) {
-  return (Array.isArray(observations) ? observations : []).find((observation) => textsRelated(observation?.text, text, 0.58)) || null;
+function sameLoreScope(left = {}, right = {}) {
+  const leftScope = normalizeManualLoreScope(left?.scope);
+  const rightScope = normalizeManualLoreScope(right?.scope);
+  if (leftScope !== rightScope) return false;
+  if (leftScope === 'global') return true;
+  const leftSubject = normalizeManualLoreSubject(left?.subject).toLowerCase();
+  const rightSubject = normalizeManualLoreSubject(right?.subject).toLowerCase();
+  if (leftSubject && rightSubject && leftSubject === rightSubject) return true;
+  const leftAliases = normalizeManualLoreAliases([left?.subject, ...(left?.aliases || [])]).map((item) => item.toLowerCase());
+  const rightAliases = new Set(normalizeManualLoreAliases([right?.subject, ...(right?.aliases || [])]).map((item) => item.toLowerCase()));
+  return leftAliases.some((alias) => rightAliases.has(alias));
+}
+
+function findSimilarObservation(observations, text, scopeInput = {}) {
+  const scoped = { scope: normalizeManualLoreScope(scopeInput?.scope), subject: scopeInput?.subject, aliases: scopeInput?.aliases };
+  return (Array.isArray(observations) ? observations : [])
+    .find((observation) => sameLoreScope(observation, scoped) && textsRelated(observation?.text, text, 0.58)) || null;
 }
 
 function resolveLoreObservationMatch(doc, raw, text) {
@@ -332,7 +391,7 @@ function resolveLoreObservationMatch(doc, raw, text) {
   if (targetId && doc?.learnedObservations?.id) {
     try { match = doc.learnedObservations.id(targetId); } catch (_) { match = null; }
   }
-  if (!match && text) match = findSimilarObservation(doc?.learnedObservations, text);
+  if (!match && text) match = findSimilarObservation(doc?.learnedObservations, text, raw);
   return match;
 }
 
@@ -357,11 +416,29 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     const supportCount = Math.max(1, Math.min(8, Number(raw?.supportCount || 1)));
     const reason = normalizeRevisionReason(raw?.reason);
     const origin = raw?.origin === 'moderator_directive' ? 'moderator_directive' : 'hourly_ai';
+    const ownershipVerified = raw?.ownershipVerified === true || origin === 'moderator_directive';
+    let scope = normalizeManualLoreScope(raw?.scope);
+    let subject = normalizeManualLoreSubject(raw?.subject);
+    let aliases = normalizeManualLoreAliases(raw?.aliases);
     if (text && containsPromptInjectionLanguage(text)) { stats.skipped++; continue; }
+    if (scope === 'subject' && !subject) { stats.skipped++; continue; }
 
     const match = resolveLoreObservationMatch(doc, raw, text);
     const now = new Date();
     if (match) {
+      // Older learning responses and ID-targeted support/refinement updates may
+      // omit the new scope fields. Inherit the existing owner/scope instead of
+      // silently converting subject-specific lore into global channel lore.
+      if (raw?.scope == null || String(raw.scope).trim() === '') {
+        scope = normalizeManualLoreScope(match.scope);
+      }
+      if (scope === 'subject') {
+        if (!subject) subject = normalizeManualLoreSubject(match.subject);
+        if (!aliases.length) aliases = normalizeManualLoreAliases(match.aliases);
+      } else {
+        subject = '';
+        aliases = [];
+      }
       if (!['approved', 'pending'].includes(match.approvalStatus)) match.approvalStatus = match.enabled === true ? 'approved' : 'pending';
       const status = inferApprovalStatus(match);
       if (origin === 'moderator_directive' && status === 'pending') match.origin = 'moderator_directive';
@@ -372,6 +449,7 @@ async function applyStreamLoreObservations(channelName, observations = []) {
         const incrementWindow = !supportTouchedThisWindow.has(key);
         supportTouchedThisWindow.add(key);
         addSupportingEvidence(match, { supportCount, confidence }, { now, incrementWindow });
+        if (ownershipVerified) match.ownershipVerified = true;
         refreshObservationEvidenceSummary(match);
         stats.reinforced++;
         stats.applied++;
@@ -393,6 +471,12 @@ async function applyStreamLoreObservations(channelName, observations = []) {
           supportCount,
           reason
         }, { now, includeKind: false, incrementWindow });
+        if (result !== 'reinforced') {
+          match.scope = scope;
+          match.subject = scope === 'subject' ? subject : '';
+          match.aliases = scope === 'subject' ? aliases : [];
+        }
+        if (ownershipVerified) match.ownershipVerified = true;
         refreshObservationEvidenceSummary(match);
         if (result === 'reinforced') stats.reinforced++;
         else stats.refined++;
@@ -414,6 +498,12 @@ async function applyStreamLoreObservations(channelName, observations = []) {
           supportCount,
           reason
         }, { now, includeKind: false, incrementWindow: incrementProposalWindow });
+        if (proposed && match.revisionProposal) {
+          match.revisionProposal.scope = scope;
+          match.revisionProposal.subject = scope === 'subject' ? subject : '';
+          match.revisionProposal.aliases = scope === 'subject' ? aliases : [];
+          match.revisionProposal.ownershipVerified = ownershipVerified;
+        }
         refreshObservationEvidenceSummary(match);
         stats.contradictions++;
         if (proposed) stats.revisionsProposed++;
@@ -433,6 +523,12 @@ async function applyStreamLoreObservations(channelName, observations = []) {
         supportCount,
         reason
       }, { now, includeKind: false, incrementWindow: incrementProposalWindow });
+      if (proposed && match.revisionProposal) {
+        match.revisionProposal.scope = scope;
+        match.revisionProposal.subject = scope === 'subject' ? subject : '';
+        match.revisionProposal.aliases = scope === 'subject' ? aliases : [];
+        match.revisionProposal.ownershipVerified = ownershipVerified;
+      }
       refreshObservationEvidenceSummary(match);
       if (proposed) stats.revisionsProposed++;
       else stats.reinforced++;
@@ -447,6 +543,10 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     doc.learnedObservations.push({
       origin,
       text,
+      scope,
+      subject: scope === 'subject' ? subject : '',
+      aliases: scope === 'subject' ? aliases : [],
+      ownershipVerified,
       confidence,
       evidenceCount: supportCount,
       supportingWindowCount: 1,
@@ -478,6 +578,9 @@ async function approveLearnedObservation(channelName, observationId) {
   if (!observation) throw new Error('Learned lore observation not found.');
   observation.approvalStatus = 'approved';
   observation.enabled = true;
+  // Explicit moderator approval is an ownership review for legacy pending
+  // records as well as a content approval.
+  observation.ownershipVerified = true;
   await doc.save();
   return getStreamLore(channel);
 }
@@ -504,7 +607,16 @@ async function acceptLearnedObservationRevision(channelName, observationId) {
   const proposalText = normalizeObservationText(observation.revisionProposal?.text);
   if (!proposalText) throw new Error('No AI revision is waiting for review.');
   if (containsPromptInjectionLanguage(proposalText)) throw new Error('The proposed revision failed the safety check.');
+  const proposalScope = normalizeManualLoreScope(observation.revisionProposal?.scope ?? observation.scope);
+  const proposalSubject = normalizeManualLoreSubject(observation.revisionProposal?.subject ?? observation.subject);
+  const proposalAliases = normalizeManualLoreAliases(observation.revisionProposal?.aliases ?? observation.aliases);
+  const proposalOwnershipVerified = observation.revisionProposal?.ownershipVerified === true;
+  if (proposalScope === 'subject' && !proposalSubject) throw new Error('The proposed revision is missing its lore subject.');
   acceptRevision(observation, { now: new Date(), includeKind: false });
+  observation.scope = proposalScope;
+  observation.subject = proposalScope === 'subject' ? proposalSubject : '';
+  observation.aliases = proposalScope === 'subject' ? proposalAliases : [];
+  observation.ownershipVerified = proposalOwnershipVerified || isObservationOwnershipVerified(observation);
   refreshObservationEvidenceSummary(observation);
   await doc.save();
   return getStreamLore(channel);
@@ -533,6 +645,7 @@ async function setLearnedObservationEnabled(channelName, observationId, enabled)
   if (status !== 'approved') throw new Error('Approve this lore observation before toggling its use.');
   observation.approvalStatus = 'approved';
   observation.enabled = Boolean(enabled);
+  if (enabled) observation.ownershipVerified = true;
   await doc.save();
   return getStreamLore(channel);
 }
@@ -567,6 +680,11 @@ module.exports = {
   deleteManualLoreEntry,
   buildManualLoreContext,
   buildLearnedLoreText,
+  normalizeManualLoreScope,
+  normalizeManualLoreSubject,
+  normalizeManualLoreAliases,
+  manualLoreEntryMatchesText,
+  sameLoreScope,
   buildEffectiveLore,
   applyStreamLoreObservations,
   approveLearnedObservation,

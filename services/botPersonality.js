@@ -4,6 +4,12 @@ const { getRelevantViewerProfiles, formatViewerProfilesForPrompt } = require('./
 const { requestGeminiText, isRetryableGeminiError } = require('./geminiClient');
 const { detectPromptInjection, createUntrustedBlock, inspectModelOutputForLeak } = require('./promptSecurity');
 const { buildManualLoreContext, buildLearnedLoreText } = require('./streamLore');
+const { auditGeneratedAttribution } = require('./attributionAudit');
+const {
+  normalizeIdentity,
+  identityFromTwitchTags,
+  sameIdentity
+} = require('./sourceRecords');
 
 const MAX_BOT_PERSONALITY_NAME_LENGTH = 80;
 const MAX_BOT_PERSONALITY_LENGTH = 12000;
@@ -251,16 +257,10 @@ function escapeRegExp(value) {
 }
 
 function buildViewerIdentity(displayName, tags = {}) {
-  const normalizedDisplayName = normalizeViewerIdentityValue(displayName || tags['display-name'] || tags.username || 'viewer') || 'viewer';
-  const login = normalizeViewerIdentityValue(tags.username || tags['user-login'] || tags.login || '').toLowerCase();
-  const userId = String(tags['user-id'] || '').trim();
-  const aliases = [];
-  for (const candidate of [normalizedDisplayName, login]) {
-    const normalized = normalizeViewerIdentityValue(candidate);
-    if (!normalized) continue;
-    if (!aliases.some((existing) => existing.toLowerCase() === normalized.toLowerCase())) aliases.push(normalized);
-  }
-  return { displayName: normalizedDisplayName, login, userId, aliases };
+  return normalizeIdentity(
+    identityFromTwitchTags(tags, displayName),
+    { displayName: normalizeViewerIdentityValue(displayName) || 'viewer', role: 'viewer' }
+  );
 }
 
 function viewerIdentityForPrompt(identity = {}) {
@@ -272,6 +272,10 @@ function viewerIdentityForPrompt(identity = {}) {
   ].filter(Boolean).join('\n');
 }
 
+function identitySearchTerms(identity = {}) {
+  return normalizeIdentity(identity).aliases.filter(Boolean).join('\n');
+}
+
 const RELAY_PRONOUN_TARGETS = new Set(['me', 'myself', 'us', 'ourselves', 'you', 'yourself', 'him', 'her', 'them', 'themselves', 'everyone', 'everybody', 'chat']);
 
 function sameViewerIdentityName(value, identity = {}) {
@@ -281,29 +285,41 @@ function sameViewerIdentityName(value, identity = {}) {
     .some((alias) => normalizeViewerIdentityValue(alias).toLowerCase() === normalized);
 }
 
-function buildRelayRecipientIdentity(target) {
-  const displayName = normalizeViewerIdentityValue(target);
-  if (!displayName) return null;
-  return {
-    displayName,
-    login: displayName.toLowerCase(),
-    userId: '',
-    aliases: [displayName]
-  };
+function buildRelayRecipientIdentity(target, replyContext = null) {
+  const login = normalizeViewerIdentityValue(target).toLowerCase();
+  if (!login || !/^[a-z0-9_]{2,25}$/.test(login)) return null;
+
+  const replyParentIdentity = normalizeIdentity({
+    userId: replyContext?.parentUserId || '',
+    login: replyContext?.parentUserLogin || '',
+    displayName: replyContext?.parentDisplayName || replyContext?.parentUserLogin || '',
+    role: 'viewer'
+  });
+  const targetIdentity = normalizeIdentity({ login, displayName: target, role: 'viewer', aliases: [target] });
+  if (replyParentIdentity.userId && sameIdentity(targetIdentity, replyParentIdentity)) {
+    return normalizeIdentity({
+      ...replyParentIdentity,
+      aliases: [...replyParentIdentity.aliases, target]
+    });
+  }
+  return targetIdentity;
 }
 
-function detectRelayRecipient(question, requesterIdentity = {}, botUsername = '') {
+function detectRelayRecipient(question, requesterIdentity = {}, botUsername = '', replyContext = null) {
   const text = String(question || '').trim();
   if (!text) return null;
 
+  // Relay mode requires an explicit Twitch @login. Bare words are too
+  // ambiguous: "tell Barry's story" or "tell viewers what happened" can be
+  // questions about a subject rather than an instruction to address somebody.
   const patterns = [
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?tell\s+@?([A-Za-z0-9_]{2,25})\b/i,
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?(?:catch|fill)\s+@?([A-Za-z0-9_]{2,25})\s+(?:up|in)\b/i,
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?(?:explain|relay|say)\s+(?:this\s+)?to\s+@?([A-Za-z0-9_]{2,25})\b/i,
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?let\s+@?([A-Za-z0-9_]{2,25})\s+know\b/i,
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?give\s+@?([A-Za-z0-9_]{2,25})\s+(?:a\s+)?(?:recap|summary|update|rundown|briefing|catch-?up)\b/i,
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?brief\s+@?([A-Za-z0-9_]{2,25})\b/i,
-    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?bring\s+@?([A-Za-z0-9_]{2,25})\s+up\s+to\s+speed\b/i
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?tell\s+@([A-Za-z0-9_]{2,25})\s+(?:what|that|about|how|why|where|when|who|the|everything|something|this|them|him|her|it)\b/i,
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?(?:catch|fill)\s+@([A-Za-z0-9_]{2,25})\s+(?:up|in)\b/i,
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?(?:explain|relay|say)\s+(?:this\s+|that\s+|it\s+)?to\s+@([A-Za-z0-9_]{2,25})\b/i,
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?let\s+@([A-Za-z0-9_]{2,25})\s+know\b/i,
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?give\s+@([A-Za-z0-9_]{2,25})\s+(?:a\s+)?(?:recap|summary|update|rundown|briefing|catch-?up)\b/i,
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?brief\s+@([A-Za-z0-9_]{2,25})\b/i,
+    /\b(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?bring\s+@([A-Za-z0-9_]{2,25})\s+up\s+to\s+speed\b/i
   ];
 
   for (const pattern of patterns) {
@@ -314,7 +330,7 @@ function detectRelayRecipient(question, requesterIdentity = {}, botUsername = ''
     if (RELAY_PRONOUN_TARGETS.has(lower)) continue;
     if (sameViewerIdentityName(target, requesterIdentity)) continue;
     if (lower === String(botUsername || '').replace(/^@+/, '').toLowerCase().trim()) continue;
-    return buildRelayRecipientIdentity(target);
+    return buildRelayRecipientIdentity(target, replyContext);
   }
 
   return null;
@@ -447,7 +463,7 @@ Output only the repaired response.`;
 
 async function normalizeRelayPerspective(answer, question, requesterIdentity = {}, recipientIdentity = {}, botUsername = '', personalityName = '') {
   const original = String(answer || '').trim();
-  if (!original) return original;
+  if (!original) return { text: '', verified: false, reason: 'empty_draft' };
 
   const prompt = `Repair the conversational perspective of one Twitch bot relay response. Make the smallest changes needed.
 
@@ -487,14 +503,24 @@ Output only the repaired response.`;
       timeoutMs: 5000,
       deadlineAt: Date.now() + 6000
     }) || '').trim();
-    return repaired || original;
+    if (!repaired) return { text: '', verified: false, reason: 'empty_repair' };
+    return { text: repaired, verified: true };
   } catch (err) {
-    console.warn(`[Tagged Questions] Relay perspective repair failed; using original answer: ${err?.message || err}`);
-    return original;
+    console.warn(`[Tagged Questions] Relay perspective repair failed closed: ${err?.message || err}`);
+    return { text: '', verified: false, reason: err?.message || String(err) };
   }
 }
 
-function createBotPersonalityManager({ channelName, botUsername, sendMessage, getStreamLore, getStreamContext, getSessionMemoryContext }) {
+function createBotPersonalityManager({
+  channelName,
+  botUsername,
+  sendMessage,
+  getStreamLore,
+  getStreamContext,
+  getSessionMemoryContext,
+  getCurrentChatRecords,
+  getCurrentEventRecords
+}) {
   const normalizedChannel = normalizeChannelName(channelName);
   const normalizedBotUsername = String(botUsername || '').toLowerCase().trim();
   let config = { name: '', personality: '', audience: 'mods', cooldownSeconds: MIN_BOT_PERSONALITY_COOLDOWN_SECONDS, modsBypassCooldown: true, cooldownResponse: '', recapCollisionBufferSeconds: DEFAULT_TAGGED_QUESTION_RECAP_BUFFER_SECONDS, aiRetry: normalizeAiRetryConfig(), securityRefusalResponse: DEFAULT_TAGGED_QUESTION_SECURITY_REFUSAL, sessionMemory: normalizeSessionMemoryConfig(), updatedAt: null };
@@ -626,12 +652,22 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
 
     taggedQuestionsInFlight += 1;
     try {
+      const viewerIdentity = buildViewerIdentity(displayName, tags);
       const replyTarget = String(replyParentMessageId || '').trim();
       const sendTaggedResponse = async (text, { replyToRequester = true } = {}) => {
+        const options = replyToRequester
+          ? {
+              replyParentMessageId: replyTarget,
+              // Twitch's IRC fallback cannot preserve reply threading. These
+              // values let the transport visibly identify the asker instead.
+              fallbackMentionLogin: viewerIdentity.login,
+              fallbackMentionDisplayName: viewerIdentity.displayName
+            }
+          : {};
         const result = await sendMessage(
           normalizedChannel,
           text,
-          replyToRequester && replyTarget ? { replyParentMessageId: replyTarget } : {}
+          options
         );
         lastTaggedResponseAt = Date.now();
         return result;
@@ -720,9 +756,7 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     }
 
     let currentStreamRecallMode = isCurrentStreamRecallQuestion(question);
-    const viewerIdentity = buildViewerIdentity(displayName, tags);
-    const selfKnowledgeQuestion = isSelfReferentialKnowledgeQuestion(question);
-    const relayRecipientIdentity = detectRelayRecipient(question, viewerIdentity, normalizedBotUsername);
+    const relayRecipientIdentity = detectRelayRecipient(question, viewerIdentity, normalizedBotUsername, normalizedReplyContext);
     const relayMode = Boolean(relayRecipientIdentity);
     const responseAddresseeIdentity = relayRecipientIdentity || viewerIdentity;
 
@@ -754,22 +788,20 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
 
     let manualStreamLore = '';
     let learnedStreamLore = '';
+    const loreMatchSource = [
+      question,
+      normalizedReplyContext?.parentBody || '',
+      identitySearchTerms(viewerIdentity),
+      identitySearchTerms(responseAddresseeIdentity)
+    ].filter(Boolean).join('\n');
     if (!currentStreamRecallMode && typeof getStreamLore === 'function') {
       try {
         const loreRecord = cachedLoreRecord || await getStreamLore(normalizedChannel);
-        const loreMatchSource = [
-          question,
-          normalizedReplyContext?.parentBody || '',
-          relayRecipientIdentity?.displayName || '',
-          relayRecipientIdentity?.login || '',
-          selfKnowledgeQuestion ? viewerIdentity.displayName : '',
-          selfKnowledgeQuestion ? viewerIdentity.login : ''
-        ].filter(Boolean).join('\n');
         manualStreamLore = buildManualLoreContext(loreRecord?.manualEntries || [], loreMatchSource, { includeGlobal: true });
         if (persistentLoreHistoryOverride && !matchedSubjectLore) {
           matchedSubjectLore = buildManualLoreContext(loreRecord?.manualEntries || [], question, { includeGlobal: false });
         }
-        learnedStreamLore = buildLearnedLoreText(loreRecord?.learnedObservations || []);
+        learnedStreamLore = buildLearnedLoreText(loreRecord?.learnedObservations || [], loreMatchSource, { includeGlobal: true });
       } catch (err) {
         console.error('[Tagged Questions] Could not load stream lore for tagged question:', err?.message || err);
       }
@@ -806,7 +838,11 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     let sessionMemoryContext = '';
     if (config.sessionMemory?.enabled && typeof getSessionMemoryContext === 'function') {
       try {
-        const memory = await getSessionMemoryContext(question);
+        const memory = await getSessionMemoryContext({
+          question,
+          requesterIdentity: viewerIdentity,
+          recipientIdentity: responseAddresseeIdentity
+        });
         sessionMemoryContext = String(memory?.text || memory || '').trim();
       } catch (err) {
         console.error('[Tagged Questions] Could not load current-stream session memory:', err?.message || err);
@@ -814,10 +850,14 @@ function createBotPersonalityManager({ channelName, botUsername, sendMessage, ge
     }
 
     let viewerProfileContext = '';
+    let relevantProfiles = [];
     if (!currentStreamRecallMode) {
       try {
-        const profileMatchQuestion = selfKnowledgeQuestion ? `${question} ${viewerIdentity.displayName || ''} ${viewerIdentity.login || ''}` : question;
-        const relevantProfiles = await getRelevantViewerProfiles(normalizedChannel, profileMatchQuestion, 4);
+        const profileMatchQuestion = [question, identitySearchTerms(viewerIdentity), identitySearchTerms(responseAddresseeIdentity)].filter(Boolean).join('\n');
+        relevantProfiles = await getRelevantViewerProfiles(normalizedChannel, profileMatchQuestion, 4, {
+          requesterIdentity: viewerIdentity,
+          recipientIdentity: responseAddresseeIdentity
+        });
         viewerProfileContext = formatViewerProfilesForPrompt(relevantProfiles);
       } catch (err) {
         console.error('[Tagged Questions] Could not load relevant viewer profiles:', err?.message || err);
@@ -1051,8 +1091,10 @@ Output only the answer.`;
       if (!repairedLoreSecurity.blocked) answer = repairedLoreAnswer;
     }
 
+    const personaPrefix = config.name ? `(${toUnicodeBoldSans(`as ${config.name}`)}): ` : '';
+
     if (relayMode) {
-      const perspectiveAdjusted = await normalizeRelayPerspective(
+      const perspectiveResult = await normalizeRelayPerspective(
         answer,
         question,
         viewerIdentity,
@@ -1060,8 +1102,25 @@ Output only the answer.`;
         botUsername || normalizedBotUsername,
         config.name
       );
-      const perspectiveSecurity = inspectModelOutputForLeak(perspectiveAdjusted, [config.personality]);
-      if (!perspectiveSecurity.blocked) answer = perspectiveAdjusted;
+      const perspectiveSecurity = inspectModelOutputForLeak(perspectiveResult.text, [config.personality]);
+      if (!perspectiveResult.verified || perspectiveSecurity.blocked) {
+        const relayFailure = clipTwitchMessage(
+          "I couldn't safely relay that without mixing up who is who. Ask again using the exact @username.",
+          personaPrefix
+        );
+        noteOwnResponse(relayFailure);
+        const relayFailureResult = await sendTaggedResponse(relayFailure, { replyToRequester: true });
+        if (!bypassCooldown) lastPublicResponseAt = Date.now();
+        return {
+          matched: true,
+          responded: true,
+          reason: 'relay_identity_verification_failed',
+          message: relayFailure,
+          sendMethod: relayFailureResult?.method || 'unknown',
+          relay: false
+        };
+      }
+      answer = perspectiveResult.text;
     }
 
     if (hasObviousSelfOtherDirective(answer, responseAddresseeIdentity)) {
@@ -1073,8 +1132,95 @@ Output only the answer.`;
         : repairedAnswer;
     }
 
-    const personaPrefix = config.name ? `(${toUnicodeBoldSans(`as ${config.name}`)}): ` : '';
-    const relayPrefix = relayMode ? `@${relayRecipientIdentity.displayName} ` : '';
+    // Final identity/ownership audit. This deliberately runs after every model
+    // rewrite above so no repaired sentence can escape with a new owner,
+    // inverted relationship, or requester/recipient pronoun error.
+    let attributionChatRecords = [];
+    let attributionEventRecords = [];
+    try {
+      attributionChatRecords = typeof getCurrentChatRecords === 'function'
+        ? (await Promise.resolve(getCurrentChatRecords())) || []
+        : [];
+    } catch (err) {
+      console.warn(`[Tagged Questions] Could not load structured chat for final attribution audit: ${err?.message || err}`);
+    }
+    try {
+      attributionEventRecords = typeof getCurrentEventRecords === 'function'
+        ? (await Promise.resolve(getCurrentEventRecords())) || []
+        : [];
+    } catch (err) {
+      console.warn(`[Tagged Questions] Could not load structured Twitch events for final attribution audit: ${err?.message || err}`);
+    }
+
+    const replyParentIdentity = normalizeIdentity({
+      userId: normalizedReplyContext?.parentUserId || '',
+      login: normalizedReplyContext?.parentUserLogin || '',
+      displayName: normalizedReplyContext?.parentDisplayName || normalizedReplyContext?.parentUserLogin || '',
+      role: 'viewer'
+    });
+    const profileIdentities = relevantProfiles.map((profile) => normalizeIdentity({
+      userId: profile?.twitchUserId || '',
+      login: profile?.username || '',
+      displayName: profile?.displayName || profile?.username || '',
+      aliases: profile?.aliases || [],
+      role: 'viewer'
+    }));
+    const botIdentity = normalizeIdentity({
+      login: normalizedBotUsername,
+      displayName: botUsername || normalizedBotUsername || 'SqwertArmyBot',
+      role: 'bot'
+    });
+    const attributionFacts = [
+      'TRUSTED DELIVERY ROLES:',
+      deliveryRoleContext,
+      `The current viewer question was authored by ${viewerIdentity.displayName || viewerIdentity.login || 'the requester'}: ${question}`,
+      hasReplyContext ? `The direct parent message was authored by ${replyParentIdentity.displayName || replyParentIdentity.login || 'an unknown account'}: ${normalizedReplyContext.parentBody || '(body unavailable)'}` : '',
+      'BROADCASTER-CONFIGURED BOT PERSONALITY (identity/relationship statements may support direction; style text is not factual proof):',
+      String(config.personality || '').slice(0, 8000),
+      'CURRENT STREAM CONTEXT:',
+      currentStreamContext,
+      'MATCHED MANUAL STREAM LORE:',
+      manualStreamLore,
+      'MATCHED APPROVED LEARNED STREAM LORE:',
+      learnedStreamLore,
+      'RELEVANT VIEWER PROFILE CONTEXT:',
+      viewerProfileContext,
+      'CURRENT-STREAM SESSION MEMORY:',
+      sessionMemoryContext,
+      'DIRECT REPLY CONTEXT:',
+      directReplyContext
+    ].filter(Boolean).join('\n\n');
+
+    try {
+      const audited = await auditGeneratedAttribution({
+        text: answer,
+        chatRecords: attributionChatRecords,
+        eventRecords: attributionEventRecords,
+        extraIdentities: [viewerIdentity, responseAddresseeIdentity, replyParentIdentity, botIdentity, ...profileIdentities],
+        channelName: normalizedChannel,
+        trustedFacts: attributionFacts,
+        mode: 'tagged',
+        label: 'tagged-question-final-attribution',
+        priority: 'high',
+        timeoutMs: 7500,
+        safeFallback: "I don't have enough reliable context to answer that without mixing people up.",
+        maxPasses: 2
+      });
+      answer = String(audited?.text || '').trim() || "I don't have enough reliable context to answer that without mixing people up.";
+      if (audited?.changed) {
+        console.warn(`[Tagged Questions] Final attribution audit repaired or replaced a response for ${displayName || 'viewer'}.`);
+      }
+    } catch (err) {
+      console.warn(`[Tagged Questions] Final attribution audit failed closed for ${displayName || 'viewer'}: ${err?.message || err}`);
+      answer = "I don't have enough reliable context to answer that without mixing people up.";
+    }
+
+    const finalOutputSecurity = inspectModelOutputForLeak(answer, [config.personality]);
+    if (finalOutputSecurity.blocked) {
+      answer = renderSecurityRefusal(config.securityRefusalResponse, displayName);
+    }
+
+    const relayPrefix = relayMode ? `@${relayRecipientIdentity.login || relayRecipientIdentity.displayName} ` : '';
     const rendered = clipTwitchMessage(answer, `${relayPrefix}${personaPrefix}`);
     if (!rendered) return { matched: true, responded: false, reason: 'empty_response' };
 
@@ -1123,6 +1269,7 @@ Output only the answer.`;
     saveConfig,
     getConfig: () => ({ ...config, aiRetry: { ...config.aiRetry }, sessionMemory: { ...config.sessionMemory } }),
     getRecapCollisionStatus,
+    parseTaggedQuestion,
     handleTaggedQuestion,
     consumeOwnResponse
   };
@@ -1140,5 +1287,9 @@ module.exports = {
   MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH,
   MAX_TAGGED_QUESTION_SECURITY_REFUSAL_LENGTH,
   DEFAULT_TAGGED_QUESTION_SECURITY_REFUSAL,
+  buildViewerIdentity,
+  buildRelayRecipientIdentity,
+  detectRelayRecipient,
+  normalizeRelayPerspective,
   createBotPersonalityManager
 };

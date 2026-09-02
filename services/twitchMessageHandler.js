@@ -1,5 +1,7 @@
 const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
-const { tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
+const { parseLoreDirective, tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
+const { detectPromptInjection } = require('./promptSecurity');
+const { identityFromTwitchTags } = require('./sourceRecords');
 
 const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
@@ -65,10 +67,15 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
   function recordPending(candidate) {
     const recapManager = getRecapManager();
-    if (!recapManager) return;
-    recapManager.recordChatMessage({
+    if (!recapManager) return false;
+    return recapManager.recordChatMessage({
       displayName: candidate.displayName,
-      rawMessage: candidate.rawMessage
+      rawMessage: candidate.rawMessage,
+      tags: candidate.tags || {},
+      author: identityFromTwitchTags(candidate.tags || {}, candidate.displayName),
+      twitchMessageId: candidate.tags?.id || candidate.tags?.['message-id'] || '',
+      timestamp: candidate.tags?.['tmi-sent-ts'] || candidate.createdAt || Date.now(),
+      replyTo: extractReplyContext(candidate.tags || {})
     });
   }
 
@@ -156,6 +163,22 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const lowerMsg = rawMessage.toLowerCase();
     const username = String(tags.username || '').toLowerCase().trim();
     const displayName = tags['display-name'] || tags.username || 'viewer';
+    const replyContext = extractReplyContext(tags);
+    let sourceRecorded = false;
+    const recordViewerSource = () => {
+      if (sourceRecorded) return true;
+      const recorded = recapManager.recordChatMessage({
+        displayName,
+        rawMessage,
+        tags,
+        author: identityFromTwitchTags(tags, displayName),
+        twitchMessageId: tags.id || tags['message-id'] || '',
+        timestamp: tags['tmi-sent-ts'] || Date.now(),
+        replyTo: replyContext
+      });
+      if (recorded) sourceRecorded = true;
+      return recorded;
+    };
 
     if (username === 'nightbot') {
       handleNightbotResponse(rawMessage);
@@ -195,12 +218,25 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
       // Native replies or any other bot-authored chat that reaches this point may
       // help explain viewer conversation, but it is never ordinary participant chat.
-      recapManager.recordBotContextMessage?.({ displayName, rawMessage });
+      recapManager.recordBotContextMessage?.({
+        displayName,
+        rawMessage,
+        author: identityFromTwitchTags(tags, displayName, { isBot: true }),
+        twitchMessageId: tags.id || tags['message-id'] || '',
+        timestamp: tags['tmi-sent-ts'] || Date.now(),
+        replyTo: replyContext
+      });
       return;
     }
 
     // Count real viewer chat once for timer activity gates. Bot/system messages were filtered above.
     chatTimerManager?.recordViewerActivity?.();
+
+    // Record a recognized trusted lore directive immediately, before its AI
+    // extraction runs. This preserves Twitch chronology even when extraction takes
+    // several seconds and later messages arrive in the meantime.
+    const potentialLoreDirective = isModOrBroadcaster(tags) && parseLoreDirective(rawMessage, botUsername).matched;
+    if (potentialLoreDirective) recordViewerSource();
 
     // A trusted mod/broadcaster can explicitly ask the bot to save/remember Stream Lore
     // by tagging it without a trailing question mark. This is a separate side-path from
@@ -217,16 +253,22 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
         sendMessage
       });
       if (loreDirectiveResult?.matched) {
-        recapManager.recordChatMessage({ displayName, rawMessage });
+        recordViewerSource();
         return;
       }
     } catch (err) {
       console.error(`[Lore Directive] Unexpected directive handler failure for ${displayName}:`, err?.message || err);
-      recapManager.recordChatMessage({ displayName, rawMessage });
+      recordViewerSource();
       return;
     }
 
     if (botPersonalityManager) {
+      const parsedTaggedQuestion = botPersonalityManager.parseTaggedQuestion?.(rawMessage) || null;
+      if (parsedTaggedQuestion && !detectPromptInjection(parsedTaggedQuestion).block) {
+        // Same chronology rule as lore directives: persist the asker before the
+        // potentially slow model call, not after the answer returns.
+        recordViewerSource();
+      }
       try {
         const personalityResult = await botPersonalityManager.handleTaggedQuestion({
           rawMessage,
@@ -235,7 +277,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           // Reply to the viewer's current message, while separately passing the
           // Twitch reply-parent metadata as conversational context for AskAI.
           replyParentMessageId: tags.id || tags['message-id'] || '',
-          replyContext: extractReplyContext(tags)
+          replyContext
         });
         if (personalityResult?.matched) {
           // Tagged questions are normally organic viewer chat and remain part of
@@ -243,7 +285,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           // intentionally excluded so malicious instruction text cannot poison
           // later AI context after the direct attack has already been blocked.
           if (personalityResult?.reason !== 'prompt_injection_blocked') {
-            recapManager.recordChatMessage({ displayName, rawMessage });
+            recordViewerSource();
 
             // A successful normal Tagged Question answer is useful to understand
             // what viewers react to later in the hour. Record it separately as
@@ -257,7 +299,14 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
             ) {
               recapManager.recordBotContextMessage?.({
                 displayName: botUsername || 'SqwertArmyBot',
-                rawMessage: personalityResult.message
+                rawMessage: personalityResult.message,
+                timestamp: Date.now(),
+                replyTo: {
+                  messageId: String(tags.id || tags['message-id'] || ''),
+                  text: rawMessage,
+                  author: identityFromTwitchTags(tags, displayName)
+                },
+                metadata: { source: 'tagged_question', askerUserId: String(tags['user-id'] || '') }
               });
             }
           }
@@ -265,7 +314,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
         }
       } catch (err) {
         console.error(`[Tagged Questions] Failed while answering tagged question from ${displayName}:`, err?.message || err);
-        recapManager.recordChatMessage({ displayName, rawMessage });
+        recordViewerSource();
         return;
       }
     }
@@ -354,7 +403,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           // Explicit !commands are operational noise and stay out of recap logs.
           // Inline triggers are still normal viewer chat, so preserve the source message.
           if (customResult.triggerType === 'inline') {
-            recapManager.recordChatMessage({ displayName, rawMessage });
+            recordViewerSource();
           } else if (customResult.triggerType === 'command') {
             recordCommandBehavior({ channel, username, displayName, tags, rawMessage, streamLive });
           }
@@ -372,7 +421,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       return;
     }
 
-    recapManager.recordChatMessage({ displayName, rawMessage });
+    recordViewerSource();
   }
 
   return { handleMessage };

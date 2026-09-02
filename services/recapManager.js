@@ -13,6 +13,16 @@ const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./reca
 const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, getViewerLearningContext, applyViewerProfileUpdates } = require('./viewerProfiles');
 const { getStreamLifecycleState, saveStreamLifecycleState } = require('./streamLifecycle');
+const {
+  identityFromTwitchTags,
+  normalizeIdentity,
+  normalizeChatRecord,
+  normalizeChatRecords,
+  renderChatRecord,
+  normalizeEventRecord,
+  normalizeEventRecords,
+  renderEventRecord
+} = require('./sourceRecords');
 
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
 const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
@@ -21,6 +31,41 @@ const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
 const ACTIVE_STATE_CHECKPOINT_INTERVAL = 30 * 1000;
+
+function sourceTimestamp(value, fallback = Date.now()) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsed = Date.parse(String(value || ''));
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+function toStoredChatRecord(value, defaults = {}) {
+  const record = normalizeChatRecord(value, defaults);
+  return {
+    ...record,
+    body: record.text,
+    // Preserve the legacy rendered field for existing Mongo documents/UI code.
+    text: renderChatRecord(record, { includeBotMarker: false })
+  };
+}
+
+function toStoredEventRecord(value, defaults = {}) {
+  return normalizeEventRecord(value, defaults);
+}
+
+function replyReferenceFromInput(replyTo = null, tags = {}) {
+  if (replyTo && typeof replyTo === 'object') return replyTo;
+  const messageId = String(tags?.['reply-parent-msg-id'] || '').trim();
+  const text = String(tags?.['reply-parent-msg-body'] || '').trim();
+  const author = normalizeIdentity({
+    userId: tags?.['reply-parent-user-id'] || '',
+    login: tags?.['reply-parent-user-login'] || '',
+    displayName: tags?.['reply-parent-display-name'] || tags?.['reply-parent-user-login'] || '',
+    role: 'viewer'
+  });
+  if (!messageId && !text && !author.login && !author.displayName) return null;
+  return { messageId, text, author };
+}
 
 function formatCountdown(milliseconds) {
   const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
@@ -352,11 +397,11 @@ function createRecapManager({
 
   function buildActiveState() {
     return {
-      recapMessages,
+      recapMessages: recapMessages.map((item) => toStoredChatRecord(item)),
       messageSequence,
       streamContexts,
       contextSequence,
-      twitchEvents,
+      twitchEvents: twitchEvents.map((item) => toStoredEventRecord(item)),
       eventSequence,
       firstRecapSent,
       streamSessionStartedAt,
@@ -407,11 +452,11 @@ function createRecapManager({
       const saved = await getActiveRecapState({ streamId });
       if (!saved) return false;
 
-      recapMessages = Array.isArray(saved.recapMessages) ? saved.recapMessages : [];
+      recapMessages = normalizeChatRecords(saved.recapMessages || []).map((item) => toStoredChatRecord(item));
       messageSequence = Math.max(Number(saved.messageSequence || 0), recapMessages.at(-1)?.id || 0);
       streamContexts = Array.isArray(saved.streamContexts) ? saved.streamContexts : [];
       contextSequence = Math.max(Number(saved.contextSequence || 0), streamContexts.at(-1)?.id || 0);
-      twitchEvents = Array.isArray(saved.twitchEvents) ? saved.twitchEvents : [];
+      twitchEvents = normalizeEventRecords(saved.twitchEvents || []).map((item) => toStoredEventRecord(item));
       eventSequence = Math.max(Number(saved.eventSequence || 0), twitchEvents.at(-1)?.id || 0);
       firstRecapSent = Boolean(saved.firstRecapSent);
       recapInProgress = false;
@@ -717,71 +762,124 @@ function createRecapManager({
   }
 
   function recordTwitchEvent(event) {
-    if (!streamLive || recapPaused) return;
-    const text = String(event?.text || '').trim();
-    if (!text) return;
+    if (!streamLive || recapPaused) return false;
+    const normalized = normalizeEventRecord(event);
+    if (!normalized.text) return false;
+
+    if (normalized.sourceEventId && twitchEvents.some((item) => String(item?.sourceEventId || '') === normalized.sourceEventId)) {
+      return false;
+    }
 
     eventSequence++;
-    twitchEvents.push({
+    twitchEvents.push(toStoredEventRecord({
+      ...normalized,
       id: eventSequence,
-      timestamp: event?.timestamp || Date.now(),
-      type: String(event?.type || 'twitch_event'),
-      text
-    });
+      timestamp: sourceTimestamp(normalized.timestamp)
+    }));
 
     markActiveStateDirty();
-    console.log(`[Recap] Verified Twitch event recorded: ${text}`);
+    console.log(`[Recap] Verified Twitch event recorded: ${normalized.text}`);
+    return true;
   }
 
-  function recordChatMessage({ displayName, rawMessage }) {
-    if (!streamLive || recapPaused) return;
-    const text = (rawMessage || '').trim();
-    if (!text) return;
+  function recordChatMessage({
+    displayName,
+    rawMessage,
+    tags = {},
+    author = null,
+    twitchMessageId = '',
+    timestamp = 0,
+    replyTo = null,
+    metadata = {}
+  } = {}) {
+    if (!streamLive || recapPaused) return false;
+    const body = String(rawMessage || '').trim();
+    if (!body) return false;
+    const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
+    if (messageId && recapMessages.some((item) => String(item?.twitchMessageId || '') === messageId)) return false;
 
     messageSequence++;
-    recapMessages.push({
-      id: messageSequence,
-      timestamp: Date.now(),
-      text: `${displayName}: ${text}`,
-      kind: 'viewer'
+    const identity = normalizeIdentity(author || identityFromTwitchTags(tags, displayName), {
+      displayName,
+      login: tags?.username || '',
+      userId: tags?.['user-id'] || '',
+      role: 'viewer'
     });
+    recapMessages.push(toStoredChatRecord({
+      id: messageSequence,
+      twitchMessageId: messageId,
+      timestamp: sourceTimestamp(timestamp || tags?.['tmi-sent-ts']),
+      kind: 'viewer',
+      author: identity,
+      body,
+      replyTo: replyReferenceFromInput(replyTo, tags),
+      metadata
+    }));
     markActiveStateDirty();
+    return true;
   }
 
-  function recordBotContextMessage({ displayName, rawMessage }) {
-    if (!streamLive || recapPaused) return;
-    const text = String(rawMessage || '').trim();
-    if (!text) return;
+  function recordBotContextMessage({
+    displayName,
+    rawMessage,
+    author = null,
+    twitchMessageId = '',
+    timestamp = 0,
+    replyTo = null,
+    metadata = {}
+  } = {}) {
+    if (!streamLive || recapPaused) return false;
+    const body = String(rawMessage || '').trim();
+    if (!body) return false;
+    const messageId = String(twitchMessageId || '').trim();
+    if (messageId && recapMessages.some((item) => String(item?.twitchMessageId || '') === messageId)) return false;
 
     const botName = String(displayName || botUsername || 'SqwertArmyBot').trim() || 'SqwertArmyBot';
     messageSequence++;
-    recapMessages.push({
+    recapMessages.push(toStoredChatRecord({
       id: messageSequence,
-      timestamp: Date.now(),
-      text: `${botName}: ${text}`,
-      kind: 'bot_context'
-    });
+      twitchMessageId: messageId,
+      timestamp: sourceTimestamp(timestamp),
+      kind: 'bot_context',
+      author: normalizeIdentity(author || { login: botUsername, displayName: botName, role: 'bot' }),
+      body,
+      replyTo,
+      metadata
+    }));
     markActiveStateDirty();
+    return true;
   }
 
-  function recordModeratorAnnouncement({ displayName, rawMessage, color = '' }) {
-    if (!streamLive || recapPaused) return;
-    const text = String(rawMessage || '').trim();
-    if (!text) return;
+  function recordModeratorAnnouncement({
+    displayName,
+    rawMessage,
+    color = '',
+    tags = {},
+    author = null,
+    twitchMessageId = '',
+    timestamp = 0
+  } = {}) {
+    if (!streamLive || recapPaused) return false;
+    const body = String(rawMessage || '').trim();
+    if (!body) return false;
+    const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
+    if (messageId && recapMessages.some((item) => String(item?.twitchMessageId || '') === messageId)) return false;
 
     const moderator = String(displayName || 'moderator').trim() || 'moderator';
-    const announcementColor = String(color || '').trim();
-    const colorLabel = announcementColor ? ` (${announcementColor})` : '';
-
     messageSequence++;
-    recapMessages.push({
+    recapMessages.push(toStoredChatRecord({
       id: messageSequence,
-      timestamp: Date.now(),
-      text: `[MODERATOR ANNOUNCEMENT${colorLabel} by ${moderator}]: ${text}`
-    });
+      twitchMessageId: messageId,
+      timestamp: sourceTimestamp(timestamp || tags?.['tmi-sent-ts']),
+      kind: 'moderator_announcement',
+      author: normalizeIdentity(author || identityFromTwitchTags(tags, moderator), { displayName: moderator, role: 'moderator' }),
+      body,
+      metadata: { color: String(color || '').trim() }
+    }));
 
     markActiveStateDirty();
-    console.log(`[Recap] Moderator announcement recorded from ${moderator}: ${text}`);
+    console.log(`[Recap] Moderator announcement recorded from ${moderator}: ${body}`);
+    return true;
   }
 
   function discardMessageSnapshot(snapshotMaxId) {
@@ -825,17 +923,11 @@ function createRecapManager({
     const snapshotMaxId = messageSnapshot.length ? messageSnapshot[messageSnapshot.length - 1].id : null;
     const snapshotMaxContextId = contextSnapshot.length ? contextSnapshot[contextSnapshot.length - 1].id : null;
     const snapshotMaxEventId = eventSnapshot.length ? eventSnapshot[eventSnapshot.length - 1].id : null;
-    const chatLogs = messageSnapshot.map((item) =>
-      item.kind === 'bot_context'
-        ? `[BOT CONTEXT ONLY] ${item.text}`
-        : item.text
-    );
-    const learningChatLogs = messageSnapshot
-      .filter((item) => item.kind !== 'bot_context')
-      .map((item) => item.text);
+    const chatRecords = normalizeChatRecords(messageSnapshot);
+    const learningChatRecords = chatRecords.filter((item) => item.kind !== 'bot_context');
 
     console.log(`[Recap] Automatic recap triggered by ${reason}.`);
-    console.log(`[Recap] Window contains ${chatLogs.length} chat messages and ${eventSnapshot.length} verified Twitch event(s).`);
+    console.log(`[Recap] Window contains ${chatRecords.length} chat messages and ${eventSnapshot.length} verified Twitch event(s).`);
 
     try {
       let twitchMessage;
@@ -855,14 +947,14 @@ function createRecapManager({
 
       try {
         streamLoreRecord = await getStreamLore(channelName);
-        const loreMatchSource = [...chatLogs, ...eventSnapshot.map((event) => String(event?.text || ''))].join('\n');
+        const loreMatchSource = [...chatRecords.map((item) => renderChatRecord(item)), ...eventSnapshot.map((event) => renderEventRecord(event))].join('\n');
         streamLore = buildEffectiveLore(streamLoreRecord?.manualEntries || [], streamLoreRecord?.learnedObservations || [], loreMatchSource, { includeGlobal: true });
         if (streamLore) console.log(`[Recap] Loaded ${streamLore.length} characters of stream-specific lore from MongoDB.`);
       } catch (loreErr) {
         console.error('[Recap] Could not load stream-specific lore. Continuing without it:', loreErr.message || loreErr);
       }
 
-      if (chatLogs.length === 0 && eventSnapshot.length === 0) {
+      if (chatRecords.length === 0 && eventSnapshot.length === 0) {
         recapSummaryBody = 'Chat was quiet this hour—nothing notable to recap.';
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       } else {
@@ -872,7 +964,7 @@ function createRecapManager({
           generatedAtMs,
           uptimeMs: twitchStreamStartedAt ? Math.max(0, generatedAtMs - twitchStreamStartedAt) : null
         };
-        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName, botUsername);
+        const result = await generateRecap(chatRecords, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName, botUsername);
         recapSummaryBody = result.summary;
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
@@ -934,18 +1026,19 @@ function createRecapManager({
           // but they must not become self-learning evidence for viewer profiles, stream lore,
           // or session memory. Preserve the pre-existing learning behavior by using viewer
           // messages only for those downstream learning paths.
-          const memoryChatLogs = sanitizeChatForGemini(learningChatLogs).logs;
+          const memoryChatRecords = sanitizeChatForGemini(learningChatRecords).records;
 
           if (sessionMemoryConfig.enabled) {
             try {
               const memoryBlock = await generateSessionMemoryBlock({
-                chatLogs: memoryChatLogs,
+                chatLogs: memoryChatRecords,
                 streamContexts: contextSnapshot,
                 twitchEvents: eventSnapshot,
                 streamLore,
                 publicRecap: recapSummaryBody,
                 streamTiming: { windowStartedAtMs, generatedAtMs },
-                config: sessionMemoryConfig
+                config: sessionMemoryConfig,
+                channelName
               });
               if (memoryBlock) {
                 await saveSessionMemoryBlock({
@@ -963,12 +1056,12 @@ function createRecapManager({
 
           if (viewerProfileSettings.automaticLearningEnabled) {
             try {
-              const existingProfiles = await getViewerLearningContext(channelName, memoryChatLogs);
-              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: memoryChatLogs, existingProfiles });
+              const existingProfiles = await getViewerLearningContext(channelName, memoryChatRecords);
+              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: memoryChatRecords, existingProfiles });
               if (viewerUpdates.length) {
                 const profileResult = await applyViewerProfileUpdates({
                   channelName,
-                  chatLogs: memoryChatLogs,
+                  chatLogs: memoryChatRecords,
                   updates: viewerUpdates
                 });
                 console.log(`[Viewer Profiles] Dedicated hourly learning processed ${viewerUpdates.length} viewer update(s): ${profileResult.created} new pending, ${profileResult.reinforced} reinforced, ${profileResult.refined} pending auto-refined, ${profileResult.revisionsProposed} approved revision proposal(s), ${profileResult.contradictions} contradiction update(s), ${profileResult.skipped} skipped.`);
@@ -982,7 +1075,7 @@ function createRecapManager({
 
           try {
             const loreObservations = await generateStreamLoreObservations({
-              chatLogs: memoryChatLogs,
+              chatLogs: memoryChatRecords,
               existingObservations: streamLoreRecord?.learnedObservations || []
             });
             if (loreObservations.length) {
@@ -1105,16 +1198,15 @@ function createRecapManager({
     };
   }
 
-  function getCurrentWindowLogs() {
-    // Preserve the historical meaning of this helper for lore directives/admin
-    // tools: viewer/mod source only. Bot context is reserved for recap generation.
-    return recapMessages
-      .filter((item) => item.kind !== 'bot_context')
-      .map((item) => item.text);
+  function getCurrentWindowLogs({ structured = false, includeBotContext = false } = {}) {
+    const records = normalizeChatRecords(recapMessages)
+      .filter((item) => includeBotContext || item.kind !== 'bot_context');
+    return structured ? records : records.map((item) => renderChatRecord(item));
   }
 
-  function getCurrentWindowEvents() {
-    return twitchEvents.map((item) => ({ type: item.type, text: item.text, timestamp: item.timestamp }));
+  function getCurrentWindowEvents({ structured = true } = {}) {
+    const records = normalizeEventRecords(twitchEvents);
+    return structured ? records : records.map((item) => ({ type: item.type, text: item.text, timestamp: item.timestamp }));
   }
 
   function getCurrentWindowContexts() {
@@ -1148,14 +1240,19 @@ function createRecapManager({
     };
   }
 
-  async function getSessionMemoryContext(question = '') {
+  async function getSessionMemoryContext(request = '') {
     const config = readSessionMemoryConfig();
     if (!config.enabled || !currentStreamId || !streamLive) return { text: '', stats: { enabled: config.enabled, blockCount: 0, contextCharacters: 0 } };
+    const options = request && typeof request === 'object'
+      ? request
+      : { question: String(request || '') };
     const blocks = await getSessionMemoryBlocks({ streamId: currentStreamId });
     return buildSessionMemoryContext({
       blocks,
-      question,
-      recentChatLogs: recapMessages.map((item) => item.text),
+      question: options.question || '',
+      requesterIdentity: options.requesterIdentity || null,
+      recipientIdentity: options.recipientIdentity || null,
+      recentChatLogs: normalizeChatRecords(recapMessages),
       config,
       streamLive
     });

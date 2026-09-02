@@ -127,7 +127,7 @@ function shouldFallbackToIrc(err) {
   return false;
 }
 
-async function sendViaIrcFallback(channel, message, apiError) {
+async function sendViaIrcFallback(channel, message, apiError, options = {}) {
   if (!twitchClient || !botConnected) {
     throw apiError;
   }
@@ -139,7 +139,17 @@ async function sendViaIrcFallback(channel, message, apiError) {
     `[Chat] Chat API unavailable (${apiError?.message || apiError}). Falling back to IRC for this message.`
   );
 
-  await twitchClient.say(targetChannel, message);
+  let fallbackMessage = String(message || '').trim();
+  const fallbackLogin = String(options?.fallbackMentionLogin || '').replace(/^@+/, '').toLowerCase().trim();
+  const fallbackDisplayName = String(options?.fallbackMentionDisplayName || '').replace(/^@+/, '').trim();
+  const fallbackTarget = fallbackLogin || fallbackDisplayName;
+  if (options?.replyParentMessageId && fallbackTarget) {
+    const mentionPattern = new RegExp(`^@${String(fallbackTarget).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|\\s|[,:-])`, 'i');
+    if (!mentionPattern.test(fallbackMessage)) fallbackMessage = `@${fallbackTarget} ${fallbackMessage}`.trim();
+  }
+  fallbackMessage = Array.from(fallbackMessage).slice(0, TWITCH_MESSAGE_LIMIT).join('').trim();
+
+  await twitchClient.say(targetChannel, fallbackMessage);
 
   console.log('[Chat] Message sent through IRC fallback. Bot badge will not apply to this message.');
 
@@ -201,7 +211,7 @@ const chatClientProxy = {
         throw err;
       }
 
-      return sendViaIrcFallback(channel, message, err);
+      return sendViaIrcFallback(channel, message, err, options);
     }
   }
 };
@@ -275,7 +285,9 @@ botPersonalityManager = createBotPersonalityManager({
       streamTimezone: status.streamTimezone || 'America/Los_Angeles'
     };
   },
-  getSessionMemoryContext: (question) => recapManager?.getSessionMemoryContext?.(question) || { text: '' }
+  getSessionMemoryContext: (request) => recapManager?.getSessionMemoryContext?.(request) || { text: '' },
+  getCurrentChatRecords: () => recapManager?.getCurrentWindowLogs?.({ structured: true, includeBotContext: true }) || [],
+  getCurrentEventRecords: () => recapManager?.getCurrentWindowEvents?.({ structured: true }) || []
 });
 
 const twitchMessageHandler = createTwitchMessageHandler({
@@ -480,7 +492,10 @@ function attachTwitchHandlers(client, generation) {
     recapManager.recordModeratorAnnouncement({
       displayName,
       rawMessage,
-      color: String(color || tags?.['msg-param-color'] || '').trim()
+      color: String(color || tags?.['msg-param-color'] || '').trim(),
+      tags,
+      twitchMessageId: tags?.id || tags?.['message-id'] || '',
+      timestamp: tags?.['tmi-sent-ts'] || Date.now()
     });
   });
 
