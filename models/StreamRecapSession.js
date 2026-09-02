@@ -12,7 +12,8 @@ const recapEntrySchema = new mongoose.Schema(
 const recapMessageSchema = new mongoose.Schema({
   id: { type: Number, required: true },
   timestamp: { type: Number, required: true },
-  text: { type: String, required: true }
+  text: { type: String, required: true },
+  kind: { type: String, enum: ['viewer', 'bot_context'], default: 'viewer' }
 }, { _id: false });
 
 const recapContextSchema = new mongoose.Schema({

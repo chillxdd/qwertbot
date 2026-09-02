@@ -5,6 +5,7 @@ const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!start
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
 const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin']);
+const TAGGED_RECAP_CONTEXT_EXCLUDED_REASONS = new Set(['cooldown', 'prompt_injection_blocked', 'ai_failure']);
 
 function getCommandName(message) {
   return String(message || '').trim().split(/\s+/)[0].toLowerCase();
@@ -191,7 +192,10 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       if (botPersonalityManager?.consumeOwnResponse(rawMessage)) return;
       if (persistentPinManager?.consumeOwnResponse(rawMessage)) return;
       if (consumeLoreDirectiveResponse(rawMessage)) return;
-      recapManager.recordChatMessage({ displayName, rawMessage });
+
+      // Native replies or any other bot-authored chat that reaches this point may
+      // help explain viewer conversation, but it is never ordinary participant chat.
+      recapManager.recordBotContextMessage?.({ displayName, rawMessage });
       return;
     }
 
@@ -240,6 +244,22 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           // later AI context after the direct attack has already been blocked.
           if (personalityResult?.reason !== 'prompt_injection_blocked') {
             recapManager.recordChatMessage({ displayName, rawMessage });
+
+            // A successful normal Tagged Question answer is useful to understand
+            // what viewers react to later in the hour. Record it separately as
+            // context-only so the public recap can use its meaning without turning
+            // SqwertArmyBot/Oakbot into a recap participant. Cooldown, security,
+            // and failure boilerplate remain operational noise.
+            if (
+              personalityResult.responded &&
+              personalityResult.message &&
+              !TAGGED_RECAP_CONTEXT_EXCLUDED_REASONS.has(String(personalityResult.reason || '').trim())
+            ) {
+              recapManager.recordBotContextMessage?.({
+                displayName: botUsername || 'SqwertArmyBot',
+                rawMessage: personalityResult.message
+              });
+            }
           }
           return;
         }

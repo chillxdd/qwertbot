@@ -52,7 +52,8 @@ function createRecapManager({
   getTaggedQuestionRecapBufferStatus = null,
   getAutomationSpacingStatus = null,
   tryReserveAutomationSlot = null,
-  getNativeCommandResponse = null
+  getNativeCommandResponse = null,
+  botUsername = ''
 }) {
   let twitchClientId = (process.env.TWITCH_CLIENT_ID || '').trim();
   let streamStateInitialized = false;
@@ -741,7 +742,24 @@ function createRecapManager({
     recapMessages.push({
       id: messageSequence,
       timestamp: Date.now(),
-      text: `${displayName}: ${text}`
+      text: `${displayName}: ${text}`,
+      kind: 'viewer'
+    });
+    markActiveStateDirty();
+  }
+
+  function recordBotContextMessage({ displayName, rawMessage }) {
+    if (!streamLive || recapPaused) return;
+    const text = String(rawMessage || '').trim();
+    if (!text) return;
+
+    const botName = String(displayName || botUsername || 'SqwertArmyBot').trim() || 'SqwertArmyBot';
+    messageSequence++;
+    recapMessages.push({
+      id: messageSequence,
+      timestamp: Date.now(),
+      text: `${botName}: ${text}`,
+      kind: 'bot_context'
     });
     markActiveStateDirty();
   }
@@ -807,7 +825,14 @@ function createRecapManager({
     const snapshotMaxId = messageSnapshot.length ? messageSnapshot[messageSnapshot.length - 1].id : null;
     const snapshotMaxContextId = contextSnapshot.length ? contextSnapshot[contextSnapshot.length - 1].id : null;
     const snapshotMaxEventId = eventSnapshot.length ? eventSnapshot[eventSnapshot.length - 1].id : null;
-    const chatLogs = messageSnapshot.map((item) => item.text);
+    const chatLogs = messageSnapshot.map((item) =>
+      item.kind === 'bot_context'
+        ? `[BOT CONTEXT ONLY] ${item.text}`
+        : item.text
+    );
+    const learningChatLogs = messageSnapshot
+      .filter((item) => item.kind !== 'bot_context')
+      .map((item) => item.text);
 
     console.log(`[Recap] Automatic recap triggered by ${reason}.`);
     console.log(`[Recap] Window contains ${chatLogs.length} chat messages and ${eventSnapshot.length} verified Twitch event(s).`);
@@ -847,7 +872,7 @@ function createRecapManager({
           generatedAtMs,
           uptimeMs: twitchStreamStartedAt ? Math.max(0, generatedAtMs - twitchStreamStartedAt) : null
         };
-        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName);
+        const result = await generateRecap(chatLogs, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName, botUsername);
         recapSummaryBody = result.summary;
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
@@ -905,7 +930,11 @@ function createRecapManager({
             ...eventSnapshot.map((item) => Number(item?.timestamp || 0))
           ].filter((value) => value > 0);
           const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
-          const memoryChatLogs = sanitizeChatForGemini(chatLogs).logs;
+          // Bot answers can help the public recap understand surrounding viewer conversation,
+          // but they must not become self-learning evidence for viewer profiles, stream lore,
+          // or session memory. Preserve the pre-existing learning behavior by using viewer
+          // messages only for those downstream learning paths.
+          const memoryChatLogs = sanitizeChatForGemini(learningChatLogs).logs;
 
           if (sessionMemoryConfig.enabled) {
             try {
@@ -1077,7 +1106,11 @@ function createRecapManager({
   }
 
   function getCurrentWindowLogs() {
-    return recapMessages.map((item) => item.text);
+    // Preserve the historical meaning of this helper for lore directives/admin
+    // tools: viewer/mod source only. Bot context is reserved for recap generation.
+    return recapMessages
+      .filter((item) => item.kind !== 'bot_context')
+      .map((item) => item.text);
   }
 
   function getCurrentWindowEvents() {
@@ -1171,6 +1204,7 @@ function createRecapManager({
   return {
     start,
     recordChatMessage,
+    recordBotContextMessage,
     recordModeratorAnnouncement,
     recordTwitchEvent,
     handleRecapCommand,
