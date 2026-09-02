@@ -8,8 +8,8 @@ let nativePage = 1;
 const nativeCommands = [
   { name: '!commands', userLevel: 'everyone', description: 'Links to this public SqwertArmyBot command directory.' },
   { name: '!recap', userLevel: 'everyone', description: 'Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.' },
-  { name: '!optout', userLevel: 'everyone', description: 'Opts you out of Viewer Profiles immediately. Learning and AI use stop at once; your existing profile is retained for 30 days in case you opt back in, then its stored profile content is deleted.' },
-  { name: '!optin', userLevel: 'everyone', description: 'Opts you back into Viewer Profiles. If you return within 30 days, your retained profile is reactivated; after that, a new profile starts fresh.' }
+  { name: '!optout', userLevel: 'everyone', badge: 'AI', description: 'Opts you out of Viewer Profiles immediately. Learning and AI use stop at once; your existing profile is retained for 30 days in case you opt back in, then its stored profile content is deleted.' },
+  { name: '!optin', userLevel: 'everyone', badge: 'AI', description: 'Opts you back into Viewer Profiles. If you return within 30 days, your retained profile is reactivated; after that, a new profile starts fresh.' }
 ];
 
 const USER_LEVEL_LABELS = { everyone: 'Everyone', subscriber: 'Subscriber', twitch_vip: 'VIP', moderator: 'Moderator', owner: 'Broadcaster' };
@@ -106,7 +106,7 @@ function renderNativeCommands() {
   const query = String($('readonlyNativeCommandSearch')?.value || '').trim().toLocaleLowerCase();
   const sort = $('readonlyNativeCommandSort')?.value || 'name_asc';
   const levelFilter = $('readonlyNativeCommandUserLevelFilter')?.value || 'all';
-  const filtered = nativeCommands.filter((command) => (levelFilter === 'all' || normalizedUserLevel(command.userLevel) === levelFilter) && (!query || `${command.name} ${command.description}`.toLocaleLowerCase().includes(query)))
+  const filtered = nativeCommands.filter((command) => (levelFilter === 'all' || normalizedUserLevel(command.userLevel) === levelFilter) && (!query || `${command.name} ${command.badge || ''} ${command.description}`.toLocaleLowerCase().includes(query)))
     .sort((a, b) => sort === 'name_desc'
       ? b.name.localeCompare(a.name, undefined, { sensitivity: 'base', numeric: true })
       : a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
@@ -122,7 +122,10 @@ function renderNativeCommands() {
   });
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
   list.innerHTML = visible.length
-    ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code>${userLevelBadgeHtml(command.userLevel)}</div><div class="detail">${esc(command.description)}</div></div><span class="native-command-status enabled">Built-in</span></div>`).join('')
+    ? visible.map((command) => {
+      const badge = command.badge ? `<span class="native-command-status enabled">${esc(command.badge)}</span>` : '';
+      return `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code>${userLevelBadgeHtml(command.userLevel)}</div><div class="detail">${esc(command.description)}</div></div>${badge}</div>`;
+    }).join('')
     : '<div class="coming-soon custom-empty-state">No commands match the current filters.</div>';
   const filteredView = Boolean(query || levelFilter !== 'all');
   msg.textContent = filteredView ? `${filtered.length} matching command${filtered.length === 1 ? '' : 's'}.` : `${nativeCommands.length} command${nativeCommands.length === 1 ? '' : 's'} available.`;
