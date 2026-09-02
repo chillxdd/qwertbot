@@ -412,6 +412,132 @@ function freshRequire(relativePath, stubs = {}) {
     assert.ok(profiles.profileIdentityRank(exact, requested) > profiles.profileIdentityRank(aliasOnly, requested));
   });
 
+
+  await test('recap length plans count viewer/mod messages, not bot-context lines', () => {
+    const recap = freshRequire('services/recapGenerator.js', {
+      './geminiClient': { requestGeminiDataWithRetry: async () => ({ text: '' }) },
+      './recapPromptConfig': {
+        getRecapPromptConfig: async () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' }),
+        getDefaultRecapPromptConfig: () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' })
+      }
+    });
+    const viewerRecords = Array.from({ length: 20 }, (_, index) => ({
+      author: { userId: `u${index % 4}`, login: `viewer${index % 4}`, displayName: `Viewer${index % 4}` },
+      body: `viewer message ${index}`
+    }));
+    const botRecords = Array.from({ length: 30 }, (_, index) => ({
+      kind: 'bot_context',
+      author: { login: 'sqwertarmybot', displayName: 'SqwertArmyBot', role: 'bot' },
+      body: `bot context ${index}`
+    }));
+
+    const normal = recap.getRecapLengthPlan([...viewerRecords, ...botRecords], []);
+    assert.equal(normal.viewerMessageCount, 20);
+    assert.equal(normal.uniqueViewerCount, 4);
+    assert.equal(normal.eligible, true);
+    assert.equal(normal.targetMin, 400);
+    assert.equal(normal.acceptableMin, 380);
+
+    const light = recap.getRecapLengthPlan(viewerRecords.slice(0, 10), []);
+    assert.equal(light.eligible, true);
+    assert.equal(light.targetMin, 330);
+    assert.equal(light.acceptableMin, 300);
+    assert.equal(light.finalRecoveryAttempts, 1);
+
+    const quiet = recap.getRecapLengthPlan([...viewerRecords.slice(0, 9), ...botRecords], []);
+    assert.equal(quiet.viewerMessageCount, 9);
+    assert.equal(quiet.eligible, false);
+  });
+
+  await test('final attribution shrink triggers a source-grounded length recovery', async () => {
+    const makeSummary = (lead, targetLength) => {
+      let value = `${lead} `;
+      const filler = 'Chat also compared specific snack ideas, game mechanics, recurring jokes, and unusual stream suggestions. ';
+      while (value.length + filler.length + 1 < targetLength) value += filler;
+      if (value.length < targetLength - 1) value += 'x'.repeat(targetLength - value.length - 1);
+      return `${value.trimEnd()}.`;
+    };
+    const primary = makeSummary('Chat discussed several supported topics.', 390);
+    const auditedShort = makeSummary('Chat discussed two supported topics.', 210);
+    const recovered = makeSummary('Chat discussed several specific supported topics.', 410);
+    const requestLabels = [];
+
+    const recap = freshRequire('services/recapGenerator.js', {
+      './geminiClient': {
+        requestGeminiDataWithRetry: async (_prompt, options = {}) => {
+          requestLabels.push(options.label);
+          if (options.label === 'hourly-recap-primary') return { text: primary };
+          if (options.label === 'hourly-recap-final-recovery-1') return { text: recovered };
+          throw new Error(`Unexpected Gemini label: ${options.label}`);
+        }
+      },
+      './recapPromptConfig': {
+        getRecapPromptConfig: async () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' }),
+        getDefaultRecapPromptConfig: () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' })
+      },
+      './attributionAudit': {
+        auditGeneratedAttribution: async ({ text, label }) => {
+          const next = label === 'hourly-recap-attribution-final-post-bot' ? auditedShort : text;
+          return {
+            text: next,
+            changed: next !== text,
+            audited: 0,
+            unsupported: [],
+            auditFailed: false,
+            error: ''
+          };
+        }
+      }
+    });
+
+    const records = Array.from({ length: 25 }, (_, index) => ({
+      twitchMessageId: `m${index}`,
+      author: { userId: `u${index % 5}`, login: `viewer${index % 5}`, displayName: `Viewer${index % 5}` },
+      body: `specific source discussion ${index}`
+    }));
+    const result = await recap.generateRecap(records, [], [], [], '', {}, 'generalqwert', 'SqwertArmyBot');
+
+    assert.ok(requestLabels.includes('hourly-recap-final-recovery-1'));
+    assert.ok(result.summary.length >= 380, `expected recovered recap >= 380 chars, got ${result.summary.length}`);
+    assert.equal(result.summary, recovered);
+  });
+
+  await test('quiet recap windows are not padded merely to hit a length target', async () => {
+    const requestLabels = [];
+    const shortSummary = 'Chat briefly compared two snack ideas and a game mechanic.';
+    const recap = freshRequire('services/recapGenerator.js', {
+      './geminiClient': {
+        requestGeminiDataWithRetry: async (_prompt, options = {}) => {
+          requestLabels.push(options.label);
+          if (options.label === 'hourly-recap-primary') return { text: shortSummary };
+          throw new Error(`Unexpected Gemini label: ${options.label}`);
+        }
+      },
+      './recapPromptConfig': {
+        getRecapPromptConfig: async () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' }),
+        getDefaultRecapPromptConfig: () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' })
+      },
+      './attributionAudit': {
+        auditGeneratedAttribution: async ({ text }) => ({
+          text,
+          changed: false,
+          audited: 0,
+          unsupported: [],
+          auditFailed: false,
+          error: ''
+        })
+      }
+    });
+    const records = Array.from({ length: 9 }, (_, index) => ({
+      twitchMessageId: `quiet-${index}`,
+      author: { userId: `u${index % 2}`, login: `viewer${index % 2}`, displayName: `Viewer${index % 2}` },
+      body: `quiet source ${index}`
+    }));
+    const result = await recap.generateRecap(records, [], [], [], '', {}, 'generalqwert', 'SqwertArmyBot');
+    assert.equal(result.summary, shortSummary);
+    assert.deepEqual(requestLabels, ['hourly-recap-primary']);
+  });
+
   if (failed) {
     console.error(`\n${failed} test(s) failed; ${passed} passed.`);
     process.exitCode = 1;
