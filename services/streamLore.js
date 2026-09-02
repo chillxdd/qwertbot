@@ -50,6 +50,27 @@ function inferApprovalStatus(observation) {
   return observation?.enabled === true ? 'approved' : 'pending';
 }
 
+const BULK_CONFIDENCE_RANK = Object.freeze({ low: 1, medium: 2, high: 3 });
+const BULK_APPROVAL_SCOPES = new Set(['pending', 'approved', 'both']);
+
+function normalizeBulkCleanupOptions(value = {}) {
+  const maxConfidence = ['low', 'medium', 'high'].includes(String(value.maxConfidence || '').toLowerCase())
+    ? String(value.maxConfidence).toLowerCase()
+    : 'medium';
+  const approvalScope = BULK_APPROVAL_SCOPES.has(String(value.approvalScope || '').toLowerCase())
+    ? String(value.approvalScope).toLowerCase()
+    : 'both';
+  return { maxConfidence, approvalScope };
+}
+
+function observationMatchesBulkCleanup(observation, options = {}) {
+  const { maxConfidence, approvalScope } = normalizeBulkCleanupOptions(options);
+  const status = inferApprovalStatus(observation);
+  if (approvalScope !== 'both' && status !== approvalScope) return false;
+  const rank = BULK_CONFIDENCE_RANK[normalizeConfidence(observation?.confidence)] || BULK_CONFIDENCE_RANK.medium;
+  return rank <= BULK_CONFIDENCE_RANK[maxConfidence];
+}
+
 function refreshObservationEvidenceSummary(observation) {
   if (!observation) return;
   observation.evidenceSummary = buildEvidenceSummary(observation);
@@ -548,6 +569,35 @@ async function deleteLearnedObservation(channelName, observationId) {
   return getStreamLore(channel);
 }
 
+async function deleteLearnedObservationsByConfidence(channelName, options = {}) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) throw new Error('TWITCH_CHANNEL is not configured.');
+  const normalized = normalizeBulkCleanupOptions(options);
+  const doc = await StreamLore.findOne({ channelName: channel }, { learnedObservations: 1 }).lean();
+  if (!doc) return { ...normalized, deletedObservations: 0, learnedObservations: [] };
+  const ids = (Array.isArray(doc.learnedObservations) ? doc.learnedObservations : [])
+    .filter((observation) => observationMatchesBulkCleanup(observation, normalized))
+    .map((observation) => observation?._id)
+    .filter(Boolean);
+  if (ids.length) {
+    await StreamLore.updateOne(
+      { channelName: channel },
+      { $pull: { learnedObservations: { _id: { $in: ids } } } }
+    );
+  }
+  const lore = await getStreamLore(channel);
+  return { ...normalized, deletedObservations: ids.length, learnedObservations: lore.learnedObservations };
+}
+
+async function clearAllLearnedObservations(channelName) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) throw new Error('TWITCH_CHANNEL is not configured.');
+  const doc = await StreamLore.findOne({ channelName: channel }, { learnedObservations: 1 }).lean();
+  const deletedObservations = Array.isArray(doc?.learnedObservations) ? doc.learnedObservations.length : 0;
+  if (doc) await StreamLore.updateOne({ channelName: channel }, { $set: { learnedObservations: [] } });
+  return { deletedObservations, learnedObservations: [] };
+}
+
 module.exports = {
   MAX_STREAM_LORE_LENGTH,
   MAX_MANUAL_LORE_ENTRIES,
@@ -574,5 +624,7 @@ module.exports = {
   acceptLearnedObservationRevision,
   dismissLearnedObservationRevision,
   setLearnedObservationEnabled,
-  deleteLearnedObservation
+  deleteLearnedObservation,
+  deleteLearnedObservationsByConfidence,
+  clearAllLearnedObservations
 };

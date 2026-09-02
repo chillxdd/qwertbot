@@ -1,5 +1,6 @@
 export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   const maxCommandNameLength = Number(config.maxCommandNameLength || 80);
+  const maxPublicDescriptionLength = Number(config.maxPublicDescriptionLength || 300);
   const maxTriggers = Number(config.maxTriggers || 25);
   const maxResponses = Number(config.maxResponses || 25);
   const maxResponseLength = Number(config.maxResponseLength || 500);
@@ -221,6 +222,13 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customCooldownResponseCount').textContent = `${$('customCooldownResponse').value.length}/${maxResponseLength}`;
   }
 
+  function updatePublicDescriptionCount() {
+    const input = $('customCommandPublicDescription');
+    const count = $('customCommandPublicDescriptionCount');
+    if (!input || !count) return;
+    count.textContent = `${input.value.length}/${maxPublicDescriptionLength} characters`;
+  }
+
   function commandLabel(command) {
     if (command?.name) return command.name;
     const triggers = command?.triggers?.length ? command.triggers : [{ triggerType: command?.triggerType, trigger: command?.trigger }];
@@ -246,6 +254,8 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customCommandEditorTitle').textContent = command ? 'Edit Custom Command' : 'Add Custom Command';
     $('customCommandName').value = command?.name || commandLabel(command || {});
     if (!command) $('customCommandName').value = '';
+    $('customCommandPublicDescription').value = command?.publicDescription || '';
+    updatePublicDescriptionCount();
     $('customUserLevel').value = command?.userLevel || 'everyone';
     $('customProbability').value = command?.probability ?? 100;
     $('customCooldown').value = command?.cooldownSeconds ?? defaultCommandCooldownSeconds;
@@ -344,6 +354,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       : [{ triggerType: command?.triggerType, trigger: command?.trigger }];
     const haystack = [
       commandLabel(command),
+      command?.publicDescription,
       command?.userLevel,
       ...(triggers || []).flatMap((item) => [item?.trigger, item?.triggerType]),
       ...(Array.isArray(command?.responses) ? command.responses : [])
@@ -407,6 +418,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
               ${statusBadge(command)}
               <span class="user-level-badge user-level-${userLevelKey}">${esc(userLevel)}</span>
             </div>
+            ${command.publicDescription ? `<div class="readonly-command-description">${esc(command.publicDescription)}</div>` : ''}
             <div class="custom-trigger-chip-list">${triggerChips}</div>
             <div class="detail">${triggers.length} ${triggerWord} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : command.sendAs === 'reply' ? 'Reply to Trigger' : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
           </div>
@@ -486,6 +498,12 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
       setEditorMessage(`Name cannot exceed ${maxCommandNameLength} characters.`, true);
       return;
     }
+    const publicDescription = $('customCommandPublicDescription').value.trim();
+    if (publicDescription.length > maxPublicDescriptionLength) {
+      setEditorMessage(`Public description cannot exceed ${maxPublicDescriptionLength} characters.`, true);
+      $('customCommandPublicDescription').focus();
+      return;
+    }
 
     const triggers = [...triggersEl.querySelectorAll('.custom-trigger-row')].map((row) => ({
       triggerType: row.querySelector('.custom-trigger-type').value,
@@ -517,6 +535,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const payload = {
       id: editingId || undefined,
       name,
+      publicDescription,
       triggers,
       userLevel: $('customUserLevel').value,
       probability: Number($('customProbability').value),
@@ -731,6 +750,9 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
   $('customCooldownResponse').addEventListener('input', updateCooldownResponseCount);
   updateCooldownResponseCount();
   $('customCommandName').maxLength = maxCommandNameLength;
+  $('customCommandPublicDescription').maxLength = maxPublicDescriptionLength;
+  $('customCommandPublicDescription').addEventListener('input', updatePublicDescriptionCount);
+  updatePublicDescriptionCount();
 
   return {
     async onVisibilityChange(visible) {

@@ -4,6 +4,7 @@ const { getFollowInfo: getTwitchFollowInfo, formatFollowAge, formatFollowDate } 
 const { getGameInfo: getTwitchGameInfo } = require('./twitchChannels');
 
 const MAX_COMMAND_NAME_LENGTH = 80;
+const MAX_PUBLIC_DESCRIPTION_LENGTH = 300;
 const MAX_TRIGGER_LENGTH = 120;
 const MAX_TRIGGERS = 25;
 const MAX_RESPONSES = 25;
@@ -85,6 +86,11 @@ function validateAndNormalizeInput(input = {}) {
   const name = String(input.name || '').trim().replace(/\s+/g, ' ');
   if (!name) throw new Error('Command name cannot be empty.');
   if (name.length > MAX_COMMAND_NAME_LENGTH) throw new Error(`Command name cannot exceed ${MAX_COMMAND_NAME_LENGTH} characters.`);
+
+  const publicDescription = String(input.publicDescription || '').replace(/\s+/g, ' ').trim();
+  if (publicDescription.length > MAX_PUBLIC_DESCRIPTION_LENGTH) {
+    throw new Error(`Public description cannot exceed ${MAX_PUBLIC_DESCRIPTION_LENGTH} characters.`);
+  }
 
   const rawTriggers = Array.isArray(input.triggers) && input.triggers.length
     ? input.triggers
@@ -174,6 +180,7 @@ function validateAndNormalizeInput(input = {}) {
   const primary = triggers[0];
   return {
     name,
+    publicDescription,
     triggers,
     // Mirror the first trigger into the legacy fields for backwards compatibility.
     triggerType: primary.triggerType,
@@ -202,6 +209,7 @@ function commandToClient(command) {
   return {
     id: String(command._id),
     name: fallbackName,
+    publicDescription: String(command.publicDescription || ''),
     triggers: triggers.map(({ triggerType, trigger }) => ({ triggerType, trigger })),
     // Keep these fields in the response for older UI/client compatibility.
     triggerType: primary.triggerType,
@@ -945,6 +953,7 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
 
 module.exports = {
   MAX_COMMAND_NAME_LENGTH,
+  MAX_PUBLIC_DESCRIPTION_LENGTH,
   MAX_TRIGGER_LENGTH,
   MAX_TRIGGERS,
   MAX_RESPONSES,

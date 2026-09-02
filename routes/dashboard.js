@@ -1,6 +1,7 @@
 const path = require('path');
 const {
   MAX_COMMAND_NAME_LENGTH,
+  MAX_PUBLIC_DESCRIPTION_LENGTH,
   MAX_TRIGGER_LENGTH,
   MAX_TRIGGERS,
   MAX_RESPONSES,
@@ -70,6 +71,7 @@ function registerDashboardRoutes(app, options) {
       },
       customCommands: {
         maxCommandNameLength: MAX_COMMAND_NAME_LENGTH,
+        maxPublicDescriptionLength: MAX_PUBLIC_DESCRIPTION_LENGTH,
         maxTriggerLength: MAX_TRIGGER_LENGTH,
         maxTriggers: MAX_TRIGGERS,
         maxResponses: MAX_RESPONSES,

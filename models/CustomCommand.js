@@ -37,6 +37,14 @@ const customCommandSchema = new mongoose.Schema({
     default: ''
   },
 
+  publicDescription: {
+    type: String,
+    required: false,
+    trim: true,
+    maxlength: 300,
+    default: ''
+  },
+
   // New multi-trigger representation. Each command can mix !Command and
   // Inline Phrase triggers while sharing responses, cooldown, counter, etc.
   triggers: {

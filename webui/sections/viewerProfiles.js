@@ -41,6 +41,13 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     el.classList.toggle('bad', Boolean(isError));
   }
 
+  function setBulkCleanupMessage(text, isError = false) {
+    const el = $('viewerProfileBulkCleanupMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('bad', Boolean(isError));
+  }
+
   function selectedPendingConfidence() {
     const value = String($('viewerProfilePendingConfidenceFilter')?.value || 'all').toLowerCase();
     return PENDING_CONFIDENCE_FILTERS.has(value) ? value : 'all';
@@ -566,6 +573,56 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     setMessage(`${profiles.length} viewer profile${profiles.length === 1 ? '' : 's'}.`);
   }
 
+  function cleanupScopeLabel(value) {
+    if (value === 'pending') return 'pending';
+    if (value === 'approved') return 'approved';
+    return 'pending + approved';
+  }
+
+  function cleanupConfidenceLabel(value) {
+    if (value === 'low') return 'low-confidence';
+    if (value === 'high') return 'all-confidence';
+    return 'medium-and-lower';
+  }
+
+  async function deleteMatchingViewerObservations() {
+    const approvalScope = $('viewerProfileCleanupStatus').value || 'both';
+    const maxConfidence = $('viewerProfileCleanupConfidence').value || 'medium';
+    const label = `${cleanupScopeLabel(approvalScope)} ${cleanupConfidenceLabel(maxConfidence)} viewer observations`;
+    if (!window.confirm(`Permanently delete all ${label}?`)) return;
+
+    const button = $('deleteViewerFactsByConfidenceBtn');
+    button.disabled = true;
+    setBulkCleanupMessage('Deleting matching observations...');
+    try {
+      const d = await postJson('/viewer-profiles/facts-bulk-delete', { approvalScope, maxConfidence });
+      if (!d.success) return setBulkCleanupMessage(d.error || 'Could not delete matching viewer observations.', true);
+      await loadProfiles({ quiet: true });
+      setBulkCleanupMessage(`Deleted ${Number(d.deletedFacts || 0)} observation${Number(d.deletedFacts || 0) === 1 ? '' : 's'} across ${Number(d.affectedProfiles || 0)} profile${Number(d.affectedProfiles || 0) === 1 ? '' : 's'}.`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function clearAllProfiles() {
+    if (!window.confirm('Clear ALL viewer profiles? This deletes all non-opted-out profiles, including notes, command history, and every pending/approved observation. Opt-out privacy records are preserved.')) return;
+    if (!window.confirm('Final confirmation: permanently clear all viewer profile data? This cannot be undone.')) return;
+
+    const button = $('clearAllViewerProfilesBtn');
+    button.disabled = true;
+    setBulkCleanupMessage('Clearing viewer profiles...');
+    try {
+      const d = await postJson('/viewer-profiles/clear-all', {});
+      if (!d.success) return setBulkCleanupMessage(d.error || 'Could not clear viewer profiles.', true);
+      if (dialog.open) closeDialog();
+      await loadProfiles({ quiet: true });
+      const preserved = Number(d.preservedOptOutRecords || 0);
+      setBulkCleanupMessage(`Cleared ${Number(d.deletedProfiles || 0)} viewer profile${Number(d.deletedProfiles || 0) === 1 ? '' : 's'}${preserved ? `; preserved ${preserved} opt-out privacy record${preserved === 1 ? '' : 's'}` : ''}.`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function saveProfile() {
     const username = $('viewerProfileUsername').value.trim();
     if (!username) return setDialogMessage('Twitch Username is required.', true);
@@ -627,6 +684,8 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
   $('viewerProfilePageSize').onchange = () => { currentPage = 1; try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(selectedPageSize())); } catch {} renderList(); };
   $('viewerProfilePrevPage').onclick = () => { if (currentPage > 1) { currentPage--; renderList(); } };
   $('viewerProfileNextPage').onclick = () => { currentPage++; renderList(); };
+  $('deleteViewerFactsByConfidenceBtn').onclick = deleteMatchingViewerObservations;
+  $('clearAllViewerProfilesBtn').onclick = clearAllProfiles;
   $('refreshViewerProfilesBtn').onclick = () => Promise.all([loadProfiles(), loadSettings()]);
   $('saveViewerProfileSettingsBtn').onclick = saveSettings;
   $('addViewerProfileBtn').onclick = () => openProfile();

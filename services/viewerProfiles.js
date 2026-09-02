@@ -326,6 +326,27 @@ function inferFactApprovalStatus(fact) {
   return 'approved';
 }
 
+const BULK_CONFIDENCE_RANK = Object.freeze({ low: 1, medium: 2, high: 3 });
+const BULK_APPROVAL_SCOPES = new Set(['pending', 'approved', 'both']);
+
+function normalizeBulkCleanupOptions(value = {}) {
+  const maxConfidence = ['low', 'medium', 'high'].includes(String(value.maxConfidence || '').toLowerCase())
+    ? String(value.maxConfidence).toLowerCase()
+    : 'medium';
+  const approvalScope = BULK_APPROVAL_SCOPES.has(String(value.approvalScope || '').toLowerCase())
+    ? String(value.approvalScope).toLowerCase()
+    : 'both';
+  return { maxConfidence, approvalScope };
+}
+
+function factMatchesBulkCleanup(fact, options = {}) {
+  const { maxConfidence, approvalScope } = normalizeBulkCleanupOptions(options);
+  const status = inferFactApprovalStatus(fact);
+  if (approvalScope !== 'both' && status !== approvalScope) return false;
+  const rank = BULK_CONFIDENCE_RANK[normalizeConfidence(fact?.confidence)] || BULK_CONFIDENCE_RANK.medium;
+  return rank <= BULK_CONFIDENCE_RANK[maxConfidence];
+}
+
 function refreshFactEvidenceSummary(fact) {
   if (!fact || fact.source === 'deterministic') return;
   fact.evidenceSummary = buildEvidenceSummary(fact);
@@ -750,6 +771,69 @@ async function deleteViewerProfile(channelName, profileId) {
   return { deleted: result.deletedCount > 0 };
 }
 
+async function deleteViewerFactsByConfidence(channelName, options = {}) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) throw new Error('TWITCH_CHANNEL is not configured.');
+  const normalized = normalizeBulkCleanupOptions(options);
+  const docs = await ViewerProfile.find({ channelName: channel }, { facts: 1 }).lean();
+  const operations = [];
+  let deletedFacts = 0;
+  let affectedProfiles = 0;
+
+  for (const doc of docs) {
+    const factIds = (Array.isArray(doc.facts) ? doc.facts : [])
+      .filter((fact) => factMatchesBulkCleanup(fact, normalized))
+      .map((fact) => fact?._id)
+      .filter(Boolean);
+    if (!factIds.length) continue;
+    affectedProfiles += 1;
+    deletedFacts += factIds.length;
+    operations.push({
+      updateOne: {
+        filter: { _id: doc._id, channelName: channel },
+        update: { $pull: { facts: { _id: { $in: factIds } } } }
+      }
+    });
+  }
+
+  if (operations.length) await ViewerProfile.bulkWrite(operations, { ordered: false });
+  return { ...normalized, deletedFacts, affectedProfiles };
+}
+
+async function clearAllViewerProfiles(channelName) {
+  const channel = normalizeChannelName(channelName);
+  if (!channel) throw new Error('TWITCH_CHANNEL is not configured.');
+  const now = new Date();
+
+  // Opt-out records are intentionally preserved as minimal privacy tombstones so an
+  // opted-out viewer cannot be silently recreated by automatic learning after a test wipe.
+  const preserved = await ViewerProfile.updateMany(
+    { channelName: channel, optedOut: true },
+    { $set: {
+      aliases: [],
+      pinnedNotes: '',
+      facts: [],
+      commandUsage: [],
+      profileDataPurgedAt: now,
+      profileRetainedOnOptOut: false,
+      preOptOutEnabled: false,
+      preOptOutLearningEnabled: false,
+      enabled: false,
+      learningEnabled: false
+    } }
+  );
+  const deleted = await ViewerProfile.deleteMany({ channelName: channel, optedOut: { $ne: true } });
+
+  for (const key of viewerIdentityCache.keys()) {
+    if (key.startsWith(`${channel}:`)) viewerIdentityCache.delete(key);
+  }
+
+  return {
+    deletedProfiles: Number(deleted.deletedCount || 0),
+    preservedOptOutRecords: Number(preserved.matchedCount || 0)
+  };
+}
+
 function buildParticipantCounts(chatLogs = []) {
   const counts = new Map();
   const displayNames = new Map();
@@ -1069,6 +1153,8 @@ module.exports = {
   setFactEnabled,
   deleteViewerFact,
   deleteViewerProfile,
+  deleteViewerFactsByConfidence,
+  clearAllViewerProfiles,
   setViewerProfileOptOut,
   syncViewerIdentity,
   recordViewerCommandUsage,

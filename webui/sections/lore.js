@@ -495,6 +495,60 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
     renderManualLore(d.manualEntries || []); $('manualLoreDialog').close(); $('loreMsg').textContent = 'Manual lore saved.';
   }
 
+  function streamLoreCleanupScopeLabel(value) {
+    if (value === 'pending') return 'pending';
+    if (value === 'approved') return 'approved';
+    return 'pending + approved';
+  }
+
+  function streamLoreCleanupConfidenceLabel(value) {
+    if (value === 'low') return 'low-confidence';
+    if (value === 'high') return 'all-confidence';
+    return 'medium-and-lower';
+  }
+
+  async function deleteMatchingLearnedLore() {
+    const approvalScope = $('streamLoreCleanupStatus').value || 'both';
+    const maxConfidence = $('streamLoreCleanupConfidence').value || 'medium';
+    const label = `${streamLoreCleanupScopeLabel(approvalScope)} ${streamLoreCleanupConfidenceLabel(maxConfidence)} learned stream lore`;
+    if (!window.confirm(`Permanently delete all ${label}? Manual lore is not affected.`)) return;
+
+    const button = $('deleteStreamLoreByConfidenceBtn');
+    button.disabled = true;
+    $('streamLoreBulkCleanupMsg').textContent = 'Deleting matching learned lore...';
+    try {
+      const d = await postJson('/stream-lore/observations-bulk-delete', { approvalScope, maxConfidence });
+      if (!d.success) {
+        $('streamLoreBulkCleanupMsg').textContent = d.error || 'Could not delete matching learned lore.';
+        return;
+      }
+      renderLearnedLore(d.learnedObservations || []);
+      $('streamLoreBulkCleanupMsg').textContent = `Deleted ${Number(d.deletedObservations || 0)} learned lore observation${Number(d.deletedObservations || 0) === 1 ? '' : 's'}.`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function clearAllLearnedLore() {
+    if (!window.confirm('Clear ALL AI-learned stream lore? This deletes every pending and approved learned observation. Manual lore is kept.')) return;
+    if (!window.confirm('Final confirmation: permanently clear all AI-learned stream lore? This cannot be undone.')) return;
+
+    const button = $('clearAllLearnedLoreBtn');
+    button.disabled = true;
+    $('streamLoreBulkCleanupMsg').textContent = 'Clearing learned stream lore...';
+    try {
+      const d = await postJson('/stream-lore/observations-clear-all', {});
+      if (!d.success) {
+        $('streamLoreBulkCleanupMsg').textContent = d.error || 'Could not clear learned stream lore.';
+        return;
+      }
+      renderLearnedLore([]);
+      $('streamLoreBulkCleanupMsg').textContent = `Cleared ${Number(d.deletedObservations || 0)} learned lore observation${Number(d.deletedObservations || 0) === 1 ? '' : 's'}.`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function loadLore() {
     try {
       $('loreMsg').textContent = 'Loading...';
@@ -649,6 +703,8 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
     if (PENDING_LORE_CONFIDENCE_FILTERS.has(savedPendingConfidence)) $('streamLorePendingConfidenceFilter').value = savedPendingConfidence;
   } catch {}
 
+  $('deleteStreamLoreByConfidenceBtn').onclick = deleteMatchingLearnedLore;
+  $('clearAllLearnedLoreBtn').onclick = clearAllLearnedLore;
   $('streamLorePendingConfidenceFilter').onchange = () => {
     try { localStorage.setItem(PENDING_LORE_CONFIDENCE_STORAGE_KEY, selectedPendingLoreConfidence()); } catch {}
     renderLearnedLore();

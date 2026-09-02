@@ -89,6 +89,74 @@ function isRoutineEventSubObservation(text) {
   return routineTelemetryPatterns.some((pattern) => pattern.test(value));
 }
 
+function normalizeLearningCandidateText(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’‘]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// The prompts carry the primary quality standard. These deliberately narrow
+// phrase filters are only a fallback for common base-rate summaries that the
+// model may still emit; they avoid broad semantic rejection so specific,
+// useful on-topic quirks can continue reaching moderator review.
+const VIEWER_DISTINCTIVENESS_SIGNALS = [
+  /\b(?:fake|unrecognized)\s+!?commands?\b/,
+  /\b(?:running|recurring|inside)\s+(?:joke|bit|gag)\b/,
+  /\b(?:catchphrase|signature habit|signature bit|ritual|nickname)\b/,
+  /\b(?:obsess(?:es|ed|ion|ively)|fixat(?:es|ed|ion)|hyperfocus(?:es|ed)?|keeps? returning to)\b/,
+  /\b(?:insists?|argu(?:es|ing)|advocates?|campaigns?|roots?|pushes?|pressures?|predicts?|blames?|corrects?|teaches?|spams?|teas(?:es|ing)|challenges?)\b/,
+  /\b(?:answers?|helps?)\s+(?:answer\s+)?(?:other\s+)?(?:viewers?|chatters?|chat'?s)\b/,
+  /\b(?:obscure|edge[- ]case|hyper[- ]technical|extremely technical|highly technical|unusually technical)\b/,
+  /\b(?:always|repeatedly|habitually|consistently)\b.{0,100}\b(?:asks? for (?:a )?recap|arrives? late|shows? up late|calls?|nicknames?|turns?|refuses?|chooses?|votes?|warns?)\b/
+];
+
+const GENERIC_VIEWER_OBSERVATION_PATTERNS = [
+  /\b(?:engages?|participates?)\s+in\s+(?:discussions?|conversations?|chat)(?:\s+about)?\s+(?:pokemon|mons?|kaizo(?:\s+ironmon)?|ironmon|moves?|movesets?|stats?|abilities?|mechanics?|strateg(?:y|ies)|gameplay|the current run)\b/,
+  /\b(?:discusses?|talks?|chats?|comments?)\s+(?:about\s+)?(?:pokemon|mons?|kaizo(?:\s+ironmon)?|ironmon|moves?|movesets?|stats?|abilities?|mechanics?|strateg(?:y|ies)|gameplay|the current run)\b/,
+  /\basks?\s+(?:a lot of\s+|many\s+|frequent\s+)?questions?\s+about\s+(?:pokemon|mons?|kaizo(?:\s+ironmon)?|ironmon|moves?|movesets?|stats?|abilities?|mechanics?|strateg(?:y|ies)|gameplay|the current run)\b/,
+  /\b(?:shows? interest in|is interested in|likes?|enjoys?)\s+(?:pokemon|mons?|kaizo(?:\s+ironmon)?|ironmon|gameplay)(?:\s+(?:content|streams?|games?|in general|overall|a lot))?[.!]?$/,
+  /\b(?:is knowledgeable about|is well[- ]versed in)\s+(?:pokemon(?:\s+(?:moves?|movesets?|stats?|abilities?|mechanics?|strateg(?:y|ies)|gameplay))?|mons?|kaizo(?:\s+ironmon)?|ironmon|moves?|movesets?|stats?|abilities?|mechanics?|strateg(?:y|ies)|gameplay)(?:\s+(?:in general|overall))?[.!]?$/,
+  /\b(?:follows?|reacts? to|comments? on)\s+(?:qwert'?s\s+)?(?:gameplay|runs?|stream)\b/,
+  /\b(?:active|regular|frequent|helpful)\s+(?:viewer|chatter|participant)\b/,
+  /\b(?:engages?|participates?)\s+in\s+(?:discussions?|conversations?|chat)(?:\s+regularly)?[.!]?$/,
+  /\b(?:interacts?|engages?)\s+with\s+(?:qwert|chat|other viewers?|other chatters?)(?:\s+and\s+(?:qwert|chat|other viewers?|other chatters?))*[.!]?$/,
+  /\b(?:asks? questions?|shares? opinions?|makes? comments?)\s+(?:in chat|during streams?)[.!]?$/
+];
+
+const STREAM_CULTURE_SIGNALS = [
+  /\b(?:running|recurring|inside)\s+(?:joke|bit|gag)\b/,
+  /\b(?:nickname|terminology|shorthand|code word|tradition|ritual|convention|callback|meme|chant|catchphrase|badge lore)\b/,
+  /\b(?:means?|refers? to|is what chat calls|chat calls|viewers? call)\b/,
+  /\b(?:personifies?|treats?)\b.{0,80}\bas (?:a|an|the) (?:character|person|mascot)\b/
+];
+
+const GENERIC_STREAM_LORE_PATTERNS = [
+  /\b(?:chat|viewers?|the community|community members?)\s+(?:often\s+|frequently\s+|regularly\s+|commonly\s+)?(?:discuss(?:es)?|talks?|debates?|asks?|comments?|reacts?|suggests?|analyzes?)\s+(?:about\s+)?(?:pokemon|mons?|kaizo(?:\s+ironmon)?|ironmon|moves?|movesets?|stats?|abilities?|mechanics?|strateg(?:y|ies)|gameplay|(?:the\s+)?current run|starter choices?)\b/,
+  /\b(?:chat|viewers?|the community|community members?)\s+(?:often\s+|frequently\s+|regularly\s+|commonly\s+)?reacts?\s+to\s+(?:wins?|losses?|battles?|run endings?|gameplay outcomes?)\b/,
+  /\b(?:pokemon|kaizo(?:\s+ironmon)?|ironmon)\s+(?:discussion|strategy|mechanics|gameplay)\s+is\s+(?:common|frequent|popular|a recurring topic)\b/,
+  /\bqwert\s+(?:plays?|streams?|attempts?|discusses?)\s+(?:pokemon|kaizo(?:\s+ironmon)?|ironmon)\b/,
+  /\b(?:chat|viewers?|the community|community members?)\s+(?:is|are)\s+(?:active|supportive|engaged|helpful)[.!]?$/,
+  /\b(?:chat|viewers?|the community|community members?)\s+(?:often\s+|frequently\s+|regularly\s+)?(?:jokes?|talks?|interacts?)[.!]?$/
+];
+
+function isGenericViewerProfileObservation(text) {
+  const value = normalizeLearningCandidateText(text);
+  if (!value) return false;
+  if (VIEWER_DISTINCTIVENESS_SIGNALS.some((pattern) => pattern.test(value))) return false;
+  return GENERIC_VIEWER_OBSERVATION_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function isGenericStreamLoreObservation(text) {
+  const value = normalizeLearningCandidateText(text);
+  if (!value) return false;
+  if (STREAM_CULTURE_SIGNALS.some((pattern) => pattern.test(value))) return false;
+  return GENERIC_STREAM_LORE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 
 function isBlockedPromptInjectionChatLine(line) {
   const parsed = parseViewerChatLine(line);
@@ -346,6 +414,7 @@ async function generateViewerLearningUpdates({ chatLogs = [], existingProfiles =
   let totalAccepted = 0;
   let totalRejectedEvidence = 0;
   let totalRejectedSafety = 0;
+  let totalRejectedGeneric = 0;
   let totalRejectedRelation = 0;
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
@@ -378,14 +447,36 @@ SECURITY / INSTRUCTION HIERARCHY:
 
 SOURCE MESSAGES ARE THE ONLY NEW EVIDENCE. Existing observations help you classify the relationship but are not proof by themselves.
 
+PRIMARY QUALITY BAR — DISTINCTIVENESS:
+- Viewer Profiles should capture what makes a viewer recognizable: a specific quirk, trait, recurring behavior, tendency, stable community role, narrow durable preference, or signature interaction style.
+- Before returning a candidate, ask: "Would this meaningfully distinguish this viewer from a typical active chatter in a Pokémon/Kaizo IronMon stream?" If no, omit it.
+- Discussing Pokémon, moves, stats, abilities, mechanics, movesets, strategy, or the current run; asking ordinary gameplay questions; reacting to battles; or simply being active/helpful in chat is expected baseline behavior and is NOT profile-worthy by itself.
+- Repetition alone does not make a generic topic observation useful. Do not rescue a weak candidate by merely adding words such as "often", "frequently", or "regularly".
+- An on-topic observation IS allowed when it captures HOW the viewer participates in a specific, recognizable way rather than merely WHAT topic appeared in their messages.
+- Not every viewer needs an observation in every learning pass. Returning no candidate for ordinary participation is correct.
+- Do not be so strict that only bizarre or comedic behavior qualifies. A subtle but specific recurring pattern, stable role, or narrow self-stated preference can still be useful.
+
+REJECT GENERIC EXAMPLES:
+- "Engages in discussion about Pokémon moves and stats."
+- "Discusses Pokémon moveset combinations and mechanics."
+- "Asks questions about Pokémon mechanics and abilities like Sheer Force."
+- "Is an active viewer who comments on the current run."
+
+ACCEPT SPECIFIC EXAMPLES WHEN DIRECTLY SUPPORTED:
+- "Repeatedly turns obscure ability interactions into mini rules debates."
+- "Consistently pushes Qwert toward risky pivots."
+- "Often answers other viewers' mechanics questions before Qwert does."
+- "Uses fake !commands as a recurring chat bit."
+- "Usually arrives late and immediately asks for a run recap."
+
 WHAT TO LEARN:
-- clearly self-stated durable preferences, recurring hobbies/interests, stable community roles, recurring habits, and clearly demonstrated behavioral tendencies
+- clearly self-stated narrow durable preferences, stable community roles, recurring habits, and clearly demonstrated behavioral tendencies
 - recurring interaction styles or running bits actually visible in the viewer's messages
 - non-sensitive social style such as playful teasing, flirtatious/suggestive joking, mock arguing, recurring bits, or a distinctive way they interact with Qwert or other viewers
 - describe observable behavior only. Never infer hidden motives or private relationship facts such as "has a crush on Qwert", attraction, relationship status, sexual behavior, or sexual orientation
-- ordinary but durable community-relevant facts are useful; they do not need to be dramatic
-- one explicit durable fact/preference may use one source message
-- a narrow HABIT or BEHAVIOR candidate may use one strong source message at low confidence because it remains Pending until moderator approval
+- ordinary but personally distinguishing facts are useful; they do not need to be dramatic
+- one explicit, narrow durable fact/preference may use one source message
+- a narrow, specific HABIT or BEHAVIOR candidate may use one strong source message at low confidence because it remains Pending until moderator approval
 - repeated evidence may justify medium/high confidence
 
 RELATION TO EXISTING OBSERVATIONS:
@@ -400,7 +491,7 @@ If an existing observation shows revision_waiting, that proposal is still unappr
 Examples: existing "Teases Qwert" plus repeated clearly suggestive teasing may refine to "Often teases Qwert with playful, suggestive jokes." Existing "Always encourages risky plays" plus repeated direct opposition may contradict to "Usually argues against risky plays."
 
 WHAT NOT TO LEARN:
-- temporary activities, meals, errands, current location, one-off plans, moods, momentary reactions, ordinary gameplay chatter, or throwaway opinions
+- temporary activities, meals, errands, current location, one-off plans, moods, momentary reactions, ordinary gameplay chatter, broad topic participation, or throwaway opinions
 - do NOT turn intent into outcome: "I'm going to buy taho" does NOT mean "ate taho" or "likes taho"
 - do NOT infer a preference merely because someone mentions buying, eating, watching, playing, or trying something once
 - do NOT change tense or state
@@ -440,6 +531,7 @@ ${createUntrustedBlock('VIEWER_LEARNING_SOURCE', source)}`;
     let batchAccepted = 0;
     let batchRejectedEvidence = 0;
     let batchRejectedSafety = 0;
+    let batchRejectedGeneric = 0;
     let batchRejectedRelation = 0;
 
     for (const rawUpdate of Array.isArray(parsed?.viewerUpdates) ? parsed.viewerUpdates : []) {
@@ -467,6 +559,10 @@ ${createUntrustedBlock('VIEWER_LEARNING_SOURCE', source)}`;
         }
         if (!fact || isRoutineEventSubObservation(fact) || containsPromptInjectionLanguage(fact)) {
           batchRejectedSafety++;
+          continue;
+        }
+        if (isGenericViewerProfileObservation(fact)) {
+          batchRejectedGeneric++;
           continue;
         }
         if ((relation === 'refine' || relation === 'contradict') && existing && normalizeEvidenceText(fact) === normalizeEvidenceText(existing.text)) {
@@ -509,12 +605,13 @@ ${createUntrustedBlock('VIEWER_LEARNING_SOURCE', source)}`;
     totalAccepted += batchAccepted;
     totalRejectedEvidence += batchRejectedEvidence;
     totalRejectedSafety += batchRejectedSafety;
+    totalRejectedGeneric += batchRejectedGeneric;
     totalRejectedRelation += batchRejectedRelation;
     const sampledCount = indexedBatch.reduce((sum, group) => sum + group.sampledMessages.length, 0);
-    console.log(`[Viewer Profiles] Learning batch ${batchIndex + 1}/${batches.length}: ${indexedBatch.length} viewer(s), ${sampledCount} sampled message(s), ${batchProposed} proposed, ${batchAccepted} accepted, ${batchRejectedEvidence} rejected for evidence, ${batchRejectedRelation} rejected for invalid relation/target, ${batchRejectedSafety} rejected by safety/telemetry filters.`);
+    console.log(`[Viewer Profiles] Learning batch ${batchIndex + 1}/${batches.length}: ${indexedBatch.length} viewer(s), ${sampledCount} sampled message(s), ${batchProposed} proposed, ${batchAccepted} accepted, ${batchRejectedEvidence} rejected for evidence, ${batchRejectedRelation} rejected for invalid relation/target, ${batchRejectedGeneric} rejected as generic/base-rate behavior, ${batchRejectedSafety} rejected by safety/telemetry filters.`);
   }
 
-  console.log(`[Viewer Profiles] Learning pass totals: ${groups.length} viewer(s), ${totalProposed} observation(s) proposed, ${totalAccepted} accepted, ${totalRejectedEvidence} rejected for evidence, ${totalRejectedRelation} rejected for invalid relation/target, ${totalRejectedSafety} rejected by safety/telemetry filters.`);
+  console.log(`[Viewer Profiles] Learning pass totals: ${groups.length} viewer(s), ${totalProposed} observation(s) proposed, ${totalAccepted} accepted, ${totalRejectedEvidence} rejected for evidence, ${totalRejectedRelation} rejected for invalid relation/target, ${totalRejectedGeneric} rejected as generic/base-rate behavior, ${totalRejectedSafety} rejected by safety/telemetry filters.`);
 
   return [...merged.values()].slice(0, 40).map((update) => ({
     ...update,
@@ -593,7 +690,18 @@ SECURITY / INSTRUCTION HIERARCHY:
 
 SOURCE CHAT IS THE ONLY NEW EVIDENCE. Existing AI-learned lore is supplied only so you can relate new evidence to it.
 
-Suggest persistent CHANNEL-SPECIFIC context that could help interpret future streams: recurring jokes, nicknames, terminology, traditions, callbacks, running bits, or community conventions.
+Suggest persistent CHANNEL-SPECIFIC context that could help interpret future streams: recurring jokes, nicknames, terminology, traditions, callbacks, running bits, community conventions, or other specific patterns that make this channel's culture recognizable.
+
+PRIMARY QUALITY BAR — CHANNEL DISTINCTIVENESS:
+- Learn the channel's culture, not merely the subject matter of the stream.
+- Before returning a candidate, ask both: "Would a newcomer need this to decode or understand future GeneralQwert chat?" and "Would this statement also be true of almost any Pokémon/Kaizo IronMon stream?"
+- If it is ordinary for the category and does not carry channel-specific meaning, omit it.
+- Generic examples to reject include: chat discusses Pokémon mechanics; viewers debate moves, stats, abilities, strategies, or starter choices; chat reacts to wins/losses; Qwert plays Pokémon; viewers ask questions about the current run.
+- Repetition alone does not turn expected subject-matter discussion into lore. Do not make a weak candidate sound durable merely by adding "often", "frequently", or "regularly".
+- On-topic material IS allowed when it forms a specific channel convention, phrase, nickname, ritual, recurring warning, running joke, recognizable pattern, or shared shorthand.
+- Good examples include: "back to bag" means the run reset to starter selection; chat treats Chair as a character and asks to let Chair pick; Qwert's birthday is jokingly treated as happening every day.
+- Empty output is correct when the window contains only normal stream discussion.
+- Do not be excessively strict: a clear, specific convention can qualify from 2 distinct supporting messages/interactions in one window because it remains Pending for moderator review. It does not need to be bizarre or already proven across many streams.
 
 RELATION TO EXISTING LORE:
 Return exactly one relation per candidate:
@@ -639,6 +747,7 @@ ${createUntrustedBlock('STREAM_LORE_SOURCE', loreSourceChat.join('\n'))}`;
   let accepted = 0;
   let rejectedEvidence = 0;
   let rejectedSafety = 0;
+  let rejectedGeneric = 0;
   let rejectedRelation = 0;
   const dedupe = new Map();
   for (const observation of (Array.isArray(parsed?.streamLoreObservations) ? parsed.streamLoreObservations : []).slice(0, 24)) {
@@ -656,6 +765,10 @@ ${createUntrustedBlock('STREAM_LORE_SOURCE', loreSourceChat.join('\n'))}`;
     if (relation === 'support' && existing) fact = existing.text;
     if (!fact || isRoutineEventSubObservation(fact) || containsPromptInjectionLanguage(fact)) {
       rejectedSafety++;
+      continue;
+    }
+    if (isGenericStreamLoreObservation(fact)) {
+      rejectedGeneric++;
       continue;
     }
     if ((relation === 'refine' || relation === 'contradict') && existing && normalizeEvidenceText(fact) === normalizeEvidenceText(existing.text)) {
@@ -684,7 +797,7 @@ ${createUntrustedBlock('STREAM_LORE_SOURCE', loreSourceChat.join('\n'))}`;
   }
 
   const observations = collapseCandidatesByExistingTarget([...dedupe.values()]);
-  console.log(`[Stream Lore] Learning pass: ${indexedLines.length} source message(s), ${proposed} proposed, ${accepted} accepted, ${rejectedEvidence} rejected for evidence, ${rejectedRelation} rejected for invalid relation/target, ${rejectedSafety} rejected by safety/telemetry filters.`);
+  console.log(`[Stream Lore] Learning pass: ${indexedLines.length} source message(s), ${proposed} proposed, ${accepted} accepted, ${rejectedEvidence} rejected for evidence, ${rejectedRelation} rejected for invalid relation/target, ${rejectedGeneric} rejected as generic/base-rate channel activity, ${rejectedSafety} rejected by safety/telemetry filters.`);
   return observations;
 }
 

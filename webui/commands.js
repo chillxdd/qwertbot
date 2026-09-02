@@ -58,7 +58,7 @@ function renderCustomCommands() {
     if (levelFilter !== 'all' && normalizedUserLevel(command.userLevel) !== levelFilter) return false;
     if (!query) return true;
     const triggers = Array.isArray(command.triggers) ? command.triggers : [];
-    const haystack = [command.name, ...triggers.flatMap((trigger) => [trigger?.trigger, trigger?.triggerType])]
+    const haystack = [command.name, command.publicDescription, ...triggers.flatMap((trigger) => [trigger?.trigger, trigger?.triggerType])]
       .filter(Boolean).join(' ').toLocaleLowerCase();
     return haystack.includes(query);
   }).sort((a, b) => {
@@ -93,7 +93,9 @@ function renderCustomCommands() {
         const type = trigger.triggerType === 'inline' ? 'Inline' : '!Command';
         return `<span class="custom-trigger-chip"><strong>${esc(trigger.trigger)}</strong><small>${esc(type)}</small></span>`;
       }).join('');
-      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong>${userLevelBadgeHtml(command.userLevel)}</div><div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
+      const description = String(command.publicDescription || '').trim();
+      const descriptionHtml = description ? `<div class="readonly-command-description">${esc(description)}</div>` : '';
+      return `<div class="custom-command-card readonly-command-card"><div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(command.name || 'Custom Command')}</strong>${userLevelBadgeHtml(command.userLevel)}</div>${descriptionHtml}<div class="custom-trigger-chip-list">${chips}</div><div class="detail">${esc(command.cooldownSeconds || 0)}s cooldown</div></div></div>`;
     }).join('');
   }
   const filteredView = Boolean(query || levelFilter !== 'all');

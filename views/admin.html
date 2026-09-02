@@ -201,6 +201,9 @@
           <label class="prompt-label" for="customCommandName">Name</label>
           <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
           <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
+          <label class="prompt-label" for="customCommandPublicDescription">Public Description <span class="detail">(optional)</span></label>
+          <textarea id="customCommandPublicDescription" rows="2" maxlength="300" placeholder="Shown on the public commands page."></textarea>
+          <div id="customCommandPublicDescriptionCount" class="detail">0/300 characters</div>
         </div>
 
         <div class="custom-editor-block">
@@ -782,6 +785,27 @@
             <div class="custom-response-heading"><strong>AI-Learned Stream Lore (Global)</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
             <div class="detail">This is channel-wide lore, not per-viewer memory. New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
 
+            <div class="bulk-cleanup-panel">
+              <strong>Cleanup</strong>
+              <label class="custom-command-sort-label" for="streamLoreCleanupStatus">Status
+                <select id="streamLoreCleanupStatus">
+                  <option value="both">Pending + Approved</option>
+                  <option value="pending">Pending only</option>
+                  <option value="approved">Approved only</option>
+                </select>
+              </label>
+              <label class="custom-command-sort-label" for="streamLoreCleanupConfidence">Confidence
+                <select id="streamLoreCleanupConfidence">
+                  <option value="low">Low only</option>
+                  <option value="medium" selected>Medium &amp; lower</option>
+                  <option value="high">All confidence</option>
+                </select>
+              </label>
+              <button id="deleteStreamLoreByConfidenceBtn" class="danger" type="button">Delete Matching</button>
+              <button id="clearAllLearnedLoreBtn" class="danger" type="button">Clear All Learned Lore</button>
+            </div>
+            <div id="streamLoreBulkCleanupMsg" class="detail"></div>
+
             <div class="learned-review-section learned-review-pending">
               <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
               <div class="detail">Review both newly discovered lore and suggested revisions here. New lore can automatically refine while pending. Revision cards show the current approved wording beside the AI suggestion before you Accept Revision or Keep Current.</div>
@@ -1043,6 +1067,27 @@
             </div>
           </div>
           <div id="viewerProfileSettingsMsg" class="detail"></div>
+
+          <div class="bulk-cleanup-panel">
+            <strong>Cleanup</strong>
+            <label class="custom-command-sort-label" for="viewerProfileCleanupStatus">Observations
+              <select id="viewerProfileCleanupStatus">
+                <option value="both">Pending + Approved</option>
+                <option value="pending">Pending only</option>
+                <option value="approved">Approved only</option>
+              </select>
+            </label>
+            <label class="custom-command-sort-label" for="viewerProfileCleanupConfidence">Confidence
+              <select id="viewerProfileCleanupConfidence">
+                <option value="low">Low only</option>
+                <option value="medium" selected>Medium &amp; lower</option>
+                <option value="high">All confidence</option>
+              </select>
+            </label>
+            <button id="deleteViewerFactsByConfidenceBtn" class="danger" type="button">Delete Matching Observations</button>
+            <button id="clearAllViewerProfilesBtn" class="danger" type="button">Clear All Viewer Profiles</button>
+          </div>
+          <div id="viewerProfileBulkCleanupMsg" class="detail"></div>
 
           <div class="learned-review-section learned-review-pending viewer-profile-global-pending-review">
             <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending reviews</span></div>

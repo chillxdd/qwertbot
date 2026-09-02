@@ -671,3 +671,7 @@ button.success{background:#16834a}
 .public-tagged-question-examples{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
 .public-tagged-question-examples code{padding:6px 8px;border:1px solid var(--nb-border);border-radius:6px;background:rgba(9,12,17,.5);color:var(--nb-text-soft);font-size:11px}
 @media(max-width:600px){.public-tagged-question-card{padding:14px}.public-tagged-question-examples{flex-direction:column}.public-tagged-question-examples code{overflow-wrap:anywhere;white-space:normal}}
+.readonly-command-description{margin:2px 0 8px;line-height:1.45;color:#e6e6ea}
+.bulk-cleanup-panel{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin:14px 0 6px;padding:10px 12px;background:#111216;border:1px solid #303039;border-radius:7px}
+.bulk-cleanup-panel>strong{align-self:center;margin-right:2px}.bulk-cleanup-panel label{min-width:150px;margin:0}.bulk-cleanup-panel select{margin-bottom:0}.bulk-cleanup-panel button{margin:0;white-space:nowrap}
+@media(max-width:700px){.bulk-cleanup-panel{align-items:stretch}.bulk-cleanup-panel label,.bulk-cleanup-panel button{width:100%}}

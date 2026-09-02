@@ -14,6 +14,7 @@ function registerCustomCommandRoutes(app, { requireModSession, getDatabaseConnec
         .map((command) => ({
           id: command.id,
           name: command.name,
+          publicDescription: String(command.publicDescription || ''),
           triggers: Array.isArray(command.triggers) ? command.triggers : [],
           cooldownSeconds: Number(command.cooldownSeconds || 0),
           userLevel: ['everyone', 'subscriber', 'twitch_vip'].includes(command.userLevel) ? command.userLevel : 'everyone'
