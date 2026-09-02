@@ -1,0 +1,1243 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b0e13">
+  <title>GeneralQwert's Twitch Bot</title>
+  <link rel="stylesheet" href="/webui/styles.css">
+</head>
+<body>
+<div id="login" class="mod-login" role="dialog" aria-modal="true" aria-labelledby="modLoginTitle">
+  <h3 id="modLoginTitle">Mod Login</h3>
+  <input id="password" type="password" placeholder="Password..." autocomplete="current-password">
+  <button id="loginBtn" type="button">Mod Login</button>
+  <div id="loginMsg" class="detail login-message" aria-live="polite"></div>
+</div>
+
+<div class="card">
+  <div class="dashboard-header">
+    <h2>GeneralQwert's Twitch Bot</h2>
+    <div class="dashboard-session-actions">
+      <button id="logoutBtn" class="secondary" type="button" hidden>Logout</button>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
+    <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
+    <div class="box"><div id="dbStatusLabel" class="label">Database Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
+    <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
+  </div>
+
+  <div id="protected">
+    <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
+      <button id="customCommandsTab" class="secondary" type="button">Commands &amp; Automation</button>
+      <button id="messagingTab" class="secondary" type="button">AI Recap</button>
+      <button id="loreTab" class="secondary" type="button">Memory Management</button>
+      <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
+      <button id="renderLogsTab" class="secondary" type="button">Render Diagnostics</button>
+    </div>
+
+    <div id="messagingPanel" class="section-panel">
+      <div class="section-intro">
+        <h3>AI Recap</h3>
+        <div class="detail">Manage hourly recaps, testing, chat messages, and prompts.</div>
+      </div>
+
+      <div id="recapControls" class="recap-control-card">
+        <div class="recap-card-heading">
+          <div>
+            <div class="recap-card-title">Recap Control</div>
+            <div class="detail">Operational controls for the current stream's hourly recap session.</div>
+          </div>
+        </div>
+        <div class="recap-status-grid">
+          <div class="recap-status-item"><div class="label">Current State</div><div id="recapState" class="value warn">Checking...</div></div>
+          <div class="recap-status-item"><div class="label">Logging</div><div id="recapLogging" class="value warn">Checking...</div></div>
+          <div class="recap-status-item"><div class="label">Next Recap</div><div id="recapNext" class="value">—</div></div>
+          <div class="recap-status-item"><div class="label">Current Window</div><div id="recapWindow" class="value">—</div></div>
+        </div>
+        <div class="recap-control-actions">
+          <button id="resumeBtn" type="button">Resume Recaps</button>
+          <button id="pauseBtn" class="danger" type="button">Pause Recaps</button>
+          <div id="recapMsg" class="detail"></div>
+        </div>
+      </div>
+
+      <div class="recap-utility-card">
+        <div class="recap-card-title">Recap Testing</div>
+        <div class="detail">Generate a test using the current recap window without waiting for the next automatic send.</div>
+        <button id="storedBtn" class="secondary" type="button">Test Current Recap Window</button>
+        <div class="utility-output-label">Result</div>
+        <div id="testResult"></div>
+      </div>
+
+      <div class="recap-utility-card">
+        <div class="recap-card-title">Send Message to Twitch</div>
+        <div class="detail">Send a manual message directly through the bot's Twitch chat connection.</div>
+        <input id="chatMessage" placeholder="Message">
+        <button id="sendBtn" type="button">Send to Chat</button>
+        <div id="chatMsg" class="detail"></div>
+      </div>
+
+      <div class="prompt-settings recap-advanced-card">
+        <button id="promptSettingsToggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="promptSettingsBody">Show Advanced Prompt Settings</button>
+        <div id="promptSettingsBody" class="advanced-settings-body">
+          <h3>AI Recap Prompt Settings</h3>
+          <div class="advanced-warning"><strong>Advanced:</strong> Changes here affect the next automatic recap and Test Current Recap Window immediately. Poor prompt edits can reduce recap quality. Core factual-accuracy, source-of-truth, ambiguity, causality, censoring, and Twitch length safeguards remain enforced in code.</div>
+          <label class="prompt-label" for="primaryRecapInstructions">Main Recap Instructions</label>
+          <textarea id="primaryRecapInstructions" class="prompt-editor" maxlength="20000" placeholder="Loading recap instructions..."></textarea>
+          <div id="primaryPromptCount" class="detail">0/20000 characters</div>
+          <label class="prompt-label" for="expansionRecapInstructions">Expansion / Retry Instructions</label>
+          <textarea id="expansionRecapInstructions" class="prompt-editor prompt-editor-small" maxlength="12000" placeholder="Loading expansion instructions..."></textarea>
+          <div id="expansionPromptCount" class="detail">0/12000 characters</div>
+          <button id="savePromptBtn" type="button">Save Prompt Settings</button>
+          <button id="undoPromptBtn" class="secondary" type="button">Undo Changes</button>
+          <div id="promptMsg" class="detail"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="customCommandsPanel" class="section-panel">
+      <h3>Commands &amp; Automation</h3>
+      <div class="subsection-nav commands-subsection-nav" role="tablist" aria-label="Commands and automation views">
+        <button id="customCommandsViewTab" class="secondary active" type="button" aria-selected="true">Custom Commands</button>
+        <button id="timersViewTab" class="secondary" type="button" aria-selected="false">Timers</button>
+        <button id="eventReactionsViewTab" class="secondary" type="button" aria-selected="false">EventSub Reactions</button>
+        <button id="nativeCommandsViewTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
+      </div>
+
+      <div id="automationSpacingCard" class="custom-global-cooldown-card automation-spacing-card" hidden>
+        <div class="custom-global-cooldown-copy">
+          <strong id="automationSpacingTitle">Automation Spacing</strong>
+          <div id="automationSpacingDetail" class="detail">Minimum gap between automated recaps, timers, and EventSub reactions. Chat commands are unaffected.</div>
+          <div id="automationReactionTimingDetail" class="detail" hidden>Recaps and timers stay paused during a reaction sequence. Post-Reaction Hold can extend the quiet period afterward.</div>
+        </div>
+        <div class="custom-global-cooldown-control">
+          <div class="custom-global-cooldown-input-row">
+            <div class="duration-field compact-duration-field"><input id="automationSpacingSeconds" type="number" min="0" max="3600" step="1" value="30"><span class="duration-unit">seconds</span></div>
+            <button id="saveAutomationSpacingBtn" class="secondary" type="button">Save</button>
+          </div>
+          <div id="automationSpacingMsg" class="detail"></div>
+        </div>
+      </div>
+
+      <div id="customCommandsView" class="subsection-view open">
+      <div class="custom-command-header">
+        <h3>Custom Commands</h3>
+        <div class="custom-command-list-controls">
+          <label class="list-search-wrap" for="customCommandSearch">
+            <span class="sr-only">Search custom commands</span>
+            <input id="customCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search custom commands">
+          </label>
+          <label class="custom-command-sort-label" for="customCommandUserLevelFilter">User Level
+            <select id="customCommandUserLevelFilter" aria-label="Filter custom commands by user level">
+              <option value="all">All Levels</option>
+              <option value="everyone">Everyone</option>
+              <option value="subscriber">Subscriber</option>
+              <option value="twitch_vip">VIP</option>
+              <option value="moderator">Moderator</option>
+              <option value="owner">Broadcaster</option>
+            </select>
+          </label>
+          <label class="custom-command-sort-label" for="customCommandSort">Sort
+            <select id="customCommandSort" aria-label="Sort custom commands">
+              <option value="created_asc">Date added — oldest first</option>
+              <option value="created_desc">Date added — newest first</option>
+              <option value="name_asc">Name — A to Z</option>
+              <option value="name_desc">Name — Z to A</option>
+              <option value="counter_desc">Counter / uses — highest first</option>
+              <option value="counter_asc">Counter / uses — lowest first</option>
+            </select>
+          </label>
+          <button id="refreshCustomCommandsBtn" class="secondary" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="detail">Create bot-native chat commands and inline phrase triggers.</div>
+
+      <div class="custom-global-cooldown-card">
+        <div class="custom-global-cooldown-copy">
+          <strong>Global Cooldown</strong>
+          <div class="detail">Minimum spacing between any two SqwertArmyBot custom-command messages. Commands attempted during this window are silently ignored.</div>
+        </div>
+        <div class="custom-global-cooldown-control">
+          <div class="custom-global-cooldown-input-row">
+            <div class="duration-field compact-duration-field"><input id="customGlobalCooldown" type="number" min="0" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
+            <button id="saveCustomGlobalCooldownBtn" class="secondary" type="button">Save</button>
+          </div>
+          <div id="customGlobalCooldownMsg" class="detail"></div>
+        </div>
+      </div>
+
+      <div id="customCommandsMsg" class="detail"></div>
+      <div id="customCommandList" class="custom-command-list"></div>
+      <div id="customCommandPagination" class="list-pagination" aria-label="Custom command pagination">
+        <label class="list-page-size">Show
+          <select id="customCommandPageSize" aria-label="Custom commands per page">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+          </select>
+        </label>
+        <div id="customCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+        <div class="list-page-buttons">
+          <button id="customCommandPrevPage" class="secondary" type="button" aria-label="Previous custom command page">←</button>
+          <button id="customCommandNextPage" class="secondary" type="button" aria-label="Next custom command page">→</button>
+        </div>
+      </div>
+      <div class="custom-command-add-row">
+        <button id="addCustomCommandBtn" type="button">Add Custom Command</button>
+      </div>
+
+      <dialog id="customCommandEditor" class="custom-command-editor entity-editor-dialog">
+        <div class="custom-editor-header">
+          <h3 id="customCommandEditorTitle">Add Custom Command</h3>
+          <div class="custom-editor-header-actions">
+            <label class="inline-check custom-enabled-check"><input id="customEnabled" type="checkbox" checked> Enabled</label>
+            <button id="closeCustomCommandEditorBtn" class="secondary" type="button">Close</button>
+          </div>
+        </div>
+
+        <div class="custom-editor-block">
+          <label class="prompt-label" for="customCommandName">Name</label>
+          <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
+          <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
+        </div>
+
+        <div class="custom-editor-block">
+          <div class="custom-trigger-heading">
+            <strong>Triggers</strong>
+            <button id="addCustomTriggerBtn" class="secondary" type="button">Add Trigger</button>
+          </div>
+          <div id="customTriggerHelp" class="detail">Add one or more command or inline-phrase triggers. All triggers share the same command settings.</div>
+          <div id="customCommandTriggers" class="custom-trigger-list"></div>
+          <div id="customTriggerMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-block">
+          <strong class="custom-block-title">Command Settings</strong>
+          <div class="custom-command-form-grid">
+            <div>
+              <label class="prompt-label" for="customUserLevel">User Level</label>
+              <select id="customUserLevel">
+                <option value="everyone">Everyone</option>
+                <option value="subscriber">Subscriber</option>
+                <option value="twitch_vip">VIP</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Broadcaster</option>
+              </select>
+            </div>
+            <div>
+              <label class="prompt-label" for="customProbability">Probability (%)</label>
+              <input id="customProbability" type="number" min="0" max="100" step="0.01" value="100">
+            </div>
+            <div>
+              <label class="prompt-label" for="customCooldown">Cooldown</label>
+              <div class="duration-field"><input id="customCooldown" type="number" min="0" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
+            </div>
+            <div>
+              <label class="prompt-label" for="customResponseDelay">Delay</label>
+              <div class="duration-field"><input id="customResponseDelay" type="number" min="0" max="30" step="0.001" value="0"><span class="duration-unit">seconds</span></div>
+            </div>
+          </div>
+          <label class="inline-check custom-option-toggle"><input id="customUseCooldownResponse" type="checkbox"> Send a response when this command is on cooldown</label>
+          <div id="customCooldownResponseWrap" class="custom-optional-panel" hidden>
+            <label class="prompt-label" for="customCooldownResponse">Cooldown Message</label>
+            <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
+            <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent when this command is triggered during cooldown. Variables are supported.</span></div>
+          </div>
+        </div>
+
+        <div class="custom-editor-block">
+          <div class="custom-response-heading">
+            <strong>Responses</strong>
+          </div>
+          <div class="custom-response-delivery-row">
+            <div>
+              <label class="prompt-label" for="customSendAs">Send As</label>
+              <select id="customSendAs">
+                <option value="chat">Chat Message</option>
+                <option value="reply">Reply to Trigger</option>
+                <option value="announcement">Announcement</option>
+              </select>
+            </div>
+            <div id="customAnnouncementColorWrap" hidden>
+              <label class="prompt-label" for="customAnnouncementColor">Announcement Color</label>
+              <select id="customAnnouncementColor">
+                <option value="primary">Primary</option>
+                <option value="purple">Purple</option>
+                <option value="blue">Blue</option>
+                <option value="green">Green</option>
+                <option value="orange">Orange</option>
+              </select>
+            </div>
+          </div>
+          <div id="customSendAsHelp" class="detail">Chat Message sends a normal bot message.</div>
+          <div class="custom-response-mode-wrap">
+            <label class="prompt-label" for="customResponseMode">Mode</label>
+            <select id="customResponseMode">
+              <option value="equal">Equal Odds</option>
+              <option value="weighted">Specified Weight</option>
+              <option value="ifelse">If / Else (first word after trigger)</option>
+            </select>
+            <div id="customResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+            <label id="customAvoidImmediateRepeatWrap" class="inline-check" hidden><input id="customAvoidImmediateRepeat" type="checkbox"> Skip the last response used</label>
+            <div id="customAvoidImmediateRepeatHelp" class="detail" hidden>When 2+ Equal Odds responses exist, the next trigger will never immediately repeat the response used last time.</div>
+          </div>
+          <div id="customResponseHelp" class="detail"></div>
+          <div id="customCommandResponses"></div>
+          <div class="custom-response-bottom-actions">
+            <button id="showCustomVariablesBtn" class="secondary" type="button">Variables</button>
+            <button id="addCustomResponseBtn" class="secondary" type="button">Add Response</button>
+          </div>
+          <div id="customResponseMsg" class="detail custom-field-message"></div>
+        </div>
+
+
+
+        <div class="custom-editor-actions">
+          <button id="saveCustomCommandBtn" type="button">Save Command</button>
+          <button id="cancelCustomCommandBtn" class="secondary" type="button">Cancel</button>
+        </div>
+        <div id="customCommandEditorMsg" class="detail"></div>
+      </dialog>
+
+      </div>
+
+        <dialog id="customCounterDialog" class="custom-variables-dialog custom-counter-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3>Set Counter</h3>
+              <div id="customCounterCommandName" class="detail"></div>
+            </div>
+            <button id="closeCustomCounterBtn" class="secondary" type="button" aria-label="Close set counter dialog">Close</button>
+          </div>
+          <div class="custom-counter-body">
+            <label class="prompt-label" for="customCounterValue">Value</label>
+            <input id="customCounterValue" type="number" min="0" step="1" inputmode="numeric" autocomplete="off">
+            <div class="detail">Enter any whole number greater than or equal to 0.</div>
+            <div id="customCounterMsg" class="detail custom-field-message" aria-live="polite"></div>
+          </div>
+          <div class="modal-actions custom-counter-actions">
+            <button id="saveCustomCounterBtn" type="button">Save Counter</button>
+            <button id="cancelCustomCounterBtn" class="secondary" type="button">Cancel</button>
+          </div>
+        </dialog>
+
+        <dialog id="customVariablesDialog" class="custom-variables-dialog">
+          <div class="custom-dialog-header">
+            <h3>Available Variables</h3>
+            <button id="closeCustomVariablesBtn" class="secondary" type="button" aria-label="Close response variables">Close</button>
+          </div>
+          <div class="custom-variable-help-body">
+            <div class="custom-variable-row"><code>$(user)</code> <span>or</span> <code>$user</code><div class="detail">Viewer who triggered the command. Example: <code>Hello $(user)!</code> → <code>Hello SomeViewer!</code></div></div>
+            <div class="custom-variable-row"><code>$(touser)</code> <span>or</span> <code>$touser</code><div class="detail">First argument after the trigger, with a leading @ removed; falls back to the triggering viewer. Example: <code>!bonk @Qwert</code> + <code>Bonked $(touser)!</code> → <code>Bonked Qwert!</code></div></div>
+            <div class="custom-variable-row"><code>$(query)</code> <span>or</span> <code>$query</code><div class="detail">Everything after the trigger. Example: <code>!say hello there</code> + <code>You said: $(query)</code> → <code>You said: hello there</code></div></div>
+            <div class="custom-variable-row"><code>$(count)</code> <span>or</span> <code>$count</code><div class="detail">Persistent counter after a successful trigger increments it. Example: <code>Hydration #$(count)</code> → <code>Hydration #42</code></div></div>
+            <div class="custom-variable-row"><code>$(counter)</code> <span>or</span> <code>$counter</code><div class="detail">The same persistent counter with an ordinal suffix. Examples: <code>$(counter)</code> → <code>1st</code>, <code>2nd</code>, <code>3rd</code>, <code>11th</code>, <code>22nd</code>.</div></div>
+            <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Without DEC it returns a whole integer. Optional DEC sets decimal places from 0–5. Example: <code>$(random 1 10 5)</code> → <code>3.14159</code>.</div></div>
+            <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding SqwertArmyBot and known utility bots. Example: <code>$(randomuser) has been selected!</code></div></div>
+            <div class="custom-variable-row"><code>$(followage)</code> <span>or</span> <code>$followage</code><div class="detail">How long <code>$(touser)</code> has followed Qwert, formatted compactly for chat (for example <code>2 years, 3 months</code>, <code>18 days</code>, or <code>42 seconds</code>). With no command argument, this checks the viewer who triggered the command. Example: <code>Following for $(followage).</code></div></div>
+            <div class="custom-variable-row"><code>$(followdate)</code> <span>or</span> <code>$followdate</code><div class="detail">UTC calendar date when <code>$(touser)</code> followed Qwert. Example: <code>Following since $(followdate).</code></div></div>
+            <div class="custom-variable-row"><code>$(game)</code> <span>or</span> <code>$game</code><div class="detail">Twitch category currently being played, or the last category played, by <code>$(touser)</code>. With no command argument, this checks the viewer who triggered the command. Example: <code>They were last playing $(game).</code></div></div>
+            <div class="custom-variable-note detail">Each response supports up to 500 characters.</div>
+          </div>
+        </dialog>
+
+      <div id="timersView" class="subsection-view">
+        <div class="custom-command-header">
+          <h3>Timers</h3>
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="timerSearch">
+              <span class="sr-only">Search timers</span>
+              <input id="timerSearch" class="list-search-input" type="search" placeholder="Search timers..." autocomplete="off" aria-label="Search timers">
+            </label>
+            <label class="custom-command-sort-label" for="timerSort">Sort
+              <select id="timerSort" aria-label="Sort timers">
+                <option value="created_asc">Date added — oldest first</option>
+                <option value="created_desc">Date added — newest first</option>
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="interval_asc">Interval — shortest first</option>
+                <option value="interval_desc">Interval — longest first</option>
+              </select>
+            </label>
+            <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="detail">Background chat messages that run only while Qwert is live.</div>
+
+        <div class="custom-editor-block timer-global-settings">
+          <div class="custom-response-heading">
+            <strong>Timer Settings</strong>
+            <button id="saveTimerSettingsBtn" class="secondary" type="button">Save Settings</button>
+          </div>
+          <div class="timer-settings-grid">
+            <div>
+              <label class="prompt-label" for="timerGlobalStartDelay">Start Delay</label>
+              <div class="duration-field"><input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
+              <div class="detail">Earliest point in the stream when this timer may run.</div>
+            </div>
+          </div>
+          <div id="timerSettingsMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div id="timersMsg" class="detail"></div>
+        <div id="timerList" class="custom-command-list"></div>
+        <div id="timerPagination" class="list-pagination" aria-label="Timer pagination">
+          <label class="list-page-size">Show
+            <select id="timerPageSize" aria-label="Timers per page">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <div id="timerPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="timerPrevPage" class="secondary" type="button" aria-label="Previous timer page">←</button>
+            <button id="timerNextPage" class="secondary" type="button" aria-label="Next timer page">→</button>
+          </div>
+        </div>
+        <div class="custom-command-add-row">
+          <button id="addTimerBtn" type="button">Add Timer</button>
+        </div>
+
+        <dialog id="timerEditor" class="custom-command-editor entity-editor-dialog">
+          <div class="custom-editor-header">
+            <h3 id="timerEditorTitle">Add Timer</h3>
+            <div class="custom-editor-header-actions">
+              <label class="inline-check custom-enabled-check"><input id="timerEnabled" type="checkbox" checked> Enabled</label>
+              <button id="closeTimerEditorBtn" class="secondary" type="button">Close</button>
+            </div>
+          </div>
+
+          <div class="custom-editor-block">
+            <label class="prompt-label" for="timerName">Name</label>
+            <input id="timerName" type="text" maxlength="80" placeholder="Example: Discord Reminder">
+            <div class="detail">A friendly dashboard name. It is never included in the Twitch message.</div>
+          </div>
+
+          <div class="custom-editor-block">
+            <strong class="custom-block-title">Schedule</strong>
+            <div class="timer-settings-grid">
+              <div>
+                <label class="prompt-label" for="timerInterval">Interval</label>
+                <div class="duration-field"><input id="timerInterval" type="number" min="30" max="86400" step="1" value="900"><span class="duration-unit">seconds</span></div>
+              </div>
+              <div>
+                <label class="prompt-label" for="timerStartDelay">Start Delay (optional)</label>
+                <div class="duration-field"><input id="timerStartDelay" type="number" min="0" max="86400" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
+              </div>
+              <div>
+                <label class="prompt-label" for="timerJitter">Jitter (±)</label>
+                <div class="duration-field"><input id="timerJitter" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
+              </div>
+              <div>
+                <label class="prompt-label" for="timerPriority">Priority</label>
+                <select id="timerPriority">
+                  <option value="high">High</option>
+                  <option value="normal" selected>Normal</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+            </div>
+            <div class="detail">A per-timer start delay is optional, but if set it cannot be lower than the global stream-start delay. Jitter is recalculated after each successful firing.</div>
+            <div id="timerScheduleMsg" class="detail custom-field-message"></div>
+          </div>
+
+          <div class="custom-editor-block">
+            <strong class="custom-block-title">Activity</strong>
+            <div class="timer-settings-grid">
+              <div>
+                <label class="prompt-label" for="timerMinimumMessages">Min Messages</label>
+                <input id="timerMinimumMessages" type="number" min="0" max="100000" step="1" value="0">
+                <div class="detail">0 disables this requirement. Count resets after a successful scheduled/manual firing.</div>
+              </div>
+              <div>
+                <label class="prompt-label" for="timerMinimumViewers">Min Viewers</label>
+                <input id="timerMinimumViewers" type="number" min="0" max="1000000" step="1" value="0">
+                <div class="detail">0 disables this requirement. Uses Twitch's current stream viewer count.</div>
+              </div>
+            </div>
+            <div id="timerActivityMsg" class="detail custom-field-message"></div>
+          </div>
+
+          <div class="custom-editor-block">
+            <div class="custom-response-heading">
+              <strong>Actions</strong>
+            </div>
+            <div class="custom-response-mode-wrap">
+              <label class="prompt-label" for="timerResponseMode">Mode</label>
+              <select id="timerResponseMode">
+                <option value="equal">Equal Odds</option>
+                <option value="weighted">Specified Weight</option>
+              </select>
+              <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all actions.</div>
+              <label id="timerAvoidImmediateRepeatWrap" class="inline-check" hidden><input id="timerAvoidImmediateRepeat" type="checkbox"> Skip the last action used</label>
+              <div id="timerAvoidImmediateRepeatHelp" class="detail" hidden>When 2+ Equal Odds actions exist, the next firing will never immediately repeat the action used last time.</div>
+            </div>
+            <div id="timerResponses"></div>
+            <div class="custom-response-bottom-actions">
+              <button id="showTimerVariablesBtn" class="secondary" type="button">Variables</button>
+              <button id="addTimerResponseBtn" class="secondary" type="button">Add Action</button>
+            </div>
+            <div id="timerResponseMsg" class="detail custom-field-message"></div>
+          </div>
+
+  
+
+          <div class="custom-editor-actions">
+            <button id="saveTimerBtn" type="button">Save Timer</button>
+            <button id="cancelTimerBtn" class="secondary" type="button">Cancel</button>
+          </div>
+          <div id="timerEditorMsg" class="detail"></div>
+        </dialog>
+
+        <dialog id="timerVariablesDialog" class="custom-variables-dialog">
+            <div class="custom-dialog-header">
+              <h3>Available Timer Variables</h3>
+              <button id="closeTimerVariablesBtn" class="secondary" type="button" aria-label="Close timer variables">Close</button>
+            </div>
+            <div class="custom-variable-help-body">
+              <div class="custom-variable-row"><code>$(random MIN MAX [DEC])</code><div class="detail">Random number from MIN through MAX, inclusive. Optional DEC sets 0–5 decimal places; omitted DEC keeps whole-integer behavior.</div></div>
+              <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random current Twitch chatter, excluding the bot and known utility bots.</div></div>
+              <div class="custom-variable-note detail">Timer actions have no triggering viewer/query/counter, so command-only variables such as <code>$(user)</code>, <code>$(query)</code>, <code>$(count)</code>, and <code>$(counter)</code> are unavailable.</div>
+            </div>
+          </dialog>
+
+        <dialog id="timerPreviewDialog" class="custom-variables-dialog">
+          <div class="custom-dialog-header">
+            <h3>Timer Preview</h3>
+            <button id="closeTimerPreviewBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div id="timerPreviewBody" class="custom-variable-help-body"></div>
+        </dialog>
+      </div>
+
+
+      <div id="eventReactionsView" class="subsection-view">
+        <div class="custom-command-header">
+          <h3>EventSub Reactions</h3>
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="eventReactionSearch">
+              <span class="sr-only">Search EventSub reactions</span>
+              <input id="eventReactionSearch" class="list-search-input" type="search" placeholder="Search reactions..." autocomplete="off" aria-label="Search EventSub reactions">
+            </label>
+            <label class="custom-command-sort-label" for="eventReactionSort">Sort
+              <select id="eventReactionSort" aria-label="Sort EventSub reactions">
+                <option value="created_asc">Date added — oldest first</option>
+                <option value="updated_desc">Recently updated</option>
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="event_asc">Event — A to Z</option>
+              </select>
+            </label>
+            <button id="refreshEventReactionsBtn" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
+
+
+        <div id="eventReactionsMsg" class="detail"></div>
+        <div id="eventReactionList" class="custom-command-list"></div>
+        <div id="eventReactionPagination" class="list-pagination" aria-label="EventSub reaction pagination">
+          <label class="list-page-size">Show
+            <select id="eventReactionPageSize" aria-label="EventSub reactions per page">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <div id="eventReactionPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="eventReactionPrevPage" class="secondary" type="button" aria-label="Previous EventSub reaction page">←</button>
+            <button id="eventReactionNextPage" class="secondary" type="button" aria-label="Next EventSub reaction page">→</button>
+          </div>
+        </div>
+        <div class="custom-command-add-row">
+          <button id="addEventReactionBtn" type="button">Add EventSub Reaction</button>
+        </div>
+
+        <dialog id="persistentPinEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog">
+          <div class="custom-editor-header">
+            <h3>Edit Persistent Stream Pin</h3>
+            <div class="custom-editor-header-actions">
+              <label class="inline-check custom-enabled-check"><input id="persistentPinEnabled" type="checkbox"> Enabled</label>
+              <button id="closePersistentPinEditorBtn" class="secondary" type="button">Close</button>
+            </div>
+          </div>
+          <div class="custom-editor-block persistent-pin-editor-grid">
+            <label>Pinned Message
+              <textarea id="persistentPinMessageInput" rows="3" maxlength="500" placeholder="Message to post and keep as the default stream pin"></textarea>
+            </label>
+            <label>Post-Pin Hold
+              <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
+            </label>
+          </div>
+          <div class="custom-editor-actions">
+            <button id="savePersistentPinBtn" type="button">Save</button>
+            <button id="cancelPersistentPinBtn" class="secondary" type="button">Cancel</button>
+            <div id="persistentPinMsg" class="detail"></div>
+          </div>
+        </dialog>
+
+        <dialog id="eventReactionEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog">
+          <div class="custom-editor-header">
+            <h3 id="eventReactionEditorTitle">Add EventSub Reaction</h3>
+            <div class="custom-editor-header-actions">
+              <label class="inline-check custom-enabled-check"><input id="eventReactionEnabled" type="checkbox" checked> Enabled</label>
+              <button id="closeEventReactionEditorBtn" class="secondary" type="button">Close</button>
+            </div>
+          </div>
+
+          <div class="custom-editor-block event-reaction-basics-grid">
+            <label>Name
+              <input id="eventReactionName" type="text" maxlength="80" placeholder="Example: Raid Welcome">
+            </label>
+            <label>Event
+              <select id="eventReactionType"></select>
+            </label>
+            <label id="eventReactionMinimumWrap"> <span id="eventReactionMinimumLabel">Minimum</span>
+              <input id="eventReactionMinimum" type="number" min="0" step="1" value="0">
+            </label>
+            <label>Post-Reaction Hold
+              <div class="duration-field"><input id="eventReactionHold" type="number" min="0" max="3600" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
+            </label>
+          </div>
+
+          <div class="custom-editor-block">
+            <div class="custom-trigger-heading">
+              <strong>Actions</strong>
+            </div>
+            <div id="eventReactionActionHelp" class="detail"></div>
+            <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Value</span><span>Order</span></div>
+            <div id="eventReactionActions" class="event-reaction-actions"></div>
+            <div class="custom-response-bottom-actions">
+              <button id="showEventReactionVariablesBtn" class="secondary" type="button">Variables</button>
+              <button id="addEventReactionActionBtn" class="secondary" type="button">Add Action</button>
+            </div>
+          </div>
+
+          <div class="custom-editor-actions">
+            <button id="saveEventReactionBtn" type="button">Save Reaction</button>
+            <button id="cancelEventReactionBtn" class="secondary" type="button">Cancel</button>
+            <div id="eventReactionEditorMsg" class="detail"></div>
+          </div>
+        </dialog>
+
+        <dialog id="eventReactionVariablesDialog" class="custom-variables-dialog">
+          <div class="custom-dialog-header">
+            <h3>Available EventSub Variables</h3>
+            <button id="closeEventReactionVariablesBtn" class="secondary" type="button" aria-label="Close EventSub variables">Close</button>
+          </div>
+          <div class="custom-variable-help-body">
+            <div class="custom-variable-row"><code>$(user)</code><div class="detail">Display name of the EventSub actor. Example: <code>Thanks, $(user)!</code></div></div>
+            <div class="custom-variable-row"><code>$(username)</code><div class="detail">Login name of the EventSub actor.</div></div>
+            <div class="custom-variable-row"><code>$(raider)</code><div class="detail">Event actor display name, intended for Raid reactions. Example: <code>Welcome in, $(raider)!</code></div></div>
+            <div class="custom-variable-row"><code>$(viewers)</code><div class="detail">Raid viewer count. Example: <code>Thanks for bringing $(viewers) viewers!</code></div></div>
+            <div class="custom-variable-row"><code>$(bits)</code><div class="detail">Number of Bits in a Bits / Cheer event.</div></div>
+            <div class="custom-variable-row"><code>$(gifts)</code><div class="detail">Number of gifted subscriptions in a Gift Subs event.</div></div>
+            <div class="custom-variable-row"><code>$(level)</code><div class="detail">Hype Train level when supplied by the event.</div></div>
+            <div class="custom-variable-row"><code>$(months)</code><div class="detail">Cumulative subscription months in a Resub Message event.</div></div>
+            <div class="custom-variable-row"><code>$(event)</code><div class="detail">Friendly name of the EventSub event that fired, such as <code>Raid</code>, <code>Poll End</code>, or <code>Ad Break Start</code>.</div></div>
+            <div class="custom-variable-row"><code>$(title)</code><div class="detail">Poll/prediction title, reward title, or goal description when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(choices)</code><div class="detail">Poll choices or prediction outcomes joined with <code>/</code>.</div></div>
+            <div class="custom-variable-row"><code>$(votes)</code><div class="detail">Total poll votes when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(points)</code><div class="detail">Total Channel Points in a prediction when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(winner)</code><div class="detail">Winning prediction outcome when the prediction has resolved.</div></div>
+            <div class="custom-variable-row"><code>$(reward)</code><div class="detail">Channel Points reward title/type.</div></div>
+            <div class="custom-variable-row"><code>$(input)</code><div class="detail">Viewer-entered/message text attached to a Channel Points redemption.</div></div>
+            <div class="custom-variable-row"><code>$(current)</code><div class="detail">Current Twitch goal amount.</div></div>
+            <div class="custom-variable-row"><code>$(target)</code><div class="detail">Target Twitch goal amount.</div></div>
+            <div class="custom-variable-row"><code>$(duration)</code><div class="detail">Ad-break duration in seconds.</div></div>
+            <div class="custom-variable-row"><code>$(status)</code><div class="detail">Event status when Twitch supplies one.</div></div>
+            <div class="custom-variable-row"><code>$(automatic)</code><div class="detail"><code>yes</code> for an automatic ad break, otherwise <code>no</code>.</div></div>
+            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, and Run Custom Command values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div>
+          </div>
+        </dialog>
+      </div>
+
+      <div id="nativeCommandsView" class="subsection-view">
+        <div class="custom-command-header">
+          <div>
+            <h3>Native Commands</h3>
+            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they perform bot actions; their user-facing responses can be customized here.</div>
+          </div>
+          <div class="custom-command-list-controls">
+            <label class="custom-command-sort-label" for="nativeCommandUserLevelFilter">User Level
+              <select id="nativeCommandUserLevelFilter" aria-label="Filter native commands by user level">
+                <option value="all">All Levels</option>
+                <option value="everyone">Everyone</option>
+                <option value="subscriber">Subscriber</option>
+                <option value="twitch_vip">VIP</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Broadcaster</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div id="nativeCommandList" class="native-command-list">
+          <div class="native-command-card" data-native-command="recap" data-user-level="everyone">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!recap</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
+              <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="startrecap" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!startrecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="stoprecap" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!stoprecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="repin" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!repin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Enables Persistent Stream Pin and restores the configured pin immediately.</div>
+            </div>
+            <div class="custom-command-actions"><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="unpin" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!unpin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Unpins the current message and disables Persistent Stream Pin.</div>
+            </div>
+            <div class="custom-command-actions"><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="optout" data-user-level="everyone">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!optout</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
+              <div class="detail">Opts the viewer out of Viewer Profiles immediately. Learning and AI use stop at once; the existing profile is retained for 30 days in case they opt back in, then its stored profile content is deleted.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="optin" data-user-level="everyone">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!optin</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
+              <div class="detail">Opts the viewer back into Viewer Profiles. If they return within 30 days, their retained profile is reactivated; after that, a new profile starts fresh.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+        </div>
+
+        <dialog id="nativeResponseDialog" class="custom-variables-dialog native-response-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3 id="nativeResponseDialogTitle">Native Command Responses</h3>
+              <div class="detail">Customize user-facing chat responses without changing what the command actually does.</div>
+            </div>
+            <button id="closeNativeResponseDialogBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div id="nativeResponseFields" class="native-response-fields"></div>
+          <div class="detail">Variables: <code>$(user)</code> is available everywhere. Some responses also support <code>$(remaining)</code> or <code>$(messages)</code>.</div>
+          <div class="custom-editor-actions">
+            <button id="saveNativeResponseBtn" type="button">Save Responses</button>
+            <button id="resetNativeResponseBtn" class="secondary" type="button">Reset Command to Defaults</button>
+          </div>
+          <div id="nativeResponseMsg" class="detail"></div>
+        </dialog>
+
+        <div class="native-command-note detail">Native Commands is intentionally for stateful or privileged bot actions. Ordinary text responses, counters, random replies, and inline triggers should stay in Custom Commands.</div>
+      </div>
+    </div>
+
+    <div id="lorePanel" class="section-panel">
+      <h3>Memory Management</h3>
+      <div class="subsection-nav memory-subsection-nav" role="tablist" aria-label="Memory management views">
+        <button id="streamLoreViewTab" class="secondary active" type="button" aria-selected="true">Stream-Specific Lore</button>
+        <button id="viewerProfilesViewTab" class="secondary" type="button" aria-selected="false">Viewer Profiles</button>
+        <button id="botPersonalityViewTab" class="secondary" type="button" aria-selected="false">Bot Personality & Tagged Questions</button>
+      </div>
+
+      <div id="streamLoreView" class="subsection-view open">
+        <div class="subsection-nav lore-subsection-nav" role="tablist" aria-label="Stream-specific lore views">
+          <button id="streamLoreAiTab" class="secondary active" type="button" aria-selected="true">AI-Learned Lore</button>
+          <button id="streamLoreManualTab" class="secondary" type="button" aria-selected="false">Manually Added Lore</button>
+        </div>
+
+        <div id="streamLoreAiView" class="subsection-view open">
+          <div class="memory-block learned-lore-block">
+            <div class="custom-response-heading"><strong>AI-Learned Stream Lore (Global)</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
+            <div class="detail">This is channel-wide lore, not per-viewer memory. New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
+
+            <div class="learned-review-section learned-review-pending">
+              <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
+              <div class="detail">Review both newly discovered lore and suggested revisions here. New lore can automatically refine while pending. Revision cards show the current approved wording beside the AI suggestion before you Accept Revision or Keep Current.</div>
+              <div class="pending-confidence-filter-row">
+                <label class="custom-command-sort-label" for="streamLorePendingConfidenceFilter">Confidence
+                  <select id="streamLorePendingConfidenceFilter" aria-label="Filter pending stream lore by confidence">
+                    <option value="all">All</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+              </div>
+              <div id="streamLorePendingList" class="viewer-profile-facts stream-lore-observations"></div>
+            </div>
+
+            <div class="learned-review-section">
+              <div class="custom-command-header learned-review-header">
+                <div>
+                  <h4>Approved Lore</h4>
+                  <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support or suggest a revision; any suggested revision appears in Pending Lore above. Approved wording never changes until you accept it.</div>
+                </div>
+                <div class="custom-command-list-controls">
+                  <label class="list-search-wrap" for="streamLoreApprovedSearch">
+                    <span class="sr-only">Search approved AI-learned lore</span>
+                    <input id="streamLoreApprovedSearch" class="list-search-input" type="search" placeholder="Search approved lore..." autocomplete="off">
+                  </label>
+                  <label class="custom-command-sort-label" for="streamLoreApprovedSort">Sort
+                    <select id="streamLoreApprovedSort" aria-label="Sort approved AI-learned lore">
+                      <option value="recent_desc">Recently observed</option>
+                      <option value="text_asc">Lore — A to Z</option>
+                      <option value="text_desc">Lore — Z to A</option>
+                      <option value="evidence_desc">Evidence — most first</option>
+                      <option value="confidence_desc">Confidence — highest first</option>
+                      <option value="revision_desc">Revisions awaiting review</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="custom-response-heading learned-review-count-row"><strong></strong><span id="streamLoreApprovedCount" class="detail">0 approved</span></div>
+              <div id="streamLoreApprovedList" class="viewer-profile-facts stream-lore-observations"></div>
+              <div id="streamLoreApprovedPagination" class="list-pagination" aria-label="Approved stream lore pagination">
+                <label class="list-page-size">Show
+                  <select id="streamLoreApprovedPageSize" aria-label="Approved stream lore per page">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                  </select>
+                </label>
+                <div id="streamLoreApprovedPageLabel" class="list-page-label">Page 1 of 1</div>
+                <div class="list-page-buttons">
+                  <button id="streamLoreApprovedPrevPage" class="secondary" type="button" aria-label="Previous approved lore page">←</button>
+                  <button id="streamLoreApprovedNextPage" class="secondary" type="button" aria-label="Next approved lore page">→</button>
+                </div>
+              </div>
+            </div>
+            <div id="streamLoreObservationsMsg" class="detail"></div>
+
+            <div class="learned-review-section lore-directive-settings">
+              <div class="custom-response-heading"><strong>Moderator Lore Directives</strong></div>
+              <div class="detail">Mods/Broadcaster can tag <code id="streamLoreDirectiveMention">@&lt;bot_username&gt;</code> without a trailing <code>?</code> and use a clear save/remember instruction such as <code>add the fire alarm to the lore</code>. Only recognized lore-save directives trigger this path. The bot makes one immediate Gemini extraction and sends the result to Pending Stream Lore for normal review.</div>
+              <div class="personality-controls">
+                <label class="inline-check"><input id="streamLoreDirectiveEnabled" type="checkbox" checked> Enable mod/broadcaster lore directives</label>
+                <label class="inline-check"><input id="streamLoreDirectiveSendResponses" type="checkbox" checked> Send chat responses for recognized directives</label>
+              </div>
+              <div id="streamLoreDirectiveResponsePanel">
+                <label class="prompt-label" for="streamLoreDirectiveSuccessResponse">Queued-for-review response</label>
+                <textarea id="streamLoreDirectiveSuccessResponse" maxlength="500" rows="2" placeholder="@$(user), got it — I queued that in Pending Stream Lore for review."></textarea>
+                <label class="prompt-label" for="streamLoreDirectiveAlreadyKnownResponse">Already-known response</label>
+                <textarea id="streamLoreDirectiveAlreadyKnownResponse" maxlength="500" rows="2" placeholder="@$(user), that already matches existing Stream Lore."></textarea>
+                <label class="prompt-label" for="streamLoreDirectiveFailureResponse">Could-not-extract response</label>
+                <textarea id="streamLoreDirectiveFailureResponse" maxlength="500" rows="2" placeholder="@$(user), I couldn't turn that into a lore proposal. Give me a little more context."></textarea>
+                <div class="detail">These are deterministic templates, not personality replies. Variables: <code>$(user)</code>, <code>$(lore)</code> (the exact generated pending wording), and <code>$(status)</code>. The defaults deliberately do not use <code>$(lore)</code>, so the confirmation stays simple.</div>
+              </div>
+              <div class="custom-editor-actions">
+                <button id="saveStreamLoreDirectiveSettingsBtn" type="button">Save Lore Directive Settings</button>
+              </div>
+              <div id="streamLoreDirectiveMsg" class="detail"></div>
+            </div>
+
+          </div>
+        </div>
+
+        <div id="streamLoreManualView" class="subsection-view">
+          <div class="memory-block">
+            <div class="custom-command-header">
+              <div>
+                <h4>Manually Added Lore</h4>
+                <div class="detail">Structured moderator-written lore. <strong>Global</strong> entries are always available as background context. <strong>Subject-specific</strong> entries are only loaded when their subject or an alias is actually referenced.</div>
+              </div>
+              <button id="addManualLoreBtn" type="button">Add Lore Entry</button>
+            </div>
+            <div class="detail manual-lore-guidance">Use Subject-specific for people, characters, recurring entities, or topics such as <code>Motmo_</code>, <code>coosgoose</code>, <code>Chair</code>, or <code>Kaizo IronMon</code>. This keeps unrelated lore out of Tagged Questions.</div>
+            <div class="custom-response-heading"><strong>Manual Lore Cards</strong><span id="manualLoreCount" class="detail">0 entries</span></div>
+            <div id="manualLoreList" class="manual-lore-list"></div>
+            <div id="loreMsg" class="detail"></div>
+          </div>
+
+          <dialog id="manualLoreDialog" class="entity-editor-dialog manual-lore-dialog">
+            <div class="custom-editor-header">
+              <div>
+                <h4 id="manualLoreDialogTitle">Add Lore Entry</h4>
+                <div class="detail">Keep one subject or one global concept per card.</div>
+              </div>
+              <button id="manualLoreDialogClose" class="secondary" type="button">Close</button>
+            </div>
+            <input id="manualLoreId" type="hidden">
+            <label class="prompt-label" for="manualLoreScope">Scope</label>
+            <select id="manualLoreScope">
+              <option value="global">Global</option>
+              <option value="subject">Subject-specific</option>
+            </select>
+            <label id="manualLoreSubjectLabel" class="prompt-label" for="manualLoreSubject">Label <span class="detail">(optional)</span></label>
+            <input id="manualLoreSubject" type="text" maxlength="80" placeholder="Example: Chat culture">
+            <div id="manualLoreSubjectHelp" class="detail">For Global lore this is only an organizational label.</div>
+            <div id="manualLoreAliasesPanel" hidden>
+              <label class="prompt-label" for="manualLoreAliases">Aliases</label>
+              <input id="manualLoreAliases" type="text" placeholder="Comma-separated, e.g. Motmo, Motmo_">
+              <div class="detail">Any subject or alias match can load this card for a Tagged Question.</div>
+            </div>
+            <label class="prompt-label" for="manualLoreText">Lore</label>
+            <textarea id="manualLoreText" maxlength="2400" placeholder="Write the facts/context that belong to this subject or global concept."></textarea>
+            <div id="manualLoreTextCount" class="detail">0/2400 characters</div>
+            <label class="inline-check"><input id="manualLoreEnabled" type="checkbox" checked> Use this lore in AI context</label>
+            <div class="custom-editor-actions">
+              <button id="saveManualLoreEntryBtn" type="button">Save Entry</button>
+              <button id="cancelManualLoreEntryBtn" class="secondary" type="button">Cancel</button>
+            </div>
+            <div id="manualLoreDialogMsg" class="detail"></div>
+          </dialog>
+        </div>
+      </div>
+
+      <div id="botPersonalityView" class="subsection-view">
+      <div class="memory-block">
+        <h4>Bot Personality & Tagged Questions</h4>
+        <div class="detail">When a message starts with <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Tagged AI answers reply directly to the triggering Twitch message when possible. Leaving the Personality field blank disables tagged AI answers.</div>
+        <label class="prompt-label" for="botPersonalityName">Name</label>
+        <input id="botPersonalityName" type="text" maxlength="80" placeholder="Example: OakBot">
+        <div class="detail">Optional. Tagged AI replies will begin with a bold-styled Unicode prefix such as <code>(𝗮𝘀 𝗢𝗮𝗸𝗕𝗼𝘁):</code>. This affects tagged questions only; hourly recaps and other bot messages are unchanged.</div>
+        <label class="prompt-label" for="botPersonality">Personality</label>
+        <textarea id="botPersonality" maxlength="12000" placeholder="Example: You are Professor Oak with exhausted dad energy. Be knowledgeable, concise, slightly dramatic, and keep getting annoyed that nobody lets you out of the bag."></textarea>
+        <div id="botPersonalityCount" class="detail">0/12000 characters</div>
+        <div class="personality-controls">
+          <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsOnly" type="checkbox" checked> Mods/Broadcaster only</label>
+          <label class="inline-check personality-audience-toggle"><input id="botPersonalityModsBypassCooldown" type="checkbox" checked> Mods/Broadcaster bypass cooldown</label>
+          <div class="personality-cooldown-field">
+            <label class="prompt-label" for="botPersonalityCooldown">Cooldown</label>
+            <div class="duration-field"><input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
+            <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
+          </div>
+          <div class="personality-cooldown-field">
+            <label class="prompt-label" for="botPersonalityRecapBuffer">Recap Collision Buffer</label>
+            <div class="duration-field"><input id="botPersonalityRecapBuffer" type="number" min="0" max="120" step="1" value="12"><span class="duration-unit">seconds</span></div>
+            <div class="detail">Hourly recaps yield while a Tagged Question is being answered, then wait this long after its reply. Tagged Question replies are never delayed. Set to 0 to disable.</div>
+          </div>
+          <label class="inline-check personality-audience-toggle"><input id="botPersonalityUseCooldownResponse" type="checkbox"> Send a custom response while tagged questions are on cooldown</label>
+          <div id="botPersonalityCooldownResponsePanel" class="personality-cooldown-response-panel" hidden>
+            <label class="prompt-label" for="botPersonalityCooldownResponse">Cooldown Message</label>
+            <textarea id="botPersonalityCooldownResponse" maxlength="500" placeholder="$user, try asking again in $time."></textarea>
+            <div class="detail">Optional. <code>$user</code> inserts the viewer name and <code>$time</code> inserts the remaining cooldown, such as <code>14m 51s</code>. Also accepts <code>$(user)</code>, <code>$(time)</code>, and <code>$remaining</code>.</div>
+          </div>
+        </div>
+        <div class="ai-retry-panel">
+          <div class="ai-retry-heading">
+            <div>
+              <div class="label">AI Retries</div>
+              <div class="detail">Retries temporary Gemini errors. If all attempts fail, the bot sends the fallback response below.</div>
+            </div>
+            <label class="inline-check personality-audience-toggle"><input id="botPersonalityRetryEnabled" type="checkbox" checked> Retry temporary AI failures</label>
+          </div>
+          <div class="ai-retry-grid">
+            <div>
+              <label class="prompt-label" for="botPersonalityRetryCount">Retries</label>
+              <input id="botPersonalityRetryCount" type="number" min="0" max="2" step="1" value="2">
+              <div class="detail">Default 2. Retry attempts are kept inside an approximately 15-second total retry window.</div>
+            </div>
+            <div class="ai-retry-failure-response">
+              <label class="prompt-label" for="botPersonalityFailureResponse">Failure Message</label>
+              <textarea id="botPersonalityFailureResponse" maxlength="500">Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.</textarea>
+              <div class="detail"><code>$user</code> inserts the viewer name.</div>
+            </div>
+          </div>
+        </div>
+        <div class="ai-retry-panel">
+          <div class="ai-retry-heading">
+            <div>
+              <div class="label">Prompt Injection Protection</div>
+              <div class="detail">Message sent when a tagged question is blocked as a likely prompt-injection attempt or when an AI response is suppressed for leaking protected prompt/configuration content.</div>
+            </div>
+          </div>
+          <label class="prompt-label" for="botPersonalitySecurityRefusalResponse">Security Refusal Message</label>
+          <textarea id="botPersonalitySecurityRefusalResponse" maxlength="500">Cute. Chat does not get to rewrite my instructions or make me reveal them. Ask me an actual question.</textarea>
+          <div class="detail"><code>$user</code> or <code>$(user)</code> inserts the viewer name. Leaving this blank restores the built-in default when saved. Security protection itself remains enabled.</div>
+        </div>
+        <div class="session-memory-panel">
+          <label class="inline-check personality-audience-toggle"><input id="sessionMemoryEnabled" type="checkbox" checked> Use Session Memory</label>
+          <div class="detail">Temporary current-stream memory is built from each completed hourly recap window so tagged questions can answer about earlier moments without relying on the short public recap. It is automatically removed when the stream ends.</div>
+          <div id="sessionMemoryStatus" class="detail session-memory-status">Session memory status not loaded yet.</div>
+          <button id="sessionMemorySettingsToggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="sessionMemorySettingsBody">Show Advanced Session Memory Settings</button>
+          <div id="sessionMemorySettingsBody" class="advanced-settings-body">
+            <div class="advanced-warning">These settings control how much temporary stream memory is supplied to tagged AI questions. Detailed hourly blocks are still retained for the active stream; these limits primarily control what is injected into each question.</div>
+            <div class="session-memory-settings-grid">
+              <div>
+                <label class="prompt-label" for="sessionMemoryRecentHours">Recent Detail (hours)</label>
+                <input id="sessionMemoryRecentHours" type="number" min="1" max="8" step="1" value="2">
+                <div class="detail">Completed memory blocks inside this recent window are included in full.</div>
+              </div>
+              <div>
+                <label class="prompt-label" for="sessionMemoryRelevantOlder">Older Blocks</label>
+                <input id="sessionMemoryRelevantOlder" type="number" min="0" max="6" step="1" value="2">
+                <div class="detail">Older blocks are keyword-matched against the viewer's question. Compact summaries for the full stream remain available.</div>
+              </div>
+              <div>
+                <label class="prompt-label" for="sessionMemoryRecentChat">Recent Chat</label>
+                <input id="sessionMemoryRecentChat" type="number" min="0" max="100" step="1" value="30">
+                <div class="detail">Covers the current hour before the next memory block is generated. Set to 0 to disable.</div>
+              </div>
+              <div>
+                <label class="prompt-label" for="sessionMemoryMaxContext">Max Context (characters)</label>
+                <input id="sessionMemoryMaxContext" type="number" min="4000" max="40000" step="500" value="18000">
+                <div class="detail">Hard cap on temporary memory injected into one tagged question.</div>
+              </div>
+            </div>
+            <label class="prompt-label" for="sessionMemoryPromptInstructions">Memory Instructions</label>
+            <textarea id="sessionMemoryPromptInstructions" maxlength="6000" placeholder="Optional: preserve specific kinds of current-stream details that matter to this community. Leave blank to use the built-in accuracy-focused memory prompt."></textarea>
+            <div id="sessionMemoryPromptCount" class="detail">0/6000 characters</div>
+            <div class="memory-actions">
+              <button id="refreshSessionMemoryBtn" class="secondary" type="button">Refresh Status</button>
+              <button id="clearSessionMemoryBtn" class="secondary" type="button">Clear Session Memory</button>
+            </div>
+            <div id="sessionMemoryActionMsg" class="detail"></div>
+          </div>
+        </div>
+        <div class="memory-actions">
+          <button id="saveBotPersonalityBtn" type="button">Save Personality Settings</button>
+          <button id="undoBotPersonalityBtn" class="secondary" type="button">Undo Changes</button>
+        </div>
+        <div id="botPersonalityMsg" class="detail"></div>
+      </div>
+      </div>
+
+      <div id="viewerProfilesView" class="subsection-view">
+        <div class="memory-block">
+          <div>
+            <h4>Viewer Profiles</h4>
+            <div class="detail">Viewer context learned from meaningful chat and available for tagged AI questions.</div>
+          </div>
+
+          <div class="viewer-profile-settings-card">
+            <div>
+              <strong>Profile Settings</strong>
+              <div class="detail">Learn useful, non-sensitive viewer context automatically. Learning and Tagged Question use can be enabled independently.</div>
+            </div>
+            <div class="viewer-profile-settings-toggles">
+              <label class="inline-check"><input id="viewerProfileLearningEnabled" type="checkbox" checked> Automatic Learning</label>
+              <label class="inline-check"><input id="viewerProfilesTaggedEnabled" type="checkbox"> Use in Tagged Questions</label>
+              <button id="saveViewerProfileSettingsBtn" class="secondary" type="button">Save Settings</button>
+            </div>
+          </div>
+          <div id="viewerProfileSettingsMsg" class="detail"></div>
+
+          <div class="learned-review-section learned-review-pending viewer-profile-global-pending-review">
+            <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending reviews</span></div>
+            <div class="detail">Review newly learned viewer observations and suggested revisions here without opening each profile. Each item shows the viewer it belongs to. New observations use Approve/Reject; revisions use Accept Revision/Keep Current.</div>
+            <div class="pending-confidence-filter-row">
+              <label class="custom-command-sort-label" for="viewerProfilePendingConfidenceFilter">Confidence
+                <select id="viewerProfilePendingConfidenceFilter" aria-label="Filter pending viewer observations by confidence">
+                  <option value="all">All</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+            </div>
+            <div id="viewerProfilePendingReviewList" class="viewer-profile-facts viewer-profile-global-pending-list"></div>
+            <div id="viewerProfilePendingReviewMsg" class="detail"></div>
+          </div>
+
+          <div class="learned-review-section viewer-profile-list-section">
+            <div class="custom-command-header learned-review-header">
+              <div>
+                <h4>Viewer Profiles</h4>
+                <div class="detail">Open a profile for moderator notes, approved observations, revisions, per-viewer learning controls, or detailed history.</div>
+              </div>
+              <div class="custom-command-list-controls">
+                <label class="list-search-wrap" for="viewerProfileSearch">
+                  <span class="sr-only">Search viewer profiles</span>
+                  <input id="viewerProfileSearch" class="list-search-input" type="search" placeholder="Search viewer profiles..." autocomplete="off" aria-label="Search viewer profiles">
+                </label>
+                <label class="custom-command-sort-label" for="viewerProfileSort">Sort
+                  <select id="viewerProfileSort" aria-label="Sort viewer profiles">
+                    <option value="updated_desc">Recently updated</option>
+                    <option value="name_asc">Name — A to Z</option>
+                    <option value="name_desc">Name — Z to A</option>
+                    <option value="facts_desc">Learned facts — most first</option>
+                  </select>
+                </label>
+                <button id="refreshViewerProfilesBtn" class="secondary" type="button">Refresh</button>
+              </div>
+            </div>
+
+            <div id="viewerProfilesMsg" class="detail"></div>
+            <div id="viewerProfileList" class="custom-command-list"></div>
+            <div id="viewerProfilePagination" class="list-pagination" aria-label="Viewer profile pagination">
+              <label class="list-page-size">Show
+                <select id="viewerProfilePageSize" aria-label="Viewer profiles per page">
+                  <option value="10">10</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                </select>
+              </label>
+              <div id="viewerProfilePageLabel" class="list-page-label">Page 1 of 1</div>
+              <div class="list-page-buttons">
+                <button id="viewerProfilePrevPage" class="secondary" type="button" aria-label="Previous viewer profile page">←</button>
+                <button id="viewerProfileNextPage" class="secondary" type="button" aria-label="Next viewer profile page">→</button>
+              </div>
+            </div>
+            <div class="custom-command-add-row"><button id="addViewerProfileBtn" type="button">Add Viewer Profile</button></div>
+          </div>
+        </div>
+
+        <dialog id="viewerProfileDialog" class="custom-variables-dialog viewer-profile-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3 id="viewerProfileDialogTitle">Viewer Profile</h3>
+              <div id="viewerProfileDialogMeta" class="detail"></div>
+            </div>
+            <button id="closeViewerProfileBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div class="viewer-profile-dialog-body">
+            <div class="viewer-profile-form-grid">
+              <div><label class="prompt-label" for="viewerProfileUsername">Twitch Username</label><input id="viewerProfileUsername" type="text" maxlength="80" placeholder="coosgoose"></div>
+              <div><label class="prompt-label" for="viewerProfileDisplayName">Display Name</label><input id="viewerProfileDisplayName" type="text" maxlength="80" placeholder="CoosGoose"></div>
+            </div>
+            <label class="prompt-label" for="viewerProfileAliases">Aliases / nicknames</label>
+            <input id="viewerProfileAliases" type="text" maxlength="1000" placeholder="Coos, Goose">
+            <div class="detail">Comma-separated. Used to recognize profile references in tagged questions.</div>
+            <div class="viewer-profile-form-grid viewer-profile-toggle-grid">
+              <label class="inline-check"><input id="viewerProfileEnabled" type="checkbox" checked> Available to Tagged Questions</label>
+              <label class="inline-check"><input id="viewerProfileLearningForUser" type="checkbox" checked> Allow Automatic Learning for this viewer</label>
+            </div>
+            <label class="prompt-label" for="viewerProfilePinnedNotes">Moderator-Pinned Notes</label>
+            <textarea id="viewerProfilePinnedNotes" maxlength="4000" placeholder="Optional moderator-approved context. These notes are treated as more authoritative than AI-learned observations."></textarea>
+            <div class="learned-review-section viewer-profile-learned-review">
+              <div class="custom-command-header learned-review-header">
+                <div>
+                  <div class="custom-response-heading"><strong>Approved Learned Observations</strong><span id="viewerProfileFactCount" class="detail">0 approved</span></div>
+                  <div class="detail">Only approved observations can be used as Tagged Question context. Use can temporarily disable one without deleting it. New evidence can strengthen support or suggest a revision; any suggested revision appears in Pending AI Observations below. Approved wording never changes until you accept it.</div>
+                </div>
+                <div class="custom-command-list-controls">
+                  <label class="list-search-wrap" for="viewerProfileFactSearch">
+                    <span class="sr-only">Search approved viewer observations</span>
+                    <input id="viewerProfileFactSearch" class="list-search-input" type="search" placeholder="Search observations..." autocomplete="off">
+                  </label>
+                  <label class="custom-command-sort-label" for="viewerProfileFactSort">Sort
+                    <select id="viewerProfileFactSort" aria-label="Sort approved viewer observations">
+                      <option value="recent_desc">Recently observed</option>
+                      <option value="text_asc">Observation — A to Z</option>
+                      <option value="text_desc">Observation — Z to A</option>
+                      <option value="evidence_desc">Evidence — most first</option>
+                      <option value="confidence_desc">Confidence — highest first</option>
+                      <option value="revision_desc">Revisions awaiting review</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div id="viewerProfileFacts" class="viewer-profile-facts"></div>
+              <div id="viewerProfileFactPagination" class="list-pagination" aria-label="Approved viewer observation pagination">
+                <label class="list-page-size">Show
+                  <select id="viewerProfileFactPageSize" aria-label="Approved viewer observations per page">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                  </select>
+                </label>
+                <div id="viewerProfileFactPageLabel" class="list-page-label">Page 1 of 1</div>
+                <div class="list-page-buttons">
+                  <button id="viewerProfileFactPrevPage" class="secondary" type="button" aria-label="Previous approved viewer observation page">←</button>
+                  <button id="viewerProfileFactNextPage" class="secondary" type="button" aria-label="Next approved viewer observation page">→</button>
+                </div>
+              </div>
+            </div>
+            <div class="learned-review-section learned-review-pending viewer-profile-pending-review">
+              <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingFactCount" class="detail">0 pending reviews</span></div>
+              <div class="detail">This review queue contains both new observations and suggested revisions for this viewer. New observations can automatically refine while pending. Revision cards show the current approved wording beside the suggestion before you Accept Revision or Keep Current.</div>
+              <div class="pending-confidence-filter-row">
+                <label class="custom-command-sort-label" for="viewerProfilePendingFactConfidenceFilter">Confidence
+                  <select id="viewerProfilePendingFactConfidenceFilter" aria-label="Filter this viewer's pending observations by confidence">
+                    <option value="all">All</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </label>
+              </div>
+              <div id="viewerProfilePendingFacts" class="viewer-profile-facts"></div>
+            </div>
+            <div class="custom-editor-actions">
+              <button id="saveViewerProfileBtn" type="button">Save Profile</button>
+              <button id="deleteViewerProfileBtn" class="danger" type="button">Delete Profile</button>
+            </div>
+            <div id="viewerProfileDialogMsg" class="detail"></div>
+          </div>
+        </dialog>
+      </div>
+    </div>
+
+    <div id="oauthPanel" class="section-panel">
+      <h3>OAuth Management</h3>
+      <div class="oauth-grid">
+        <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div><div class="oauth-action"><button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button><div id="oauthMsg" class="detail"></div></div></div>
+        <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div><div class="oauth-action"><button id="broadcasterOauthBtn">Authorize / Reauthorize Broadcaster</button><div id="broadcasterOauthMsg" class="detail"></div></div></div>
+        <div class="box wide"><div class="label">Twitch Chat API</div><div id="oauthChatApiStatusBox" class="value warn">Checking...</div><div id="oauthChatApiDetail" class="detail"></div></div>
+      </div>
+    </div>
+
+    <div id="renderLogsPanel" class="section-panel">
+      <div class="section-intro">
+        <h3>Render Diagnostics</h3>
+        <div class="detail">Live process health and recent Render service logs. Runtime diagnostics come directly from the bot and do not require the Render API.</div>
+      </div>
+
+      <div class="runtime-diagnostics-grid" aria-label="Runtime diagnostics">
+        <div class="box"><div class="label">Process Memory</div><div id="diagMemory" class="value warn">Checking...</div><div id="diagMemoryDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Node Heap</div><div id="diagHeap" class="value warn">Checking...</div><div id="diagHeapDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Event Loop</div><div id="diagEventLoop" class="value warn">Checking...</div><div id="diagEventLoopDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Process Uptime</div><div id="diagUptime" class="value warn">Checking...</div><div id="diagUptimeDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Gemini Queue</div><div id="diagGemini" class="value warn">Checking...</div><div id="diagGeminiDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Tagged Questions</div><div id="diagTagged" class="value warn">Checking...</div><div id="diagTaggedDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Recap Engine</div><div id="diagRecap" class="value warn">Checking...</div><div id="diagRecapDetail" class="detail"></div></div>
+        <div class="box"><div class="label">Core Services</div><div id="diagServices" class="value warn">Checking...</div><div id="diagServicesDetail" class="detail"></div></div>
+      </div>
+
+      <div class="render-log-heading">
+        <div>
+          <div class="recap-card-title">Recent Render Logs</div>
+          <div id="renderLogsMsg" class="detail">Open this section to load diagnostics and recent service logs.</div>
+        </div>
+      </div>
+      <div class="render-log-toolbar">
+        <button id="refreshLogsBtn" type="button">Refresh Diagnostics</button>
+        <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh every 10s</label>
+        <input id="logFilter" class="log-filter" placeholder="Filter loaded logs...">
+      </div>
+      <div id="renderLogConsole" class="render-log-console" aria-live="polite"></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="qwertSecretModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="qwertSecretTitle">
+  <div class="modal-card">
+    <h3 id="qwertSecretTitle">Broadcaster OAuth</h3>
+    <label for="qwertSecretInput" class="detail">Enter Secret Key for Qwert:</label>
+    <input id="qwertSecretInput" type="password" autocomplete="off" placeholder="Secret key">
+    <div class="modal-actions"><button id="qwertSecretCancel" class="secondary" type="button">Cancel</button><button id="qwertSecretOk" type="button">OK</button></div>
+  </div>
+</div>
+
+<button id="chatToggle" class="chat-edge-toggle secondary" type="button" aria-label="Show Chat" title="Show Chat" aria-expanded="false"><span id="chatToggleIcon" aria-hidden="true">‹</span></button>
+<aside id="chatSidebar" class="chat-sidebar" aria-label="Twitch chat sidebar">
+  <iframe id="twitchChatFrame" title="Qwert Twitch chat" allowfullscreen></iframe>
+</aside>
+<script type="module" src="/webui/app.js"></script>
+</body>
+</html>

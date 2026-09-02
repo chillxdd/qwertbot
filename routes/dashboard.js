@@ -41,7 +41,8 @@ function registerDashboardRoutes(app, options) {
     getDatabaseConnected,
     getBotConnected,
     getUsingMongoOAuth,
-    webuiDir
+    viewsDir,
+    adminPath
   } = options;
 
   app.get('/webui-config', (req, res) => {
@@ -242,7 +243,18 @@ function registerDashboardRoutes(app, options) {
     }
   });
 
-  app.get('/', (req, res) => res.sendFile(path.join(webuiDir, 'index.html')));
+  app.get('/', (req, res) => res.redirect(302, '/commands'));
+
+  app.get('/commands', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return res.sendFile(path.join(viewsDir, 'commands.html'));
+  });
+
+  app.get(adminPath, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    return res.sendFile(path.join(viewsDir, 'admin.html'));
+  });
 }
 
 module.exports = { registerDashboardRoutes };

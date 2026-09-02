@@ -52,6 +52,7 @@ const { registerNativeCommandRoutes } = require('./routes/nativeCommands');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const ADMIN_PATH = '/hailfatcloud';
 
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
 const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim();
@@ -565,7 +566,8 @@ registerDashboardRoutes(app, {
   getDatabaseConnected: () => databaseConnected,
   getBotConnected: () => botConnected,
   getUsingMongoOAuth: () => usingMongoOAuth,
-  webuiDir: path.join(__dirname, 'webui')
+  viewsDir: path.join(__dirname, 'views'),
+  adminPath: ADMIN_PATH
 });
 
 registerMemoryRoutes(app, {
@@ -596,7 +598,8 @@ registerAuthRoutes(app, {
   botScopes: TWITCH_OAUTH_SCOPES,
   broadcasterScopes: TWITCH_BROADCASTER_SCOPES,
   qwertOAuthLinkSecret: QWERT_OAUTH_LINK_SECRET,
-  oauthStateLifetimeMs: OAUTH_STATE_LIFETIME
+  oauthStateLifetimeMs: OAUTH_STATE_LIFETIME,
+  adminPath: ADMIN_PATH
 });
 
 registerCustomCommandRoutes(app, {

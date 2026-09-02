@@ -650,3 +650,12 @@ button.success{background:#16834a}
 .persistent-pin-editor-grid .duration-field{margin-top:5px}
 .event-reaction-card button:disabled{cursor:not-allowed}
 @media(max-width:700px){.persistent-pin-editor-grid{grid-template-columns:1fr}}
+
+
+/* Standalone public commands directory */
+.public-commands-page{min-height:100vh}
+.public-commands-card{max-width:980px}
+.public-commands-header{margin-bottom:4px}
+.public-commands-header .detail{margin-top:4px}
+.public-command-directory{margin-top:14px}
+@media(max-width:600px){.public-commands-card{margin-top:8px}.public-command-directory{padding:12px}}

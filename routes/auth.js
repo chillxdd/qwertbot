@@ -68,7 +68,8 @@ function registerAuthRoutes(app, options) {
     botScopes,
     broadcasterScopes,
     qwertOAuthLinkSecret,
-    oauthStateLifetimeMs
+    oauthStateLifetimeMs,
+    adminPath
   } = options;
 
   const botStates = createOAuthStateStore(oauthStateLifetimeMs);
@@ -111,7 +112,7 @@ function registerAuthRoutes(app, options) {
     const isBroadcasterAuthorization = broadcasterStates.has(state);
 
     if (!isBotAuthorization && !isBroadcasterAuthorization) {
-      return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>OAuth request expired</h2><p>Return to the dashboard and start authorization again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+      return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>OAuth request expired</h2><p>Return to the dashboard and start authorization again.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
     }
 
     if (isBotAuthorization) botStates.consume(state);
@@ -119,7 +120,7 @@ function registerAuthRoutes(app, options) {
 
     if (error) {
       const who = isBroadcasterAuthorization ? 'Broadcaster' : 'Bot';
-      return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>${who} Twitch authorization failed</h2><p>${escapeHtml(errorDescription || error)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+      return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>${who} Twitch authorization failed</h2><p>${escapeHtml(errorDescription || error)}</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
     }
 
     if (!code) return res.status(400).send('Missing Twitch authorization code.');
@@ -135,14 +136,14 @@ function registerAuthRoutes(app, options) {
         const authorizedLogin = (validation.login || '').toLowerCase().trim();
 
         if (channelName && authorizedLogin !== channelName) {
-          return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong broadcaster account</h2><p>You authorized <strong>${escapeHtml(authorizedLogin || 'unknown')}</strong>, but TWITCH_CHANNEL is <strong>${escapeHtml(channelName)}</strong>.</p><p>Log into Twitch as the broadcaster/channel owner and try again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+          return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong broadcaster account</h2><p>You authorized <strong>${escapeHtml(authorizedLogin || 'unknown')}</strong>, but TWITCH_CHANNEL is <strong>${escapeHtml(channelName)}</strong>.</p><p>Log into Twitch as the broadcaster/channel owner and try again.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
         }
 
         const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
         const missingScopes = broadcasterScopes.filter((scope) => !scopes.includes(scope));
 
         if (missingScopes.length > 0) {
-          return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Missing broadcaster permission</h2><p>Missing: ${escapeHtml(missingScopes.join(', '))}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+          return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Missing broadcaster permission</h2><p>Missing: ${escapeHtml(missingScopes.join(', '))}</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
         }
 
         await storeBroadcasterAuthorizationCodeResult(tokenData);
@@ -163,7 +164,7 @@ function registerAuthRoutes(app, options) {
           console.error('[EventSub] Setup after broadcaster OAuth failed:', eventSubErr.message || eventSubErr);
         }
 
-        return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Broadcaster authorization successful</h2><p>Authorized broadcaster: <strong>${escapeHtml(authorizedLogin)}</strong></p><p>The bot-badge and EventSub permissions were stored securely in MongoDB.</p><p>${escapeHtml(eventSubNote)}</p><p>Return to the dashboard. When the bot authorization is also updated, the dashboard will show <strong>BOT BADGE READY</strong>.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+        return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Broadcaster authorization successful</h2><p>Authorized broadcaster: <strong>${escapeHtml(authorizedLogin)}</strong></p><p>The bot-badge and EventSub permissions were stored securely in MongoDB.</p><p>${escapeHtml(eventSubNote)}</p><p>Return to the dashboard. When the bot authorization is also updated, the dashboard will show <strong>BOT BADGE READY</strong>.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></div></body></html>`);
       }
 
       const tokenData = await exchangeAuthorizationCode({
@@ -180,17 +181,17 @@ function registerAuthRoutes(app, options) {
 
       if (storedBotUserId) {
         if (!authorizedUserId || authorizedUserId !== storedBotUserId) {
-          return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong Twitch account</h2><p>The Twitch account you authorized does not match the bot account already stored for this application.</p><p>Log into Twitch as <strong>${escapeHtml(botUsername || 'the configured bot account')}</strong> and try again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+          return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong Twitch account</h2><p>The Twitch account you authorized does not match the bot account already stored for this application.</p><p>Log into Twitch as <strong>${escapeHtml(botUsername || 'the configured bot account')}</strong> and try again.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
         }
       } else if (botUsername && authorizedLogin !== botUsername) {
-        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong Twitch account</h2><p>You authorized <strong>${escapeHtml(authorizedLogin || 'unknown')}</strong>, but TWITCH_BOT_USERNAME is <strong>${escapeHtml(botUsername)}</strong>.</p><p>Log into Twitch as the bot account and try again.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Wrong Twitch account</h2><p>You authorized <strong>${escapeHtml(authorizedLogin || 'unknown')}</strong>, but TWITCH_BOT_USERNAME is <strong>${escapeHtml(botUsername)}</strong>.</p><p>Log into Twitch as the bot account and try again.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
       }
 
       const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
       const missingScopes = botScopes.filter((scope) => !scopes.includes(scope));
 
       if (missingScopes.length > 0) {
-        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Missing Twitch permissions</h2><p>Missing: ${escapeHtml(missingScopes.join(', '))}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+        return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Missing Twitch permissions</h2><p>Missing: ${escapeHtml(missingScopes.join(', '))}</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
       }
 
       await storeAuthorizationCodeResult(tokenData);
@@ -203,10 +204,10 @@ function registerAuthRoutes(app, options) {
         });
       }, 500);
 
-      return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtml(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API, the legacy IRC connection used to receive chat, temporary hourly-recap pinning, and random current-chatter selection for custom commands.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+      return res.send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Bot authorization successful</h2><p>Authorized account: <strong>${escapeHtml(authorizedLogin)}</strong></p><p>The bot grant now includes the scopes used for Twitch's modern Chat API, the legacy IRC connection used to receive chat, temporary hourly-recap pinning, and random current-chatter selection for custom commands.</p><p>Return to the dashboard and complete broadcaster authorization if it is still pending.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></div></body></html>`);
     } catch (err) {
       console.error('[OAuth] Twitch callback failed:', err.message || err);
-      return res.status(500).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Twitch OAuth error</h2><p>${escapeHtml(err.message)}</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></body></html>`);
+      return res.status(500).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>Twitch OAuth error</h2><p>${escapeHtml(err.message)}</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
     }
   });
 
@@ -234,7 +235,7 @@ function registerAuthRoutes(app, options) {
       const alreadyAuthorized = existing.stored && broadcasterScopes.every((scope) => scopes.includes(scope));
 
       if (alreadyAuthorized) {
-        return res.status(410).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Authorization link already used</h2><p><strong>${escapeHtml(existing.username || channelName || 'Qwert')}</strong> has already granted all currently required broadcaster permissions.</p><p>This private authorization link is no longer needed.</p><p><a style="color:#bf94ff" href="/">Return to dashboard</a></p></div></body></html>`);
+        return res.status(410).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><div style="max-width:700px;margin:auto;background:#18181b;padding:24px;border-radius:8px"><h2 style="color:#00f59b">Authorization link already used</h2><p><strong>${escapeHtml(existing.username || channelName || 'Qwert')}</strong> has already granted all currently required broadcaster permissions.</p><p>This private authorization link is no longer needed.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></div></body></html>`);
       }
     } catch (err) {
       console.error('[OAuth Broadcaster] Could not check existing authorization:', err.message || err);
