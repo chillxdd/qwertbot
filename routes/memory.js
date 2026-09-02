@@ -1,4 +1,4 @@
-const { MAX_STREAM_LORE_LENGTH, MAX_MANUAL_LORE_ENTRIES, MAX_MANUAL_LORE_TEXT_LENGTH, MAX_MANUAL_LORE_SUBJECT_LENGTH, MAX_MANUAL_LORE_ALIASES, MAX_MANUAL_LORE_ALIAS_LENGTH, MAX_LORE_DIRECTIVE_RESPONSE_LENGTH, getStreamLore, saveLoreDirectiveConfig, saveStreamLore, saveManualLoreEntry, setManualLoreEntryEnabled, deleteManualLoreEntry, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation, deleteLearnedObservationsByConfidence, clearAllLearnedObservations } = require('../services/streamLore');
+const { MAX_STREAM_LORE_LENGTH, MAX_MANUAL_LORE_ENTRIES, MAX_MANUAL_LORE_TEXT_LENGTH, MAX_MANUAL_LORE_SUBJECT_LENGTH, MAX_MANUAL_LORE_ALIASES, MAX_MANUAL_LORE_ALIAS_LENGTH, MAX_LORE_DIRECTIVE_RESPONSE_LENGTH, getStreamLore, saveLoreDirectiveConfig, saveStreamLore, saveManualLoreEntry, setManualLoreEntryEnabled, deleteManualLoreEntry, approveLearnedObservation, rejectLearnedObservation, acceptLearnedObservationRevision, dismissLearnedObservationRevision, setLearnedObservationEnabled, deleteLearnedObservation } = require('../services/streamLore');
 const { getViewerProfileSettings, saveViewerProfileSettings, listViewerProfiles, getViewerProfile, saveViewerProfile, approveViewerFact, rejectViewerFact, acceptViewerFactRevision, dismissViewerFactRevision, setFactEnabled, deleteViewerFact, deleteViewerProfile, deleteViewerFactsByConfidence, clearAllViewerProfiles } = require('../services/viewerProfiles');
 
 function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, getBotPersonalityManager, getRecapManager, channelName }) {
@@ -135,29 +135,6 @@ function registerMemoryRoutes(app, { requireModSession, getDatabaseConnected, ge
       return res.json({ success: true, learnedObservations: lore.learnedObservations, updatedAt: lore.updatedAt });
     } catch (err) {
       return res.status(400).json({ success: false, error: err.message || 'Could not unlearn stream lore observation.' });
-    }
-  });
-
-  app.post('/stream-lore/observations-bulk-delete', requireModSession, async (req, res) => {
-    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
-    try {
-      const result = await deleteLearnedObservationsByConfidence(channelName, {
-        maxConfidence: req.body?.maxConfidence,
-        approvalScope: req.body?.approvalScope
-      });
-      return res.json({ success: true, ...result });
-    } catch (err) {
-      return res.status(400).json({ success: false, error: err.message || 'Could not bulk-delete learned stream lore.' });
-    }
-  });
-
-  app.post('/stream-lore/observations-clear-all', requireModSession, async (req, res) => {
-    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
-    try {
-      const result = await clearAllLearnedObservations(channelName);
-      return res.json({ success: true, ...result });
-    } catch (err) {
-      return res.status(400).json({ success: false, error: err.message || 'Could not clear learned stream lore.' });
     }
   });
 

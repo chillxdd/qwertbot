@@ -675,3 +675,8 @@ button.success{background:#16834a}
 .bulk-cleanup-panel{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin:14px 0 6px;padding:10px 12px;background:#111216;border:1px solid #303039;border-radius:7px}
 .bulk-cleanup-panel>strong{align-self:center;margin-right:2px}.bulk-cleanup-panel label{min-width:150px;margin:0}.bulk-cleanup-panel select{margin-bottom:0}.bulk-cleanup-panel button{margin:0;white-space:nowrap}
 @media(max-width:700px){.bulk-cleanup-panel{align-items:stretch}.bulk-cleanup-panel label,.bulk-cleanup-panel button{width:100%}}
+
+/* Compact public description editor */
+#customCommandPublicDescription{height:78px;min-height:78px;max-height:78px;resize:none;overflow-y:auto}
+/* Viewer profile cleanup stays out of the way until explicitly opened. */
+.viewer-profile-cleanup-shell{margin-top:24px;padding-top:14px;border-top:1px solid #2a2a30}.viewer-profile-cleanup-shell>.advanced-toggle{margin:0}.viewer-profile-cleanup-shell .advanced-settings-body{margin-top:10px}.viewer-profile-cleanup-panel{margin-top:0}

@@ -573,6 +573,16 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     setMessage(`${profiles.length} viewer profile${profiles.length === 1 ? '' : 's'}.`);
   }
 
+  function toggleProfileCleanup() {
+    const body = $('viewerProfileCleanupBody');
+    const button = $('viewerProfileCleanupToggle');
+    if (!body || !button) return;
+    const opening = !body.classList.contains('open');
+    body.classList.toggle('open', opening);
+    button.setAttribute('aria-expanded', String(opening));
+    button.textContent = opening ? 'Hide Profile Cleanup' : 'Show Profile Cleanup';
+  }
+
   function cleanupScopeLabel(value) {
     if (value === 'pending') return 'pending';
     if (value === 'approved') return 'approved';
@@ -684,6 +694,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
   $('viewerProfilePageSize').onchange = () => { currentPage = 1; try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(selectedPageSize())); } catch {} renderList(); };
   $('viewerProfilePrevPage').onclick = () => { if (currentPage > 1) { currentPage--; renderList(); } };
   $('viewerProfileNextPage').onclick = () => { currentPage++; renderList(); };
+  $('viewerProfileCleanupToggle').onclick = toggleProfileCleanup;
   $('deleteViewerFactsByConfidenceBtn').onclick = deleteMatchingViewerObservations;
   $('clearAllViewerProfilesBtn').onclick = clearAllProfiles;
   $('refreshViewerProfilesBtn').onclick = () => Promise.all([loadProfiles(), loadSettings()]);
