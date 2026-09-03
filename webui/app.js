@@ -116,6 +116,25 @@ const NATIVE_RESPONSE_FIELDS = {
   commands: [
     ['response', 'Response', 'Variable: $(user)']
   ],
+  last: [
+    ['response', 'Response', 'Variables: $(user), $(clipurl), $(cliptitle)'],
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
+    ['empty', 'No Saved Clip', 'Variable: $(user)'],
+    ['error', 'Error', 'Variable: $(user)']
+  ],
+  setlast: [
+    ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
+    ['fail', 'Fail Response', 'Variable: $(user)']
+  ],
+  cliplast: [
+    ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
+    ['fail', 'Fail Response', 'Variable: $(user)']
+  ],
+  clip: [
+    ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
+    ['fail', 'Fail Response', 'Variable: $(user)'],
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)']
+  ],
   recap: [
     ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
     ['offline', 'Offline', 'Variable: $(user)'],
@@ -144,8 +163,25 @@ const NATIVE_RESPONSE_FIELDS = {
     ['error', 'Error', 'Variable: $(user)']
   ]
 };
+const NATIVE_SETTING_DEFAULTS = {
+  clip: { defaultTitle: 'Qwert Clip', defaultDuration: 45 },
+  cliplast: { defaultTitle: 'Last Notable Run End', defaultDuration: 45 }
+};
+const NATIVE_SETTING_FIELDS = {
+  clip: [
+    ['defaultTitle', 'Default Clip Title', 'Used by !clip when no title is supplied.', 'text'],
+    ['defaultDuration', 'Default Duration', '5–60 seconds. Used when no explicit <duration> | prefix is supplied.', 'number']
+  ],
+  cliplast: [
+    ['defaultTitle', 'Default Clip Title', 'Used by !cliplast when no title is supplied.', 'text'],
+    ['defaultDuration', 'Default Duration', '5–60 seconds. Used when no explicit <duration> | prefix is supplied.', 'number']
+  ]
+};
 let nativeResponses = null;
 let nativeResponseDefaults = null;
+let nativeClipSettings = null;
+let nativeLastClip = null;
+let nativeClipCooldowns = null;
 let editingNativeCommand = null;
 let nativeResponseMaxLength = 450;
 
@@ -154,25 +190,53 @@ async function loadNativeResponses() {
   if (!d.success) throw new Error(d.error || 'Could not load native command responses.');
   nativeResponses = d.responses || {};
   nativeResponseDefaults = d.defaults || {};
+  nativeClipSettings = d.clipSettings || nativeClipSettings || {};
+  nativeLastClip = d.lastClip || null;
+  nativeClipCooldowns = d.clipCooldowns || nativeClipCooldowns || {};
   nativeResponseMaxLength = Number(d.maxLength || 450);
 }
 
 function renderNativeResponseFields(command) {
-  const fields = NATIVE_RESPONSE_FIELDS[command] || [];
-  $('nativeResponseFields').innerHTML = fields.map(([key, label, help]) => {
-    const value = nativeResponses?.[command]?.[key] || '';
+  const responseFields = (NATIVE_RESPONSE_FIELDS[command] || []).map(([key, label, help]) => {
+    const value = nativeResponses?.[command]?.[key] ?? '';
     return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><textarea data-native-response-key="${esc(key)}" maxlength="${nativeResponseMaxLength}">${esc(value)}</textarea><div class="detail">${esc(help)}</div></div>`;
-  }).join('');
+  });
+
+  const settingFields = (NATIVE_SETTING_FIELDS[command] || []).map(([key, label, help, type]) => {
+    const value = nativeClipSettings?.[command]?.[key] ?? '';
+    const attrs = type === 'number' ? ' min="5" max="60" step="1"' : ' maxlength="250"';
+    return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><input data-native-setting-key="${esc(key)}" type="${type}" value="${esc(value)}"${attrs}><div class="detail">${esc(help)}</div></div>`;
+  });
+
+  const info = [];
+  if (command === 'last' || command === 'setlast' || command === 'cliplast') {
+    const current = nativeLastClip?.url
+      ? `<a href="${esc(nativeLastClip.url)}" target="_blank" rel="noopener noreferrer">${esc(nativeLastClip.url)}</a>`
+      : 'None saved yet.';
+    info.push(`<div class="native-response-field native-current-clip"><label class="prompt-label">Current !last Clip</label><div class="detail">${current}</div></div>`);
+  }
+  if (command === 'last' && nativeClipCooldowns?.lastSeconds != null) {
+    info.push(`<div class="detail">Built-in global cooldown: ${esc(nativeClipCooldowns.lastSeconds)}s.</div>`);
+  }
+  if (command === 'clip' && nativeClipCooldowns?.clipSeconds != null) {
+    info.push(`<div class="detail">Built-in global cooldown: ${esc(nativeClipCooldowns.clipSeconds)}s.</div>`);
+  }
+  if (command === 'setlast' || command === 'cliplast') {
+    info.push('<div class="detail">No cooldown. This command only works while Qwert is live in an approved official Pokémon game category.</div>');
+  }
+  if (command === 'clip' || command === 'cliplast') {
+    info.push(`<div class="detail">Syntax: <code>!${esc(command)} &lt;title&gt;</code> or <code>!${esc(command)} &lt;duration&gt; | &lt;title&gt;</code>. Duration accepts both <code>60</code> and <code>60s</code>. A title beginning with a number is treated as a title unless a pipe is present.</div>`);
+  }
+
+  $('nativeResponseFields').innerHTML = [...settingFields, ...responseFields, ...info].join('');
 }
 
 async function openNativeResponseDialog(command) {
   editingNativeCommand = command;
   $('nativeResponseMsg').textContent = 'Loading...';
-  if (!nativeResponses) {
-    try { await loadNativeResponses(); }
-    catch (err) { $('nativeResponseMsg').textContent = err.message; return; }
-  }
-  $('nativeResponseDialogTitle').textContent = `!${command} Responses`;
+  try { await loadNativeResponses(); }
+  catch (err) { $('nativeResponseMsg').textContent = err.message; return; }
+  $('nativeResponseDialogTitle').textContent = NATIVE_SETTING_FIELDS[command]?.length ? `!${command} Settings & Responses` : `!${command} Responses`;
   renderNativeResponseFields(command);
   $('nativeResponseMsg').textContent = '';
   const dialog = $('nativeResponseDialog');
@@ -191,17 +255,30 @@ async function saveNativeResponseDialog() {
     commandResponses[field.dataset.nativeResponseKey] = field.value.trim();
   });
   nativeResponses = { ...(nativeResponses || {}), [editingNativeCommand]: commandResponses };
+  const commandSettings = { ...(nativeClipSettings?.[editingNativeCommand] || {}) };
+  $('nativeResponseFields').querySelectorAll('[data-native-setting-key]').forEach((field) => {
+    commandSettings[field.dataset.nativeSettingKey] = field.type === 'number' ? Number(field.value) : field.value.trim();
+  });
+  if (Object.keys(commandSettings).length) {
+    nativeClipSettings = { ...(nativeClipSettings || {}), [editingNativeCommand]: commandSettings };
+  }
   $('nativeResponseMsg').textContent = 'Saving...';
-  const d = await postJson('/native-commands/responses/save', { responses: nativeResponses });
+  const d = await postJson('/native-commands/responses/save', { responses: nativeResponses, clipSettings: nativeClipSettings });
   if (!d.success) { $('nativeResponseMsg').textContent = d.error || 'Could not save responses.'; return; }
   nativeResponses = d.responses || nativeResponses;
+  nativeClipSettings = d.clipSettings || nativeClipSettings;
   renderNativeResponseFields(editingNativeCommand);
   $('nativeResponseMsg').textContent = 'Saved.';
 }
 
 function resetNativeResponseDialog() {
-  if (!editingNativeCommand || !nativeResponseDefaults?.[editingNativeCommand]) return;
-  nativeResponses = { ...(nativeResponses || {}), [editingNativeCommand]: JSON.parse(JSON.stringify(nativeResponseDefaults[editingNativeCommand])) };
+  if (!editingNativeCommand) return;
+  if (nativeResponseDefaults?.[editingNativeCommand]) {
+    nativeResponses = { ...(nativeResponses || {}), [editingNativeCommand]: JSON.parse(JSON.stringify(nativeResponseDefaults[editingNativeCommand])) };
+  }
+  if (NATIVE_SETTING_DEFAULTS[editingNativeCommand]) {
+    nativeClipSettings = { ...(nativeClipSettings || {}), [editingNativeCommand]: JSON.parse(JSON.stringify(NATIVE_SETTING_DEFAULTS[editingNativeCommand])) };
+  }
   renderNativeResponseFields(editingNativeCommand);
   $('nativeResponseMsg').textContent = 'Defaults loaded. Save to apply them.';
 }

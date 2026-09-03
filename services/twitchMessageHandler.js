@@ -3,10 +3,10 @@ const { parseLoreDirective, tryHandleLoreDirective, consumeOwnResponse: consumeL
 const { detectPromptInjection } = require('./promptSecurity');
 const { identityFromTwitchTags } = require('./sourceRecords');
 
-const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin']);
+const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
-const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin']);
+const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
 const TAGGED_RECAP_CONTEXT_EXCLUDED_REASONS = new Set(['cooldown', 'prompt_injection_blocked', 'ai_failure']);
 
 function getCommandName(message) {
@@ -46,7 +46,7 @@ function extractReplyContext(tags = {}) {
   };
 }
 
-function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, getPersistentPinManager = null, getNativeCommandResponse = null, sendMessage, botUsername, summaryPrefix }) {
+function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, getChatTimerManager, getBotPersonalityManager, getPersistentPinManager = null, getClipCommandManager = null, getNativeCommandResponse = null, sendMessage, botUsername, summaryPrefix }) {
   let pendingBangMessageId = 0;
   const pendingBangMessages = [];
 
@@ -208,6 +208,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const chatTimerManager = typeof getChatTimerManager === 'function' ? getChatTimerManager() : null;
     const botPersonalityManager = typeof getBotPersonalityManager === 'function' ? getBotPersonalityManager() : null;
     const persistentPinManager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
+    const clipCommandManager = typeof getClipCommandManager === 'function' ? getClipCommandManager() : null;
 
     if (username === botUsername) {
       if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
@@ -317,6 +318,21 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
         recordViewerSource();
         return;
       }
+    }
+
+    if (clipCommandManager && ['!last', '!setlast', '!cliplast', '!clip'].includes(getCommandName(rawMessage))) {
+      try {
+        await clipCommandManager.handleMessage({
+          channel,
+          rawMessage,
+          displayName,
+          tags,
+          isModOrBroadcaster: isModOrBroadcaster(tags)
+        });
+      } catch (err) {
+        console.error(`[Clips] Native clip command failed for ${displayName}:`, err?.message || err);
+      }
+      return;
     }
 
     if (isKnownBotCommand(rawMessage)) {

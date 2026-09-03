@@ -1,9 +1,29 @@
 const NativeCommandConfig = require('../models/NativeCommandConfig');
 
 const MAX_RESPONSE_LENGTH = 450;
+const OPTIONAL_BLANK_RESPONSES = new Set(['setlast.success', 'cliplast.success', 'clip.success']);
 const DEFAULT_NATIVE_RESPONSES = Object.freeze({
   commands: {
     response: 'All SqwertArmyBot commands: https://sqwertarmybot.onrender.com/commands'
+  },
+  last: {
+    response: 'Last Notable Run End: $(clipurl)',
+    cooldown: '@$(user), !last is on cooldown. Try again in $(remaining).',
+    empty: 'No notable run clip is saved yet.',
+    error: 'I couldn\'t load the last notable run clip right now.'
+  },
+  setlast: {
+    success: '',
+    fail: 'Couldn\'t set !last. Make sure Qwert is live in an approved Pokémon category and the URL is a valid Qwert Twitch clip.'
+  },
+  cliplast: {
+    success: 'Last notable run saved: $(clipurl)',
+    fail: 'Couldn\'t create or save the notable run clip. Make sure Qwert is live in an approved Pokémon category and clipping is available.'
+  },
+  clip: {
+    success: 'Clip created: $(clipurl)',
+    fail: 'Couldn\'t create that clip.',
+    cooldown: '@$(user), !clip is on cooldown. Try again in $(remaining).'
   },
   optout: {
     success: '@$(user), you\'ve opted out of Viewer Profiles. Learning and profile use stop immediately. Your existing profile will be deleted after 30 days unless you opt back in.',
@@ -44,7 +64,8 @@ function cloneDefaults() {
 
 function normalizeResponse(value, fallback) {
   const text = String(value ?? '').trim();
-  if (!text) return fallback;
+  // An explicitly blank default means the response is optional/silent.
+  if (!text) return fallback === '' ? '' : fallback;
   return text.slice(0, MAX_RESPONSE_LENGTH);
 }
 
@@ -52,7 +73,12 @@ function normalizeResponses(input = {}) {
   const out = cloneDefaults();
   for (const [command, variants] of Object.entries(out)) {
     for (const [variant, fallback] of Object.entries(variants)) {
-      out[command][variant] = normalizeResponse(input?.[command]?.[variant], fallback);
+      const supplied = input?.[command]?.[variant];
+      if (OPTIONAL_BLANK_RESPONSES.has(`${command}.${variant}`) && supplied != null && String(supplied).trim() === '') {
+        out[command][variant] = '';
+      } else {
+        out[command][variant] = normalizeResponse(supplied, fallback);
+      }
     }
   }
   return out;

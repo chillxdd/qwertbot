@@ -13,6 +13,8 @@ const { createChatTimerManager } = require('./services/chatTimers');
 const { createEventSubReactionManager } = require('./services/eventSubReactions');
 const { createAutomationSpacingManager } = require('./services/automationSpacing');
 const { createPersistentPinManager } = require('./services/persistentStreamPin');
+const { createClipCommandManager } = require('./services/clipCommands');
+const { REQUIRED_CLIPS_SCOPE } = require('./services/twitchClips');
 const { getEventReactionHoldStatus } = require('./services/eventReactionHold');
 const { getStreamLore } = require('./services/streamLore');
 const { createBotPersonalityManager } = require('./services/botPersonality');
@@ -59,7 +61,7 @@ const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
 const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
-const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_ANNOUNCEMENT_SCOPE, REQUIRED_CHATTERS_SCOPE];
+const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_ANNOUNCEMENT_SCOPE, REQUIRED_CHATTERS_SCOPE, REQUIRED_CLIPS_SCOPE];
 const TWITCH_BROADCASTER_SCOPES = [
   'channel:bot',
   'channel:read:subscriptions',
@@ -105,6 +107,7 @@ let chatTimerManager = null;
 let eventSubReactionManager = null;
 let automationSpacingManager = null;
 let persistentPinManager = null;
+let clipCommandManager = null;
 let botPersonalityManager = null;
 let twitchReconnectInProgress = false;
 let twitchAuthRecoveryInProgress = false;
@@ -290,12 +293,19 @@ botPersonalityManager = createBotPersonalityManager({
   getCurrentEventRecords: () => recapManager?.getCurrentWindowEvents?.({ structured: true }) || []
 });
 
+clipCommandManager = createClipCommandManager({
+  channelName,
+  sendMessage: (channel, message) => chatClientProxy.say(channel, message),
+  getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables)
+});
+
 const twitchMessageHandler = createTwitchMessageHandler({
   getRecapManager: () => recapManager,
   getCustomCommandManager: () => customCommandManager,
   getChatTimerManager: () => chatTimerManager,
   getBotPersonalityManager: () => botPersonalityManager,
   getPersistentPinManager: () => persistentPinManager,
+  getClipCommandManager: () => clipCommandManager,
   getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables),
   sendMessage: (channel, message) => chatClientProxy.say(channel, message),
   botUsername,
@@ -647,6 +657,7 @@ registerEventSubReactionRoutes(app, {
 registerNativeCommandRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => databaseConnected,
+  getClipCommandManager: () => clipCommandManager,
   channelName
 });
 

@@ -696,6 +696,38 @@
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
 
+          <div class="native-command-card" data-native-command="last" data-user-level="everyone">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!last</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
+              <div class="detail">Shows the saved last notable Pokémon run clip. Uses a 30-second global cooldown.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="clip" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!clip</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Creates a Twitch clip with an optional title and duration override. Uses a 60-second global cooldown.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="cliplast" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!cliplast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Creates a Twitch clip and saves it as !last. No cooldown; only works while live in an approved official Pokémon category.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="setlast" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!setlast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Validates a Qwert Twitch clip URL and saves it as !last. No cooldown; only works while live in an approved official Pokémon category.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+          </div>
+
           <div class="native-command-card" data-native-command="startrecap" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!startrecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
@@ -749,12 +781,12 @@
           <div class="custom-dialog-header">
             <div>
               <h3 id="nativeResponseDialogTitle">Native Command Responses</h3>
-              <div class="detail">Customize user-facing chat responses without changing what the command actually does.</div>
+              <div class="detail">Customize user-facing responses and command-specific settings without changing command access rules.</div>
             </div>
             <button id="closeNativeResponseDialogBtn" class="secondary" type="button">Close</button>
           </div>
           <div id="nativeResponseFields" class="native-response-fields"></div>
-          <div class="detail">Variables: <code>$(user)</code> is available everywhere. Some responses also support <code>$(remaining)</code> or <code>$(messages)</code>.</div>
+          <div class="detail">Variables: <code>$(user)</code> is available everywhere. Clip responses may also use <code>$(clipurl)</code> and <code>$(cliptitle)</code>; cooldown responses may use <code>$(remaining)</code>.</div>
           <div class="custom-editor-actions">
             <button id="saveNativeResponseBtn" type="button">Save Responses</button>
             <button id="resetNativeResponseBtn" class="secondary" type="button">Reset Command to Defaults</button>
