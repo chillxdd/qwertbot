@@ -123,7 +123,7 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 
 .commands-subsection-nav{grid-template-columns:repeat(3,minmax(0,1fr))}
 .native-command-list{display:flex;flex-direction:column;gap:9px;margin-top:14px}
-.native-command-card{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:13px 14px;background:#111216;border:1px solid #303039;border-radius:7px}
+.native-command-card{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:13px 14px;background:#111216;border:1px solid #303039;border-radius:7px}.native-command-card[hidden]{display:none!important}
 .native-command-main{min-width:0}
 .native-command-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;color:#fff;font-weight:700}
 .native-command-title code{font-size:14px;color:#fff}
