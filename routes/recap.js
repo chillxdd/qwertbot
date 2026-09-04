@@ -58,6 +58,8 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
         result = await recapManager.stopRecap({ channel: channelName, displayName: 'WebUI MOD', announce: false });
       } else if (req.body.action === 'start') {
         result = await recapManager.startRecap({ channel: channelName, displayName: 'WebUI MOD', announce: false });
+      } else if (req.body.action === 'abort-clear') {
+        result = await recapManager.abortAndClearRecap({ displayName: 'WebUI MOD' });
       } else {
         return res.status(400).json({ success: false, error: 'Invalid recap-control action.' });
       }

@@ -17,6 +17,7 @@ const queues = {
 };
 
 let processing = false;
+let activeJob = null;
 let lastRequestStartedAt = 0;
 let requestStartTimes = [];
 let globalBackoffUntil = 0;
@@ -189,11 +190,15 @@ function streamEventFailure(event) {
   return err;
 }
 
-async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout }) {
+async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal = null }) {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
   const controller = new AbortController();
+  let externallyCancelled = Boolean(cancelSignal?.aborted);
+  const onExternalAbort = () => { externallyCancelled = true; controller.abort(); };
+  if (cancelSignal && !cancelSignal.aborted) cancelSignal.addEventListener('abort', onExternalAbort, { once: true });
+  if (externallyCancelled) controller.abort();
   const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
   let timeout = null;
@@ -321,6 +326,14 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
     }
     return data;
   } catch (err) {
+    if (externallyCancelled) {
+      const wrapped = new Error('Gemini request cancelled by operator.');
+      wrapped.cancelled = true;
+      wrapped.retryable = false;
+      wrapped.elapsedMs = Date.now() - startedAt;
+      console.info(`[Gemini] ${label} cancelled by operator after ${(wrapped.elapsedMs / 1000).toFixed(1)}s.`);
+      throw wrapped;
+    }
     const timedOut = controller.signal.aborted;
     if (timedOut) {
       const idleMs = Date.now() - lastActivityAt;
@@ -338,18 +351,23 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
     throw err;
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (cancelSignal) cancelSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 
-async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false } = {}) {
+async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false, cancelSignal = null } = {}) {
   if (stream === true) {
-    return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout });
+    return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal });
   }
 
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
   const controller = new AbortController();
+  let externallyCancelled = Boolean(cancelSignal?.aborted);
+  const onExternalAbort = () => { externallyCancelled = true; controller.abort(); };
+  if (cancelSignal && !cancelSignal.aborted) cancelSignal.addEventListener('abort', onExternalAbort, { once: true });
+  if (externallyCancelled) controller.abort();
   const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
   const timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
@@ -365,6 +383,14 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, la
       signal: controller.signal
     });
   } catch (err) {
+    if (externallyCancelled) {
+      const wrapped = new Error('Gemini request cancelled by operator.');
+      wrapped.cancelled = true;
+      wrapped.retryable = false;
+      wrapped.elapsedMs = Date.now() - startedAt;
+      console.info(`[Gemini] ${label} cancelled by operator after ${(wrapped.elapsedMs / 1000).toFixed(1)}s.`);
+      throw wrapped;
+    }
     const timedOut = controller.signal.aborted;
     const wrapped = new Error(timedOut ? 'Gemini request timed out.' : (err?.message || 'Gemini request failed.'));
     wrapped.timedOut = timedOut;
@@ -377,6 +403,7 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, la
     throw wrapped;
   } finally {
     clearTimeout(timeout);
+    if (cancelSignal) cancelSignal.removeEventListener('abort', onExternalAbort);
   }
 
   let data;
@@ -403,7 +430,7 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, la
 function enqueueGeminiRequest(prompt, options = {}) {
   const priority = normalizePriority(options.priority);
   return new Promise((resolve, reject) => {
-    queues[priority].push({ prompt, options, resolve, reject });
+    queues[priority].push({ prompt, options, resolve, reject, cancelController: new AbortController() });
     processQueue().catch((err) => console.error('[Gemini Queue] Unexpected queue failure:', err?.message || err));
   });
 }
@@ -440,11 +467,14 @@ async function processQueue() {
       lastRequestStartedAt = startedAt;
       requestStartTimes.push(startedAt);
 
+      activeJob = job;
       try {
-        const data = await performGeminiRequest(job.prompt, job.options);
+        const data = await performGeminiRequest(job.prompt, { ...job.options, cancelSignal: job.cancelController.signal });
         job.resolve(data);
       } catch (err) {
         job.reject(err);
+      } finally {
+        if (activeJob === job) activeJob = null;
       }
     }
   } finally {
@@ -453,6 +483,39 @@ async function processQueue() {
       processQueue().catch((err) => console.error('[Gemini Queue] Queue restart failure:', err?.message || err));
     }
   }
+}
+
+
+function cancelGeminiRequestsByLabelPrefix(prefix) {
+  const wanted = String(prefix || '').trim();
+  if (!wanted) return { activeCancelled: false, queuedCancelled: 0 };
+
+  let queuedCancelled = 0;
+  for (const priority of ['high', 'normal', 'low']) {
+    const keep = [];
+    for (const job of queues[priority]) {
+      const label = String(job?.options?.label || '');
+      if (label.startsWith(wanted)) {
+        queuedCancelled += 1;
+        job.cancelController.abort();
+        const err = new Error('Gemini request cancelled by operator before it started.');
+        err.cancelled = true;
+        err.retryable = false;
+        job.reject(err);
+      } else {
+        keep.push(job);
+      }
+    }
+    queues[priority] = keep;
+  }
+
+  let activeCancelled = false;
+  if (activeJob && String(activeJob?.options?.label || '').startsWith(wanted)) {
+    activeCancelled = true;
+    activeJob.cancelController.abort();
+  }
+
+  return { activeCancelled, queuedCancelled };
 }
 
 async function requestGeminiData(prompt, options = {}) {
@@ -516,6 +579,7 @@ module.exports = {
   DEFAULT_REQUEST_SPACING_MS,
   getGeminiRequestSpacingMs,
   getGeminiClientStatus,
+  cancelGeminiRequestsByLabelPrefix,
   extractGeminiText,
   isRetryableGeminiError,
   requestGeminiData,

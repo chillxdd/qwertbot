@@ -103,6 +103,7 @@ async function status() {
     if (loggedIn) {
       $('pauseBtn').disabled = !d.qwert.live || d.bot.recapPaused || d.bot.recapInProgress;
       $('resumeBtn').disabled = !d.qwert.live || !d.bot.recapPaused;
+      $('abortClearRecapBtn').disabled = !d.qwert.live;
       oauth.updateStatus(d);
     }
   } catch (_) {
@@ -367,6 +368,15 @@ async function recapAction(action) {
 }
 $('pauseBtn').onclick = () => recapAction('stop');
 $('resumeBtn').onclick = () => recapAction('start');
+$('abortClearRecapBtn').onclick = async () => {
+  const confirmed = window.confirm(
+    'ABORT & CLEAR RECAP?\n\nThis will cancel the current hourly recap generation, permanently discard every message/event in the active recap window, and PAUSE automatic recaps.\n\nCompleted recap history and session memory are not deleted. Resume Recaps will start a fresh 60-minute window.'
+  );
+  if (!confirmed) return;
+  $('abortClearRecapBtn').disabled = true;
+  $('recapMsg').textContent = 'Aborting recap and clearing active window...';
+  await recapAction('abort-clear');
+};
 
 
 function selectCommandsView(view = 'commands', { load = true } = {}) {
