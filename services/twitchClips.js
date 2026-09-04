@@ -141,6 +141,21 @@ async function getClipById(clipId) {
   });
 }
 
+async function getGameById(gameId) {
+  const id = String(gameId || '').trim();
+  if (!id) return null;
+  return withBotAccessToken(async (token) => {
+    const params = new URLSearchParams({ id });
+    const body = await fetchTwitchJson(`${TWITCH_API_BASE}/games?${params.toString()}`, token);
+    const game = Array.isArray(body?.data) ? body.data[0] || null : null;
+    if (!game?.id) return null;
+    return {
+      id: String(game.id),
+      name: String(game.name || '').trim()
+    };
+  });
+}
+
 async function validateClipForChannel(channelName, clipUrl) {
   const parsed = parseTwitchClipUrl(clipUrl);
   if (!parsed) throw new Error('Only Twitch clip URLs are accepted.');
@@ -150,12 +165,22 @@ async function validateClipForChannel(channelName, clipUrl) {
   if (String(clip.broadcaster_id || '') !== broadcaster.id) {
     throw new Error('That Twitch clip belongs to a different broadcaster.');
   }
+
+  const gameId = String(clip.game_id || '').trim();
+  let gameName = String(clip.game_name || '').trim();
+  if (!gameName && gameId) {
+    const game = await getGameById(gameId);
+    gameName = String(game?.name || '').trim();
+  }
+
   return {
     id: String(clip.id),
     url: String(clip.url || parsed.url),
     title: String(clip.title || ''),
     duration: Number.isFinite(Number(clip.duration)) ? Number(clip.duration) : null,
-    creatorName: String(clip.creator_name || '')
+    creatorName: String(clip.creator_name || ''),
+    gameId,
+    gameName
   };
 }
 
@@ -210,6 +235,7 @@ module.exports = {
   getBroadcasterIdentity,
   getLiveStreamInfo,
   getClipById,
+  getGameById,
   validateClipForChannel,
   createClip
 };

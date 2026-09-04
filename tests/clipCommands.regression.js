@@ -6,6 +6,7 @@ let mockCreateClipCalls = 0;
 let mockLiveInfoCalls = 0;
 let mockGeminiPrompts = [];
 let mockGeminiImpl = async () => 'Certified Gaming Moment';
+let mockValidatedClipGameName = 'Pokémon Emerald';
 const mockConfig = {
   clip: { defaultDuration: 45 },
   cliplast: { defaultDuration: 45 },
@@ -29,7 +30,7 @@ Module._load = function(request, parent, isMain) {
         mockLiveInfoCalls += 1;
         return { live: true, gameName: 'Pokémon Emerald', startedAt: '2026-09-04T12:00:00.000Z' };
       },
-      validateClipForChannel: async () => ({ id: 'set-clip', url: 'https://clips.twitch.tv/SetClip', title: 'Set Clip', duration: 45 })
+      validateClipForChannel: async () => ({ id: 'set-clip', url: 'https://clips.twitch.tv/SetClip', title: 'Set Clip', duration: 45, gameId: '1', gameName: mockValidatedClipGameName })
     };
   }
   if (request === './geminiClient' || request.endsWith('/services/geminiClient')) {
@@ -233,6 +234,43 @@ async function asyncTest(name, fn) {
     assert.strictEqual(result.reason, 'success');
     assert.strictEqual(mockLiveInfoCalls, 1);
     assert.strictEqual(mockCreateClipCalls, 1);
+  });
+
+  await asyncTest('!setlast validates the saved clip category without requiring Qwert to be live', async () => {
+    mockLiveInfoCalls = 0;
+    mockValidatedClipGameName = 'Pokémon Emerald';
+    const manager = createClipCommandManager({
+      channelName: 'generalqwert',
+      sendMessage: async () => {},
+      getNativeCommandResponse: async () => ''
+    });
+    const result = await manager.handleMessage({
+      channel: '#generalqwert',
+      rawMessage: '!setlast https://clips.twitch.tv/SetClip',
+      displayName: 'ModOne',
+      tags: { username: 'modone', 'user-id': '1' },
+      isModOrBroadcaster: true
+    });
+    assert.strictEqual(result.reason, 'success');
+    assert.strictEqual(mockLiveInfoCalls, 0);
+  });
+
+  await asyncTest('!setlast rejects a Qwert clip from a non-approved category', async () => {
+    mockValidatedClipGameName = 'PokéRogue';
+    const manager = createClipCommandManager({
+      channelName: 'generalqwert',
+      sendMessage: async () => {},
+      getNativeCommandResponse: async () => ''
+    });
+    const result = await manager.handleMessage({
+      channel: '#generalqwert',
+      rawMessage: '!setlast https://clips.twitch.tv/SetClip',
+      displayName: 'ModOne',
+      tags: { username: 'modone', 'user-id': '1' },
+      isModOrBroadcaster: true
+    });
+    assert.strictEqual(result.reason, 'error');
+    mockValidatedClipGameName = 'Pokémon Emerald';
   });
 
   await asyncTest('setlast and cliplast share one 60s cooldown across moderators', async () => {

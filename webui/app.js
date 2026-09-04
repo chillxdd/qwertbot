@@ -221,9 +221,13 @@ function renderNativeResponseFields(command) {
   if (command === 'clip' && nativeClipCooldowns?.clipSeconds != null) {
     info.push(`<div class="detail">Cooldown: ${esc(nativeClipCooldowns.clipSeconds)}s global.</div>`);
   }
-  if (command === 'setlast' || command === 'cliplast') {
-    const seconds = nativeClipCooldowns?.[`${command}Seconds`] ?? 60;
-    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with the other !last editor. Official Pokémon categories only.</div>`);
+  if (command === 'setlast') {
+    const seconds = nativeClipCooldowns?.setlastSeconds ?? 60;
+    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !cliplast. Clip must be from an approved official Pokémon category.</div>`);
+  }
+  if (command === 'cliplast') {
+    const seconds = nativeClipCooldowns?.cliplastSeconds ?? 60;
+    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !setlast. Current live category must be an approved official Pokémon title.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
     info.push(`<div class="detail native-command-syntax"><code>!${esc(command)} [title]</code><br><code>!${esc(command)} [5–60s] | [title]</code><br>Leave title blank for automatic naming.</div>`);

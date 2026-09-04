@@ -14,7 +14,7 @@ const DEFAULT_NATIVE_RESPONSES = Object.freeze({
   },
   setlast: {
     success: '',
-    fail: 'Couldn\'t set !last. Make sure Qwert is live in an approved Pokémon category and the URL is a valid Qwert Twitch clip.',
+    fail: 'Couldn\'t set !last. Make sure the URL is a valid Qwert Twitch clip from an approved Pokémon category.',
     cooldown: '@$(user), !setlast is on cooldown. Try again in $(remaining).'
   },
   cliplast: {

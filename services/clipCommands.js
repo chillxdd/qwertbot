@@ -383,8 +383,10 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     }
     lastUpdateBusy = true;
     try {
-      await requireOfficialPokemonLive();
       const clip = await validateClipForChannel(channel, arg);
+      if (!isOfficialPokemonCategory(clip.gameName)) {
+        throw new Error(`Clip category "${clip.gameName || 'Unknown'}" is not an approved official Pokémon title.`);
+      }
       const saved = await saveLastClip(clip, 'setlast', identity);
       lastUpdateCommandUse = Date.now();
       await say(channelArg, await response('setlast', 'success', { user: displayName, clipurl: saved.url, cliptitle: saved.title || '' }));
