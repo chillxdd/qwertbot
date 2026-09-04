@@ -82,10 +82,12 @@ export function initRenderLogsSection({ $, postJson }) {
 
     const queued = Number(gemini.queued || 0);
     const geminiState = queued >= 10 ? 'bad' : queued >= 4 ? 'warn' : 'good';
+    const rpmUsed = Number(gemini.requestsStartedLastMinute || 0);
+    const rpmCap = Number(gemini.hardMaxRequestsPerMinute || 15);
     setDiagnostic(
       'diagGemini',
       `${queued} queued${gemini.processing ? ' · active' : ''}`,
-      `High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.model || 'Gemini'}`,
+      `${rpmUsed}/${rpmCap} RPM · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.model || 'Gemini'}`,
       geminiState
     );
 

@@ -1,7 +1,10 @@
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim() || 'gemini-3.5-flash-lite';
-const DEFAULT_REQUEST_SPACING_MS = 1500;
-const MIN_REQUEST_SPACING_MS = 250;
+const HARD_MAX_REQUESTS_PER_MINUTE = 15;
+const REQUEST_RATE_WINDOW_MS = 60 * 1000;
+const MIN_SAFE_REQUEST_START_SPACING_MS = Math.ceil(REQUEST_RATE_WINDOW_MS / HARD_MAX_REQUESTS_PER_MINUTE);
+const DEFAULT_REQUEST_SPACING_MS = MIN_SAFE_REQUEST_START_SPACING_MS;
+const MIN_REQUEST_SPACING_MS = MIN_SAFE_REQUEST_START_SPACING_MS;
 const MAX_REQUEST_SPACING_MS = 30000;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_BACKGROUND_RETRIES = 1;
@@ -14,7 +17,8 @@ const queues = {
 };
 
 let processing = false;
-let lastRequestFinishedAt = 0;
+let lastRequestStartedAt = 0;
+let requestStartTimes = [];
 let globalBackoffUntil = 0;
 
 function clampNumber(value, min, max, fallback) {
@@ -32,10 +36,31 @@ function getGeminiRequestSpacingMs() {
   );
 }
 
+function pruneRequestStartTimes(now = Date.now()) {
+  const cutoff = now - REQUEST_RATE_WINDOW_MS;
+  requestStartTimes = requestStartTimes.filter((timestamp) => timestamp > cutoff);
+}
+
+function getRateLimitReadyAt(now = Date.now()) {
+  pruneRequestStartTimes(now);
+  const spacingReadyAt = lastRequestStartedAt
+    ? lastRequestStartedAt + getGeminiRequestSpacingMs()
+    : now;
+  const windowReadyAt = requestStartTimes.length >= HARD_MAX_REQUESTS_PER_MINUTE
+    ? requestStartTimes[requestStartTimes.length - HARD_MAX_REQUESTS_PER_MINUTE] + REQUEST_RATE_WINDOW_MS
+    : now;
+  return Math.max(now, spacingReadyAt, windowReadyAt, globalBackoffUntil || 0);
+}
+
 function getGeminiClientStatus() {
+  const now = Date.now();
+  pruneRequestStartTimes(now);
   return {
     model: GEMINI_MODEL,
     requestSpacingMs: getGeminiRequestSpacingMs(),
+    hardMaxRequestsPerMinute: HARD_MAX_REQUESTS_PER_MINUTE,
+    requestsStartedLastMinute: requestStartTimes.length,
+    nextRequestAllowedAt: getRateLimitReadyAt(now),
     globalBackoffUntil: globalBackoffUntil || null,
     queued: queues.high.length + queues.normal.length + queues.low.length,
     queueByPriority: {
@@ -205,26 +230,37 @@ async function processQueue() {
 
   try {
     while (queues.high.length || queues.normal.length || queues.low.length) {
-      const spacingReadyAt = lastRequestFinishedAt ? lastRequestFinishedAt + getGeminiRequestSpacingMs() : 0;
-      const readyAt = Math.max(spacingReadyAt, globalBackoffUntil || 0);
-      rejectJobsThatCannotStartBy(readyAt || Date.now());
+      let readyAt = getRateLimitReadyAt();
+      rejectJobsThatCannotStartBy(readyAt);
       if (!queues.high.length && !queues.normal.length && !queues.low.length) break;
 
-      const waitMs = Math.max(0, readyAt - Date.now());
+      let waitMs = Math.max(0, readyAt - Date.now());
       if (waitMs > 0) await sleep(waitMs);
+
+      // Recalculate after waking so timer jitter, backoff changes, and the
+      // rolling 60-second window can never produce a burst over 15 RPM.
+      readyAt = getRateLimitReadyAt();
+      waitMs = Math.max(0, readyAt - Date.now());
+      if (waitMs > 0) {
+        await sleep(waitMs);
+        continue;
+      }
 
       // Select only after the pacing wait so a newly-arrived tagged question
       // can jump ahead of background learning that has not started yet.
       const job = nextJob();
       if (!job) continue;
 
+      const startedAt = Date.now();
+      pruneRequestStartTimes(startedAt);
+      lastRequestStartedAt = startedAt;
+      requestStartTimes.push(startedAt);
+
       try {
         const data = await performGeminiRequest(job.prompt, job.options);
         job.resolve(data);
       } catch (err) {
         job.reject(err);
-      } finally {
-        lastRequestFinishedAt = Date.now();
       }
     }
   } finally {
@@ -291,6 +327,8 @@ async function requestGeminiTextWithRetry(prompt, options = {}) {
 
 module.exports = {
   GEMINI_MODEL,
+  HARD_MAX_REQUESTS_PER_MINUTE,
+  REQUEST_RATE_WINDOW_MS,
   DEFAULT_REQUEST_SPACING_MS,
   getGeminiRequestSpacingMs,
   getGeminiClientStatus,
