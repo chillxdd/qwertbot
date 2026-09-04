@@ -6,7 +6,8 @@ const {
   normalizeIdentity: normalizeSourceIdentity,
   identityKey: sourceIdentityKey,
   sameIdentity,
-  textMentionsAlias
+  textMentionsAlias,
+  isPersistentLearningEligible
 } = require('./sourceRecords');
 const {
   normalizeConfidence,
@@ -848,7 +849,7 @@ function buildParticipantCounts(chatLogs = []) {
   const participantsByUsername = new Map();
 
   for (const record of normalizeChatRecords(chatLogs)) {
-    if (record.kind === 'bot_context' || record.author.role === 'bot') continue;
+    if (record.kind === 'bot_context' || record.author.role === 'bot' || !isPersistentLearningEligible(record)) continue;
     const identity = normalizeSourceIdentity(record.author);
     const username = normalizeUsername(identity.login || identity.displayName);
     const key = sourceIdentityKey(identity) || (username ? `login:${username}` : '');
@@ -1229,6 +1230,10 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4, optio
   const exactIdentities = [options.requesterIdentity, options.recipientIdentity, ...(options.extraIdentities || [])]
     .filter(Boolean)
     .map((value) => normalizeSourceIdentity(value));
+  const excludedIdentities = (Array.isArray(options.excludeIdentities) ? options.excludeIdentities : [])
+    .filter(Boolean)
+    .map((value) => normalizeSourceIdentity(value));
+  const profileIsExcluded = (profile) => excludedIdentities.some((identity) => sameIdentity(profileIdentity(profile), identity));
 
   const exactClauses = [];
   for (const identity of exactIdentities) {
@@ -1260,6 +1265,7 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4, optio
   }
 
   return [...docsById.values()]
+    .filter((profile) => !profileIsExcluded(profile))
     .map((profile) => ({
       profile,
       exactRank: profileIdentityRank(profile, exactIdentities),

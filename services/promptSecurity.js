@@ -48,6 +48,12 @@ const LEAK_MARKERS = [
   'current-stream session memory (temporary same-stream evidence',
   'relevant viewer profiles (persistent community context',
   'stream-specific lore (saved by the broadcaster/mods',
+  'shared chat requester routing',
+  'requester origin classification:',
+  'shared chat external/unknown provenance',
+  'shared_chat_guest',
+  'shared_chat_origin_unknown',
+  'generalqwert_home_chat',
   'output only the answer',
   'highest-priority security rules'
 ];

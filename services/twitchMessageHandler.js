@@ -1,7 +1,13 @@
 const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
 const { parseLoreDirective, tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
 const { detectPromptInjection } = require('./promptSecurity');
-const { identityFromTwitchTags } = require('./sourceRecords');
+const {
+  identityFromTwitchTags,
+  sharedChatOriginFromTwitchTags,
+  isSharedChatExternalOrUnknown,
+  isPersistentLearningEligible,
+  roleFromTwitchTags
+} = require('./sourceRecords');
 
 const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
@@ -22,8 +28,7 @@ function isPokemonCommunityGameCommand(message) {
 }
 
 function isModOrBroadcaster(tags = {}) {
-  const badges = tags.badges || {};
-  return badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || tags.mod === 1 || badges.moderator === '1';
+  return ['moderator', 'broadcaster'].includes(roleFromTwitchTags(tags));
 }
 
 function extractReplyContext(tags = {}) {
@@ -82,6 +87,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
   function recordCommandBehavior({ channel, username, displayName, tags = {}, rawMessage, streamLive = false, recognized = true }) {
     const command = getCommandName(rawMessage);
+    if (!isPersistentLearningEligible(tags)) return;
     if (!command.startsWith('!') || PROFILE_COMMAND_EXCLUSIONS.has(command) || command.startsWith('!poke')) return;
     void recordViewerCommandUsage(channel, {
       username,
@@ -164,6 +170,8 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const username = String(tags.username || '').toLowerCase().trim();
     const displayName = tags['display-name'] || tags.username || 'viewer';
     const replyContext = extractReplyContext(tags);
+    const sharedChatOrigin = sharedChatOriginFromTwitchTags(tags);
+    const requesterIsSharedChatExternal = isSharedChatExternalOrUnknown({ sharedChat: sharedChatOrigin });
     let sourceRecorded = false;
     const recordViewerSource = () => {
       if (sourceRecorded) return true;
@@ -174,14 +182,19 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
         author: identityFromTwitchTags(tags, displayName),
         twitchMessageId: tags.id || tags['message-id'] || '',
         timestamp: tags['tmi-sent-ts'] || Date.now(),
-        replyTo: replyContext
+        replyTo: replyContext,
+        sharedChat: sharedChatOrigin
       });
       if (recorded) sourceRecorded = true;
       return recorded;
     };
 
     if (username === 'nightbot') {
-      handleNightbotResponse(rawMessage);
+      // A Nightbot response duplicated from a collaborator's Shared Chat room
+      // must never consume a pending command from GeneralQwert's own room.
+      if (isPersistentLearningEligible({ sharedChat: sharedChatOrigin })) {
+        handleNightbotResponse(rawMessage);
+      }
       return;
     }
 
@@ -190,18 +203,20 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     if (isPokemonCommunityGameCommand(rawMessage)) return;
     if (isBotHourlyRecap(username, rawMessage)) return;
 
-    // Twitch user ID is the stable viewer identity. Keep an existing Viewer Profile
-    // synchronized with the mutable login/display name before any Tagged Question or
-    // learning path can use it. The service caches stable identities, so this does not
-    // become a Mongo query on every message once a viewer is synchronized.
-    try {
-      await syncViewerIdentity(channel, {
-        username,
-        displayName,
-        twitchUserId: tags['user-id'] || ''
-      });
-    } catch (err) {
-      console.error(`[Viewer Profiles] Could not synchronize Twitch identity for ${displayName}:`, err?.message || err);
+    // Twitch user ID is the stable viewer identity. Only synchronize Viewer Profiles
+    // for messages originating in Qwert's own room. Shared Chat guest-community
+    // messages remain available to the current recap/session but must not create,
+    // rename, or refresh Qwert-channel persistent profiles.
+    if (isPersistentLearningEligible({ sharedChat: sharedChatOrigin })) {
+      try {
+        await syncViewerIdentity(channel, {
+          username,
+          displayName,
+          twitchUserId: tags['user-id'] || ''
+        });
+      } catch (err) {
+        console.error(`[Viewer Profiles] Could not synchronize Twitch identity for ${displayName}:`, err?.message || err);
+      }
     }
 
     const customCommandManager = typeof getCustomCommandManager === 'function' ? getCustomCommandManager() : null;
@@ -278,7 +293,8 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
           // Reply to the viewer's current message, while separately passing the
           // Twitch reply-parent metadata as conversational context for AskAI.
           replyParentMessageId: tags.id || tags['message-id'] || '',
-          replyContext
+          replyContext,
+          sharedChatOrigin
         });
         if (personalityResult?.matched) {
           // Tagged questions are normally organic viewer chat and remain part of
@@ -307,7 +323,13 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
                   text: rawMessage,
                   author: identityFromTwitchTags(tags, displayName)
                 },
-                metadata: { source: 'tagged_question', askerUserId: String(tags['user-id'] || '') }
+                metadata: {
+                  source: 'tagged_question',
+                  askerUserId: String(tags['user-id'] || ''),
+                  requesterSharedChatGuest: requesterIsSharedChatExternal,
+                  requesterSharedChatExternal: requesterIsSharedChatExternal,
+                  requesterSharedChatOrigin: sharedChatOrigin
+                }
               });
             }
           }
@@ -446,5 +468,6 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 module.exports = {
   createTwitchMessageHandler,
   isPokemonCommunityGameCommand,
-  extractReplyContext
+  extractReplyContext,
+  isModOrBroadcaster
 };

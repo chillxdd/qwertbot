@@ -71,6 +71,15 @@ async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block 
     compactSummary: String(block.compactSummary || block.detailedSummary || '').trim(),
     topics: Array.isArray(block.topics) ? block.topics : [],
     people: Array.isArray(block.people) ? block.people : [],
+    sharedChatGuests: Array.isArray(block.sharedChatGuests) ? block.sharedChatGuests.map((guest) => ({
+      userId: String(guest?.userId || '').trim(),
+      login: String(guest?.login || '').trim(),
+      displayName: String(guest?.displayName || guest?.login || '').trim(),
+      originType: guest?.originType === 'shared_unknown' ? 'shared_unknown' : 'shared_guest',
+      sourceBroadcasterUserId: String(guest?.sourceBroadcasterUserId || '').trim(),
+      sourceBroadcasterLogin: String(guest?.sourceBroadcasterLogin || '').trim(),
+      sourceBroadcasterDisplayName: String(guest?.sourceBroadcasterDisplayName || guest?.sourceBroadcasterLogin || '').trim()
+    })).filter((guest) => guest.userId || guest.login || guest.displayName) : [],
     claims: Array.isArray(block.claims) ? block.claims.map((claim) => ({
       text: String(claim?.text || '').trim(),
       sourceIds: Array.isArray(claim?.sourceIds) ? claim.sourceIds.map((id) => String(id || '').trim()).filter(Boolean) : [],

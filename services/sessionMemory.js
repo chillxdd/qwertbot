@@ -12,7 +12,10 @@ const {
   identityKey,
   textMentionsAlias,
   textMentionsIdentity,
-  collectIdentityRegistry
+  collectIdentityRegistry,
+  isSharedChatExternalOrUnknown,
+  isPersistentLearningEligible,
+  sharedChatOriginFromRecord
 } = require('./sourceRecords');
 const { auditGeneratedAttribution } = require('./attributionAudit');
 const DEFAULT_SESSION_MEMORY_CONFIG = Object.freeze({
@@ -202,6 +205,44 @@ function sanitizeMemoryPeople(rawPeople, sourceChat = [], sourceEvents = [], cha
   return selected;
 }
 
+function collectSharedChatGuestIdentities(chatRecords = []) {
+  const guests = new Map();
+  for (const record of normalizeChatRecords(chatRecords)) {
+    if (!isSharedChatExternalOrUnknown(record)) continue;
+    const author = normalizeIdentity(record.author || {});
+    const origin = sharedChatOriginFromRecord(record);
+    const key = author.userId || author.login || author.displayName.normalize('NFKC').toLocaleLowerCase('en-US');
+    if (!key) continue;
+    if (!guests.has(key)) {
+      guests.set(key, {
+        userId: author.userId,
+        login: author.login,
+        displayName: author.displayName || author.login,
+        originType: origin.type,
+        sourceBroadcasterUserId: origin.sourceBroadcasterUserId,
+        sourceBroadcasterLogin: origin.sourceBroadcasterLogin,
+        sourceBroadcasterDisplayName: origin.sourceBroadcasterDisplayName || origin.sourceBroadcasterLogin
+      });
+    }
+  }
+  return [...guests.values()].slice(0, 100);
+}
+
+function formatSharedChatGuestMemoryProvenance(block = {}) {
+  const guests = Array.isArray(block?.sharedChatGuests) ? block.sharedChatGuests : [];
+  if (!guests.length) return '';
+  const rows = guests.slice(0, 100).map((guest) => {
+    const person = String(guest?.displayName || guest?.login || 'unknown viewer').trim();
+    const login = String(guest?.login || '').trim();
+    const source = String(guest?.sourceBroadcasterDisplayName || guest?.sourceBroadcasterLogin || 'another participating channel').trim();
+    const originLabel = guest?.originType === 'shared_unknown'
+      ? 'Shared Chat origin unknown'
+      : `Shared Chat guest-origin via ${source}`;
+    return `- ${person}${login && login.toLowerCase() !== person.toLowerCase() ? ` (@${login})` : ''} — ${originLabel}`;
+  });
+  return ['SHARED CHAT EXTERNAL/UNKNOWN PROVENANCE (temporary to this stream; not GeneralQwert membership/profile/lore):', ...rows].join('\n');
+}
+
 function isBlockedPromptInjectionChatLine(line) {
   return detectPromptInjection(normalizeChatRecord(line).text).block === true;
 }
@@ -214,6 +255,7 @@ async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], 
     .filter((record) => record.kind !== 'bot_context')
     .filter((record) => !detectPromptInjection(record.text).block);
   const sourceEvents = normalizeEventRecords(twitchEvents);
+  const sharedChatGuests = collectSharedChatGuestIdentities(sourceChat);
   if (!sourceChat.length && !sourceEvents.length) return null;
 
   const contexts = Array.isArray(streamContexts) ? streamContexts : [];
@@ -264,6 +306,9 @@ ${createUntrustedBlock('MEMORY_SOURCE_CHAT', chatText || '(no meaningful chat me
 
 RULES:
 - Current source chat and verified Twitch events are the only evidence for events in this window.
+- Lines marked [SHARED CHAT GUEST] originated in another participating channel's community during Twitch Shared Chat. Lines marked [SHARED CHAT ORIGIN UNKNOWN] were identified as Shared Chat traffic whose source room could not be safely resolved. Both are valid evidence for this current joint-stream conversation only.
+- Never describe a [SHARED CHAT GUEST] or [SHARED CHAT ORIGIN UNKNOWN] speaker as a regular GeneralQwert viewer/community member unless current evidence explicitly establishes that separately.
+- Never turn another channel's community culture, relationships, viewer traits, running jokes, or channel ownership into durable GeneralQwert facts. This entire memory block remains temporary to the current stream.
 - Metadata, public recap, and stream lore may clarify references but are not evidence that something happened now.
 - Preserve names only when the named person's own structured source or a verified event supports the exact attribution.
 - A viewer suggestion does not prove Qwert decided or acted. Another viewer's message does not prove what a named person said, thought, wanted, owned, or did.
@@ -359,6 +404,7 @@ JSON SHAPE:
     compactSummary: compactSummary || detailedSummary,
     topics: normalizeList(parsed?.topics),
     people: memoryPeople,
+    sharedChatGuests,
     claims,
     sourceMessageIds: sourceChat.map((record, index) => chatSourceId(record, index)),
     sourceEventIds: sourceEvents.map((event, index) => eventSourceId(event, index)),
@@ -368,7 +414,9 @@ JSON SHAPE:
 
 function parseViewerChatLine(line) {
   const record = normalizeChatRecord(line);
-  if (!record.text || record.kind === 'bot_context' || record.author.role === 'bot') return null;
+  // Shared Chat guest-community messages are useful temporary stream context,
+  // but they must never create or reinforce Qwert-channel persistent profiles.
+  if (!record.text || record.kind === 'bot_context' || record.author.role === 'bot' || !isPersistentLearningEligible(record)) return null;
   const identity = normalizeIdentity(record.author);
   const username = String(identity.login || identity.displayName || '').replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
   if (!username) return null;
@@ -981,6 +1029,9 @@ function subjectIsGrounded(subject, aliases, fact, evidence = []) {
 async function generateStreamLoreObservations({ chatLogs = [], existingObservations = [] } = {}) {
   const sourceChat = normalizeChatRecords(chatLogs)
     .filter((record) => record.kind !== 'bot_context')
+    // Defensive second gate: only Qwert-origin messages can become permanent
+    // GeneralQwert Stream Lore. Shared Chat guest messages remain recap/session-only.
+    .filter((record) => isPersistentLearningEligible(record))
     .filter((record) => record.text && !record.text.trim().startsWith('!'))
     .filter((record) => !detectPromptInjection(record.text).block);
   const indexedLines = sourceChat.map((record, index) => ({
@@ -1256,8 +1307,9 @@ function formatDetailedMemoryBlock(block = {}) {
   const warning = audited
     ? ''
     : 'CAUTION: This block predates attribution auditing. Use it only for broad topic orientation; do not rely on its named-person, possession, relationship, or pronoun claims without current structured evidence.';
+  const sharedChatProvenance = formatSharedChatGuestMemoryProvenance(block);
   const claims = audited ? formatMemoryClaims(block) : '';
-  return [header, warning, String(block?.detailedSummary || '').trim(), claims].filter(Boolean).join('\n');
+  return [header, warning, sharedChatProvenance, String(block?.detailedSummary || '').trim(), claims].filter(Boolean).join('\n');
 }
 
 function buildSessionMemoryContext({
@@ -1293,7 +1345,11 @@ function buildSessionMemoryContext({
   const compactLines = validBlocks.map((block, index) => {
     const labels = [...(block?.topics || []), ...(block?.people || [])].slice(0, 8).join(', ');
     const auditLabel = block?.attributionAudited === true ? 'audited' : 'legacy-unaudited';
-    return `- Block ${index + 1} [${formatBlockTime(block)}; ${auditLabel}]: ${String(block?.compactSummary || block?.detailedSummary || '').trim()}${labels ? ` | Index: ${labels}` : ''}`;
+    const externalLabels = (Array.isArray(block?.sharedChatGuests) ? block.sharedChatGuests : [])
+      .map((guest) => String(guest?.displayName || guest?.login || '').trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    return `- Block ${index + 1} [${formatBlockTime(block)}; ${auditLabel}]: ${String(block?.compactSummary || block?.detailedSummary || '').trim()}${labels ? ` | Index: ${labels}` : ''}${externalLabels.length ? ` | Shared Chat external/unknown speakers (not GeneralQwert membership): ${externalLabels.join(', ')}` : ''}`;
   });
 
   const selectedDetailed = [];
@@ -1318,6 +1374,7 @@ function buildSessionMemoryContext({
   let text = 'CURRENT-STREAM SESSION MEMORY (temporary; clears when this Twitch stream ends):';
   if (roleLines.length) text += `\n${roleLines.join('\n')}`;
   text += '\n[BOT CONTEXT ONLY] lines may explain what chat was responding to, but they are not independent viewer testimony and must not be attributed to a viewer.';
+  text += '\n[SHARED CHAT GUEST] and [SHARED CHAT ORIGIN UNKNOWN] lines are external/uncertain Shared Chat traffic. They are valid only as temporary current-stream joint-chat context and do not establish regular GeneralQwert membership, a Qwert Viewer Profile, or Qwert-owned Stream Lore.';
   if (detailSections.length) text += `\n\nSELECTED DETAILED MEMORY:\n${detailSections.join('\n\n')}`;
   if (renderedRecentChat.length) text += `\n\nRECENT STRUCTURED CHAT SINCE THE LAST COMPLETED MEMORY BLOCK:\n${renderedRecentChat.join('\n')}`;
   text += `\n\nCOMPACT HISTORY INDEX (whole-stream orientation; lower priority than audited detail and current structured chat):\n${compactLines.join('\n') || '(no completed memory blocks yet)'}`;
@@ -1364,5 +1421,8 @@ module.exports = {
   scoreBlockForQuestion,
   buildEvidenceVerifierPrompt,
   parseEvidenceVerifierResults,
-  verifyEvidenceClaims
+  verifyEvidenceClaims,
+  collectSharedChatGuestIdentities,
+  formatSharedChatGuestMemoryProvenance,
+  parseViewerChatLine
 };

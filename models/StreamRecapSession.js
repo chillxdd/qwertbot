@@ -26,6 +26,7 @@ const recapEntrySchema = new mongoose.Schema(
 const recapMessageSchema = new mongoose.Schema({
   id: { type: Number, required: true },
   twitchMessageId: { type: String, default: '' },
+  sourceMessageId: { type: String, default: '' },
   timestamp: { type: Number, required: true },
   // Kept for backwards compatibility with persisted pre-structured sessions.
   text: { type: String, required: true },
@@ -33,6 +34,7 @@ const recapMessageSchema = new mongoose.Schema({
   kind: { type: String, enum: ['viewer', 'bot_context', 'moderator_announcement'], default: 'viewer' },
   author: { type: identitySchema, default: null },
   replyTo: { type: replyReferenceSchema, default: null },
+  sharedChat: { type: mongoose.Schema.Types.Mixed, default: {} },
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { _id: false });
 
@@ -59,6 +61,16 @@ const recapEventSchema = new mongoose.Schema({
   metadata: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { _id: false });
 
+const sharedChatGuestSchema = new mongoose.Schema({
+  userId: { type: String, default: '' },
+  login: { type: String, default: '' },
+  displayName: { type: String, default: '' },
+  originType: { type: String, enum: ['shared_guest', 'shared_unknown'], default: 'shared_guest' },
+  sourceBroadcasterUserId: { type: String, default: '' },
+  sourceBroadcasterLogin: { type: String, default: '' },
+  sourceBroadcasterDisplayName: { type: String, default: '' }
+}, { _id: false });
+
 const sessionMemoryClaimSchema = new mongoose.Schema({
   text: { type: String, required: true, maxlength: 700 },
   sourceIds: { type: [String], default: [] },
@@ -73,6 +85,7 @@ const sessionMemoryBlockSchema = new mongoose.Schema({
   compactSummary: { type: String, required: true, maxlength: 550 },
   topics: { type: [String], default: [] },
   people: { type: [String], default: [] },
+  sharedChatGuests: { type: [sharedChatGuestSchema], default: [] },
   claims: { type: [sessionMemoryClaimSchema], default: [] },
   sourceMessageIds: { type: [String], default: [] },
   sourceEventIds: { type: [String], default: [] },

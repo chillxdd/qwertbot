@@ -10,7 +10,8 @@ const {
   identityFromTwitchTags,
   normalizeIdentity,
   normalizeChatRecords,
-  renderChatRecord
+  renderChatRecord,
+  roleFromTwitchTags
 } = require('./sourceRecords');
 
 const MAX_RECENT_CONTEXT_MESSAGES = 80;
@@ -368,8 +369,7 @@ async function tryHandleLoreDirective({ channel, rawMessage, displayName, tags =
   const parsedDirective = parseLoreDirective(rawMessage, botUsername);
   if (!parsedDirective.matched) return { matched: false };
 
-  const badges = tags.badges || {};
-  const trusted = badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || tags.mod === 1 || badges.moderator === '1';
+  const trusted = ['moderator', 'broadcaster'].includes(roleFromTwitchTags(tags));
   if (!trusted) return { matched: false };
 
   const authorIdentity = identityFromTwitchTags(tags, displayName);

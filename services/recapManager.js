@@ -16,6 +16,10 @@ const { getStreamLifecycleState, saveStreamLifecycleState } = require('./streamL
 const {
   identityFromTwitchTags,
   normalizeIdentity,
+  normalizeSharedChatOrigin,
+  sharedChatOriginFromTwitchTags,
+  isPersistentLearningEligible,
+  canonicalChatMessageId,
   normalizeChatRecord,
   normalizeChatRecords,
   renderChatRecord,
@@ -45,7 +49,7 @@ function toStoredChatRecord(value, defaults = {}) {
     ...record,
     body: record.text,
     // Preserve the legacy rendered field for existing Mongo documents/UI code.
-    text: renderChatRecord(record, { includeBotMarker: false })
+    text: renderChatRecord(record, { includeBotMarker: false, includeOriginMarker: false })
   };
 }
 
@@ -788,15 +792,22 @@ function createRecapManager({
     tags = {},
     author = null,
     twitchMessageId = '',
+    sourceMessageId = '',
     timestamp = 0,
     replyTo = null,
+    sharedChat = null,
     metadata = {}
   } = {}) {
     if (!streamLive || recapPaused) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
-    if (messageId && recapMessages.some((item) => String(item?.twitchMessageId || '') === messageId)) return false;
+    const origin = normalizeSharedChatOrigin(
+      sharedChat || metadata?.sharedChat || sharedChatOriginFromTwitchTags(tags)
+    );
+    const canonicalSourceId = String(sourceMessageId || origin.sourceMessageId || '').trim();
+    const dedupeId = canonicalSourceId || messageId;
+    if (dedupeId && recapMessages.some((item, index) => canonicalChatMessageId(item, index) === dedupeId)) return false;
 
     messageSequence++;
     const identity = normalizeIdentity(author || identityFromTwitchTags(tags, displayName), {
@@ -808,11 +819,13 @@ function createRecapManager({
     recapMessages.push(toStoredChatRecord({
       id: messageSequence,
       twitchMessageId: messageId,
+      sourceMessageId: canonicalSourceId,
       timestamp: sourceTimestamp(timestamp || tags?.['tmi-sent-ts']),
       kind: 'viewer',
       author: identity,
       body,
       replyTo: replyReferenceFromInput(replyTo, tags),
+      sharedChat: origin,
       metadata
     }));
     markActiveStateDirty();
@@ -857,28 +870,54 @@ function createRecapManager({
     tags = {},
     author = null,
     twitchMessageId = '',
-    timestamp = 0
+    sourceMessageId = '',
+    timestamp = 0,
+    sharedChat = null,
+    metadata = {}
   } = {}) {
     if (!streamLive || recapPaused) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
-    if (messageId && recapMessages.some((item) => String(item?.twitchMessageId || '') === messageId)) return false;
+    const origin = normalizeSharedChatOrigin(
+      sharedChat || metadata?.sharedChat || sharedChatOriginFromTwitchTags(tags)
+    );
+    const canonicalSourceId = String(sourceMessageId || origin.sourceMessageId || '').trim();
+    const dedupeId = canonicalSourceId || messageId;
+    if (dedupeId && recapMessages.some((item, index) => canonicalChatMessageId(item, index) === dedupeId)) return false;
 
     const moderator = String(displayName || 'moderator').trim() || 'moderator';
+    const derivedAuthor = normalizeIdentity(author || identityFromTwitchTags(tags, moderator), {
+      displayName: moderator,
+      role: origin.persistentLearningEligible ? 'moderator' : 'viewer'
+    });
+    if (
+      origin.persistentLearningEligible &&
+      !['moderator', 'broadcaster'].includes(derivedAuthor.role)
+    ) {
+      // A local Twitch announcement callback is itself trusted evidence that
+      // the sender had local announcement permission. Do not apply that
+      // inference to Shared Chat guest/unknown copies.
+      derivedAuthor.role = 'moderator';
+    }
     messageSequence++;
     recapMessages.push(toStoredChatRecord({
       id: messageSequence,
       twitchMessageId: messageId,
+      sourceMessageId: canonicalSourceId,
       timestamp: sourceTimestamp(timestamp || tags?.['tmi-sent-ts']),
       kind: 'moderator_announcement',
-      author: normalizeIdentity(author || identityFromTwitchTags(tags, moderator), { displayName: moderator, role: 'moderator' }),
+      author: derivedAuthor,
       body,
-      metadata: { color: String(color || '').trim() }
+      sharedChat: origin,
+      metadata: { ...metadata, color: String(color || '').trim() }
     }));
 
     markActiveStateDirty();
-    console.log(`[Recap] Moderator announcement recorded from ${moderator}: ${body}`);
+    const announcementKind = origin.type === 'shared_guest'
+      ? 'Shared Chat guest announcement'
+      : (origin.type === 'shared_unknown' ? 'Shared Chat unknown-origin announcement' : 'Moderator announcement');
+    console.log(`[Recap] ${announcementKind} recorded from ${moderator}: ${body}`);
     return true;
   }
 
@@ -924,10 +963,12 @@ function createRecapManager({
     const snapshotMaxContextId = contextSnapshot.length ? contextSnapshot[contextSnapshot.length - 1].id : null;
     const snapshotMaxEventId = eventSnapshot.length ? eventSnapshot[eventSnapshot.length - 1].id : null;
     const chatRecords = normalizeChatRecords(messageSnapshot);
-    const learningChatRecords = chatRecords.filter((item) => item.kind !== 'bot_context');
+    const sessionMemoryChatRecords = chatRecords.filter((item) => item.kind !== 'bot_context');
+    const permanentLearningChatRecords = sessionMemoryChatRecords.filter((item) => isPersistentLearningEligible(item));
+    const sharedChatExternalCount = sessionMemoryChatRecords.length - permanentLearningChatRecords.length;
 
     console.log(`[Recap] Automatic recap triggered by ${reason}.`);
-    console.log(`[Recap] Window contains ${chatRecords.length} chat messages and ${eventSnapshot.length} verified Twitch event(s).`);
+    console.log(`[Recap] Window contains ${chatRecords.length} chat messages (${sharedChatExternalCount} Shared Chat external/unknown-origin) and ${eventSnapshot.length} verified Twitch event(s).`);
 
     try {
       let twitchMessage;
@@ -1023,10 +1064,14 @@ function createRecapManager({
           ].filter((value) => value > 0);
           const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
           // Bot answers can help the public recap understand surrounding viewer conversation,
-          // but they must not become self-learning evidence for viewer profiles, stream lore,
-          // or session memory. Preserve the pre-existing learning behavior by using viewer
-          // messages only for those downstream learning paths.
-          const memoryChatRecords = sanitizeChatForGemini(learningChatRecords).records;
+          // but they must not become self-learning evidence. Shared Chat guest messages remain
+          // useful TEMPORARY same-stream context, while permanent Qwert viewer profiles and
+          // Stream Lore only learn from messages originating in Qwert's own room.
+          const memoryChatRecords = sanitizeChatForGemini(sessionMemoryChatRecords).records;
+          const permanentLearningRecords = sanitizeChatForGemini(permanentLearningChatRecords).records;
+          if (sharedChatExternalCount > 0) {
+            console.log(`[Shared Chat] Kept ${sharedChatExternalCount} Shared Chat external/unknown-origin message(s) in recap/session context and excluded them from permanent Viewer Profile and Stream Lore learning.`);
+          }
 
           if (sessionMemoryConfig.enabled) {
             try {
@@ -1056,12 +1101,12 @@ function createRecapManager({
 
           if (viewerProfileSettings.automaticLearningEnabled) {
             try {
-              const existingProfiles = await getViewerLearningContext(channelName, memoryChatRecords);
-              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: memoryChatRecords, existingProfiles });
+              const existingProfiles = await getViewerLearningContext(channelName, permanentLearningRecords);
+              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: permanentLearningRecords, existingProfiles });
               if (viewerUpdates.length) {
                 const profileResult = await applyViewerProfileUpdates({
                   channelName,
-                  chatLogs: memoryChatRecords,
+                  chatLogs: permanentLearningRecords,
                   updates: viewerUpdates
                 });
                 console.log(`[Viewer Profiles] Dedicated hourly learning processed ${viewerUpdates.length} viewer update(s): ${profileResult.created} new pending, ${profileResult.reinforced} reinforced, ${profileResult.refined} pending auto-refined, ${profileResult.revisionsProposed} approved revision proposal(s), ${profileResult.contradictions} contradiction update(s), ${profileResult.skipped} skipped.`);
@@ -1075,7 +1120,7 @@ function createRecapManager({
 
           try {
             const loreObservations = await generateStreamLoreObservations({
-              chatLogs: memoryChatRecords,
+              chatLogs: permanentLearningRecords,
               existingObservations: streamLoreRecord?.learnedObservations || []
             });
             if (loreObservations.length) {

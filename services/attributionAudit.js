@@ -169,6 +169,9 @@ AUDIT SCOPE:
 - Audit ONLY identity/attribution correctness: who said, did, owned, created, liked, watched, experienced, decided, requested, or was related to whom.
 - Natural paraphrasing is allowed.
 - Generic group-level statements that do not assign a fact to a particular person may be supported when the source broadly supports them.
+- Source lines marked [SHARED CHAT GUEST ...] originated in another participating broadcaster's channel. Lines marked [SHARED CHAT ORIGIN UNKNOWN] were identified as Shared Chat traffic whose source room could not be safely resolved. They may support current joint-stream conversation facts, but they do NOT establish that the speaker is a regular GeneralQwert viewer/community member, a Qwert moderator/broadcaster, or the owner of GeneralQwert channel lore.
+- [SHARED CHAT GUEST ANNOUNCEMENT ...] and [SHARED CHAT ORIGIN UNKNOWN ANNOUNCEMENT ...] are source-channel/uncertain announcements, not official GeneralQwert moderator announcements. Only an unprefixed [MODERATOR ANNOUNCEMENT ...] line is an intentional GeneralQwert-room announcement.
+- Do not transfer another participating channel's community identity, relationships, running jokes, or ownership to GeneralQwert merely because the message appeared in Shared Chat.
 - Do not reject harmless style merely because it is sarcastic.
 ${modeRules}
 

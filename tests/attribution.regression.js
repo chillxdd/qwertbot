@@ -538,6 +538,404 @@ function freshRequire(relativePath, stubs = {}) {
     assert.deepEqual(requestLabels, ['hourly-recap-primary']);
   });
 
+
+  await test('Shared Chat provenance uses source room and canonical source message IDs', () => {
+    const ownRoomTags = {
+      'room-id': '100',
+      'source-room-id': '100',
+      'source-id': 'original-1',
+      id: 'destination-copy-1',
+      badges: { moderator: '1' }
+    };
+    const ownOrigin = source.sharedChatOriginFromTwitchTags(ownRoomTags);
+    assert.equal(ownOrigin.type, 'shared_local');
+    assert.equal(ownOrigin.persistentLearningEligible, true);
+    assert.equal(source.roleFromTwitchTags(ownRoomTags), 'moderator');
+    assert.equal(source.canonicalChatMessageId({
+      twitchMessageId: ownRoomTags.id,
+      body: 'hello',
+      author: { login: 'alice', displayName: 'Alice' },
+      sharedChat: ownOrigin
+    }), 'original-1');
+
+    const guestTags = {
+      'room-id': '100',
+      'source-room-id': '200',
+      'source-id': 'original-2',
+      id: 'destination-copy-2',
+      badges: {},
+      'source-badges': 'broadcaster/1,subscriber/12',
+      mod: '1',
+      subscriber: '1'
+    };
+    const guestOrigin = source.sharedChatOriginFromTwitchTags(guestTags);
+    assert.equal(guestOrigin.type, 'shared_guest');
+    assert.equal(guestOrigin.persistentLearningEligible, false);
+    assert.equal(guestOrigin.sourceRole, 'broadcaster');
+    assert.equal(source.roleFromTwitchTags(guestTags), 'viewer');
+    assert.equal(source.canonicalChatMessageId({
+      twitchMessageId: guestTags.id,
+      body: 'hello',
+      author: { login: 'guest', displayName: 'Guest' },
+      sharedChat: guestOrigin
+    }), 'original-2');
+  });
+
+  await test('incomplete Shared Chat markers fail closed for persistent learning', () => {
+    const unknown = source.sharedChatOriginFromTwitchTags({
+      'room-id': '100',
+      'source-only': '0'
+    });
+    assert.equal(unknown.type, 'shared_unknown');
+    assert.equal(unknown.persistentLearningEligible, false);
+
+    const unknownNotice = source.sharedChatOriginFromTwitchTags({
+      'room-id': '100',
+      'source-msg-id': 'subgift'
+    });
+    assert.equal(unknownNotice.type, 'shared_unknown');
+    assert.equal(unknownNotice.persistentLearningEligible, false);
+
+    const falseBooleanMarker = source.sharedChatOriginFromTwitchTags({
+      'room-id': '100',
+      sourceOnly: false
+    });
+    assert.equal(falseBooleanMarker.type, 'shared_unknown');
+    assert.equal(falseBooleanMarker.persistentLearningEligible, false);
+
+    const camelCaseGuest = source.sharedChatOriginFromRecord({
+      sharedChat: {},
+      tags: { roomId: '100', sourceRoomId: '200', sourceId: 'camel-source-1' }
+    });
+    assert.equal(camelCaseGuest.type, 'shared_guest');
+    assert.equal(camelCaseGuest.sourceMessageId, 'camel-source-1');
+    assert.equal(camelCaseGuest.persistentLearningEligible, false);
+
+    const ordinary = source.sharedChatOriginFromTwitchTags({
+      'room-id': '100',
+      badges: {},
+      mod: '0'
+    });
+    assert.equal(ordinary.type, 'local');
+    assert.equal(ordinary.persistentLearningEligible, true);
+  });
+
+  await test('Shared Chat source badges never grant GeneralQwert command authority', () => {
+    const custom = freshRequire('services/customCommands.js', {
+      '../models/CustomCommand': {},
+      '../models/CustomCommandSettings': {},
+      './twitchFollowers': { getFollowInfo: async () => null, formatFollowAge: () => '', formatFollowDate: () => '' },
+      './twitchChannels': { getGameInfo: async () => null }
+    });
+
+    const externalSourceStaff = {
+      'room-id': '100',
+      'source-room-id': '200',
+      'source-id': 'source-staff',
+      badges: {},
+      'source-badges': 'broadcaster/1,vip/1,subscriber/12',
+      mod: '1',
+      subscriber: '1'
+    };
+    assert.equal(source.roleFromTwitchTags(externalSourceStaff), 'viewer');
+    assert.equal(custom.getViewerUserLevel(externalSourceStaff), 'everyone');
+
+    const alsoQwertMod = {
+      ...externalSourceStaff,
+      badges: { moderator: '1' }
+    };
+    assert.equal(source.roleFromTwitchTags(alsoQwertMod), 'moderator');
+    assert.equal(custom.getViewerUserLevel(alsoQwertMod), 'moderator');
+
+    const alsoQwertSubscriber = {
+      ...externalSourceStaff,
+      badges: { subscriber: '6' },
+      mod: '0'
+    };
+    assert.equal(custom.getViewerUserLevel(alsoQwertSubscriber), 'subscriber');
+  });
+
+  await test('Shared Chat announcements never become GeneralQwert moderator announcements', () => {
+    const guestAnnouncement = source.normalizeChatRecord({
+      kind: 'moderator_announcement',
+      author: { userId: 'guest-mod', login: 'guestmod', displayName: 'GuestMod', role: 'moderator' },
+      body: 'Guest room announcement',
+      sharedChat: {
+        active: true,
+        type: 'shared_guest',
+        destinationRoomId: '100',
+        sourceRoomId: '200',
+        sourceMessageId: 'announce-source-1'
+      }
+    });
+    assert.equal(guestAnnouncement.author.role, 'viewer');
+    const marked = source.renderChatRecord(guestAnnouncement);
+    assert.match(marked, /^\[SHARED CHAT GUEST ANNOUNCEMENT/);
+    assert.doesNotMatch(marked, /^\[MODERATOR ANNOUNCEMENT/);
+    const legacySafe = source.renderChatRecord(guestAnnouncement, { includeOriginMarker: false });
+    assert.equal(legacySafe, 'GuestMod: Guest room announcement');
+    assert.doesNotMatch(legacySafe, /MODERATOR ANNOUNCEMENT/);
+
+    const reparsed = source.normalizeChatRecord(marked);
+    assert.equal(reparsed.sharedChat.type, 'shared_guest');
+    assert.equal(reparsed.author.role, 'viewer');
+  });
+
+  await test('persistent learning filters keep Qwert-origin chat and drop guest or unknown origins', () => {
+    const records = [
+      { body: 'ordinary local', author: { userId: 'l1', login: 'local', displayName: 'Local' } },
+      {
+        body: 'shared local',
+        author: { userId: 'l2', login: 'local2', displayName: 'Local2' },
+        sharedChat: { active: true, type: 'shared_local', destinationRoomId: '100', sourceRoomId: '100', sourceMessageId: 's1' }
+      },
+      {
+        body: 'guest line',
+        author: { userId: 'g1', login: 'guest', displayName: 'Guest' },
+        sharedChat: { active: true, type: 'shared_guest', destinationRoomId: '100', sourceRoomId: '200', sourceMessageId: 's2' }
+      },
+      {
+        body: 'unknown line',
+        author: { userId: 'u1', login: 'unknown', displayName: 'Unknown' },
+        sharedChat: { active: true, type: 'shared_unknown', destinationRoomId: '100', sourceMessageId: 's3' }
+      }
+    ];
+    const filtered = source.filterPersistentLearningChatRecords(records);
+    assert.deepEqual(filtered.map((item) => source.normalizeChatRecord(item).text), ['ordinary local', 'shared local']);
+  });
+
+  await test('viewer profile learning excludes Shared Chat guest and unknown-origin speakers', () => {
+    const profiles = freshRequire('services/viewerProfiles.js', {
+      '../models/ViewerProfile': {},
+      '../models/ViewerProfileSettings': {}
+    });
+    const records = [
+      { body: 'local one', author: { userId: 'l1', login: 'local', displayName: 'Local' } },
+      {
+        body: 'guest one',
+        author: { userId: 'g1', login: 'guest', displayName: 'Guest' },
+        sharedChat: { active: true, type: 'shared_guest', destinationRoomId: '100', sourceRoomId: '200', sourceMessageId: 'g1' }
+      },
+      {
+        body: 'unknown one',
+        author: { userId: 'u1', login: 'unknown', displayName: 'Unknown' },
+        sharedChat: { active: true, type: 'shared_unknown', destinationRoomId: '100', sourceMessageId: 'u1' }
+      }
+    ];
+    const index = profiles.buildParticipantCounts(records);
+    assert.equal(index.participants.length, 1);
+    assert.equal(index.participants[0].username, 'local');
+    assert.equal(memory.parseViewerChatLine(records[1]), null);
+    assert.equal(memory.parseViewerChatLine(records[2]), null);
+    assert.equal(memory.parseViewerChatLine(records[0]).username, 'local');
+  });
+
+  await test('stream-lore learning does not call Gemini for guest-only Shared Chat evidence', async () => {
+    let calls = 0;
+    const sharedMemory = freshRequire('services/sessionMemory.js', {
+      './geminiClient': {
+        requestGeminiDataWithRetry: async () => {
+          calls += 1;
+          return { text: '{"streamLoreObservations":[]}' };
+        }
+      }
+    });
+    const result = await sharedMemory.generateStreamLoreObservations({
+      chatLogs: [
+        {
+          body: 'guest joke one',
+          author: { userId: 'g1', login: 'guest', displayName: 'Guest' },
+          sharedChat: { active: true, type: 'shared_guest', destinationRoomId: '100', sourceRoomId: '200', sourceMessageId: 'g1' }
+        },
+        {
+          body: 'guest joke two',
+          author: { userId: 'g2', login: 'guest2', displayName: 'Guest2' },
+          sharedChat: { active: true, type: 'shared_unknown', destinationRoomId: '100', sourceMessageId: 'g2' }
+        }
+      ],
+      existingObservations: []
+    });
+    assert.deepEqual(result, []);
+    assert.equal(calls, 0);
+  });
+
+  await test('Shared Chat guest lines remain available in temporary session memory context', () => {
+    const context = memory.buildSessionMemoryContext({
+      blocks: [],
+      question: 'what happened?',
+      recentChatLogs: [{
+        body: 'what is Chair?',
+        author: { userId: 'g1', login: 'guest', displayName: 'Guest' },
+        sharedChat: { active: true, type: 'shared_guest', destinationRoomId: '100', sourceRoomId: '200', sourceMessageId: 'g1' }
+      }],
+      config: { enabled: true, recentChatMessages: 20 },
+      streamLive: true
+    });
+    assert.match(context.text, /\[SHARED CHAT GUEST\]/);
+    assert.match(context.text, /Guest: what is Chair\?/);
+    assert.match(context.text, /temporary current-stream joint-chat context/i);
+  });
+
+  await test('public recap and Tagged Question scrubbers remove internal Shared Chat labels and raw IDs', () => {
+    const recap = freshRequire('services/recapGenerator.js', {
+      './recapPromptConfig': {
+        getRecapPromptConfig: async () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' }),
+        getDefaultRecapPromptConfig: () => ({ source: 'test', primaryInstructions: '', expansionInstructions: '' })
+      }
+    });
+    const bot = freshRequire('services/botPersonality.js', {
+      '../models/BotPersonalityConfig': {},
+      './viewerProfiles': { getRelevantViewerProfiles: async () => [], formatViewerProfilesForPrompt: () => '' },
+      './streamLore': { buildManualLoreContext: () => '', buildLearnedLoreText: () => '' }
+    });
+    const leaked = [
+      'TRUSTED SHARED CHAT REQUESTER ROUTING:',
+      'Requester origin classification: SHARED_CHAT_GUEST',
+      '[Moriginal-id] [SHARED CHAT GUEST - OtherRoom] Guest: hello source-room-id=200 source-id=original-id sourceRoomId=200 sourceMessageId=original-id destinationRoomId=100 userId=guest-id.',
+      'A remembered claim [sources: Moriginal-id, Eevent-1]. Shared Chat got chaotic.'
+    ].join('\n');
+    const recapClean = recap.stripInternalSharedChatProvenance(leaked);
+    const botClean = bot.stripSharedChatInternalLabels(leaked);
+    for (const cleaned of [recapClean, botClean]) {
+      assert.doesNotMatch(cleaned, /\[SHARED CHAT GUEST/i);
+      assert.doesNotMatch(cleaned, /\[Moriginal-id\]|\[sources:/i);
+      assert.doesNotMatch(cleaned, /source-room-id|source-id|sourceRoomId|sourceMessageId|destinationRoomId|userId/i);
+      assert.doesNotMatch(cleaned, /requester origin classification|shared chat requester routing|SHARED_CHAT_GUEST/i);
+      assert.match(cleaned, /Shared Chat got chaotic/);
+    }
+  });
+
+  await test('Shared Chat internal routing markers are blocked as model-output leaks', () => {
+    const security = require('../services/promptSecurity');
+    for (const text of [
+      'SHARED CHAT REQUESTER ROUTING: internal data',
+      'Requester origin classification: SHARED_CHAT_GUEST',
+      'SHARED CHAT EXTERNAL/UNKNOWN PROVENANCE (temporary only)',
+      'GENERALQWERT_HOME_CHAT'
+    ]) {
+      assert.equal(security.inspectModelOutputForLeak(text).blocked, true);
+    }
+    assert.equal(security.inspectModelOutputForLeak('Shared Chat got chaotic tonight.').blocked, false);
+  });
+
+  await test('Shared Chat requester context is conservative for unresolved source rooms', () => {
+    const bot = freshRequire('services/botPersonality.js', {
+      '../models/BotPersonalityConfig': {},
+      './viewerProfiles': { getRelevantViewerProfiles: async () => [], formatViewerProfilesForPrompt: () => '' },
+      './streamLore': { buildManualLoreContext: () => '', buildLearnedLoreText: () => '' }
+    });
+    const context = bot.formatSharedChatRequesterContext({ active: true, type: 'shared_unknown' });
+    assert.match(context, /SHARED_CHAT_ORIGIN_UNKNOWN/);
+    assert.match(context, /external for persistent/i);
+    assert.match(context, /current-conversation context/i);
+  });
+
+  await test('native moderator checks ignore source-room staff badges but honor destination-room badges', () => {
+    const handler = freshRequire('services/twitchMessageHandler.js', {
+      './viewerProfiles': {
+        setViewerProfileOptOut: async () => ({}),
+        syncViewerIdentity: async () => ({}),
+        recordViewerCommandUsage: async () => ({})
+      },
+      './loreDirectives': {
+        parseLoreDirective: () => ({ matched: false }),
+        tryHandleLoreDirective: async () => ({ matched: false }),
+        consumeOwnResponse: () => false
+      },
+      './promptSecurity': { detectPromptInjection: () => ({ block: false }) }
+    });
+    const sourceModOnly = {
+      'room-id': '100',
+      'source-room-id': '200',
+      'source-id': 's1',
+      badges: {},
+      'source-badges': 'moderator/1',
+      mod: '1'
+    };
+    assert.equal(handler.isModOrBroadcaster(sourceModOnly), false);
+    assert.equal(handler.isModOrBroadcaster({ ...sourceModOnly, badges: { moderator: '1' } }), true);
+  });
+
+
+  await test('message ingestion keeps guest chat in recap context without syncing persistent profiles', async () => {
+    let syncCalls = 0;
+    const recorded = [];
+    const handlerModule = freshRequire('services/twitchMessageHandler.js', {
+      './viewerProfiles': {
+        setViewerProfileOptOut: async () => ({}),
+        syncViewerIdentity: async () => { syncCalls += 1; },
+        recordViewerCommandUsage: async () => ({})
+      },
+      './loreDirectives': {
+        parseLoreDirective: () => ({ matched: false }),
+        tryHandleLoreDirective: async () => ({ matched: false }),
+        consumeOwnResponse: () => false
+      },
+      './promptSecurity': { detectPromptInjection: () => ({ block: false }) }
+    });
+    const recapManager = {
+      getStatus: () => ({ streamLive: true }),
+      recordChatMessage: (value) => { recorded.push(value); return true; }
+    };
+    const handler = handlerModule.createTwitchMessageHandler({
+      getRecapManager: () => recapManager,
+      getCustomCommandManager: () => null,
+      getChatTimerManager: () => ({ recordViewerActivity: () => {} }),
+      getBotPersonalityManager: () => null,
+      getPersistentPinManager: () => null,
+      getClipCommandManager: () => null,
+      sendMessage: async () => ({}),
+      botUsername: 'sqwertarmybot',
+      summaryPrefix: 'Hourly Recap: '
+    });
+
+    await handler.handleMessage('#generalqwert', {
+      username: 'guestviewer',
+      'display-name': 'GuestViewer',
+      'user-id': 'g1',
+      'room-id': '100',
+      'source-room-id': '200',
+      'source-id': 'guest-source-1',
+      id: 'guest-copy-1',
+      badges: {},
+      'source-badges': 'subscriber/12'
+    }, 'what is Chair?');
+
+    assert.equal(syncCalls, 0);
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].sharedChat.type, 'shared_guest');
+    assert.equal(recorded[0].sharedChat.sourceMessageId, 'guest-source-1');
+
+    await handler.handleMessage('#generalqwert', {
+      username: 'unknownorigin',
+      'display-name': 'UnknownOrigin',
+      'user-id': 'u1',
+      'room-id': '100',
+      'source-id': 'unknown-source-1',
+      id: 'unknown-copy-1',
+      badges: {}
+    }, 'source room metadata was incomplete');
+
+    assert.equal(syncCalls, 0);
+    assert.equal(recorded.length, 2);
+    assert.equal(recorded[1].sharedChat.type, 'shared_unknown');
+
+    await handler.handleMessage('#generalqwert', {
+      username: 'homeviewer',
+      'display-name': 'HomeViewer',
+      'user-id': 'h1',
+      'room-id': '100',
+      'source-room-id': '100',
+      'source-id': 'home-source-1',
+      id: 'home-copy-1',
+      badges: {}
+    }, 'Chair should choose.');
+
+    assert.equal(syncCalls, 1);
+    assert.equal(recorded.length, 3);
+    assert.equal(recorded[2].sharedChat.type, 'shared_local');
+  });
+
   if (failed) {
     console.error(`\n${failed} test(s) failed; ${passed} passed.`);
     process.exitCode = 1;
