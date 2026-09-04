@@ -358,7 +358,8 @@ async function sendGeminiPrompt(prompt, { label = 'recap', maxRetries = 1 } = {}
   return requestGeminiDataWithRetry(prompt, {
     label,
     priority: 'normal',
-    timeoutMs: 20000,
+    timeoutMs: 60000,
+    retryOnTimeout: false,
     maxRetries,
     onRetry: ({ attempt, maxRetries: retryLimit, delayMs, error }) => {
       console.warn(`[Recap Gemini] ${label} temporary failure; retry ${attempt}/${retryLimit} in ${(delayMs / 1000).toFixed(1)}s: ${error?.message || error}`);

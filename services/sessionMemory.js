@@ -59,7 +59,8 @@ async function callBackgroundGemini(prompt, label) {
   return requestGeminiTextWithRetry(prompt, {
     label,
     priority: 'low',
-    timeoutMs: 20000,
+    timeoutMs: 60000,
+    retryOnTimeout: false,
     maxRetries: 1,
     onRetry: ({ attempt, maxRetries, delayMs, error }) => {
       console.warn(`[Gemini Background] ${label} temporary failure; retry ${attempt}/${maxRetries} in ${(delayMs / 1000).toFixed(1)}s: ${error?.message || error}`);
@@ -672,6 +673,9 @@ async function verifyEvidenceClaims(candidates = [], { mode = 'viewer', label = 
       lastError = new Error(parsed.error);
     } catch (err) {
       lastError = err;
+      // Transport/API failures are not schema failures. Do not duplicate a request
+      // merely because the completed response never reached this process.
+      break;
     }
   }
   console.error(`[Learning Attribution] ${label} failed; rejecting this batch rather than storing unaudited ownership:`, lastError?.message || lastError);

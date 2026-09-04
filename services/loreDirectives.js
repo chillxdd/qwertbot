@@ -303,7 +303,8 @@ ${createUntrustedBlock('RECENT_CHAT', recentChat)}`;
   const raw = await requestGeminiTextWithRetry(prompt, {
     label: 'moderator-lore-directive',
     priority: 'normal',
-    timeoutMs: 20000,
+    timeoutMs: 45000,
+    retryOnTimeout: false,
     maxRetries: 1,
     onRetry: ({ attempt, maxRetries, delayMs, error }) => {
       console.warn(`[Lore Directive] Gemini temporary failure; retry ${attempt}/${maxRetries} in ${(delayMs / 1000).toFixed(1)}s: ${error?.message || error}`);

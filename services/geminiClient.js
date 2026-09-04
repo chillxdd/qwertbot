@@ -124,6 +124,7 @@ function parseRetryAfterMs(response, data) {
 }
 
 function isRetryableGeminiError(err) {
+  if (err?.timedOut === true && err?.retryable === false) return false;
   if (err?.retryable === true) return true;
   const status = Number(err?.status || 0);
   if (RETRYABLE_STATUSES.has(status)) return true;
@@ -165,12 +166,14 @@ function noteTemporaryFailure(err) {
   if (delayMs > 0) globalBackoffUntil = Math.max(globalBackoffUntil, Date.now() + delayMs);
 }
 
-async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true } = {}) {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+  const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
+  const startedAt = Date.now();
+  const timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
   let response;
   try {
     response = await fetch(GEMINI_ENDPOINT, {
@@ -183,8 +186,14 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS } =
       signal: controller.signal
     });
   } catch (err) {
-    const wrapped = new Error(controller.signal.aborted ? 'Gemini request timed out.' : (err?.message || 'Gemini request failed.'));
-    wrapped.retryable = true;
+    const timedOut = controller.signal.aborted;
+    const wrapped = new Error(timedOut ? 'Gemini request timed out.' : (err?.message || 'Gemini request failed.'));
+    wrapped.timedOut = timedOut;
+    wrapped.retryable = timedOut ? retryOnTimeout !== false : true;
+    wrapped.elapsedMs = Date.now() - startedAt;
+    if (timedOut) {
+      console.warn(`[Gemini] ${label} timed out after ${(wrapped.elapsedMs / 1000).toFixed(1)}s${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
+    }
     noteTemporaryFailure(wrapped);
     throw wrapped;
   } finally {
@@ -213,6 +222,10 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS } =
     throw err;
   }
 
+  const elapsedMs = Date.now() - startedAt;
+  if (elapsedMs >= 10000) {
+    console.info(`[Gemini] ${label} completed in ${(elapsedMs / 1000).toFixed(1)}s.`);
+  }
   return data;
 }
 
@@ -307,7 +320,7 @@ async function requestGeminiDataWithRetry(prompt, options = {}) {
       return await requestGeminiData(prompt, options);
     } catch (err) {
       lastError = err;
-      if (!isRetryableGeminiError(err) || attempt >= maxRetries) break;
+      if ((err?.timedOut && options.retryOnTimeout === false) || !isRetryableGeminiError(err) || attempt >= maxRetries) break;
     }
   }
 
