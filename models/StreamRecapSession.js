@@ -65,7 +65,6 @@ const sharedChatGuestSchema = new mongoose.Schema({
   userId: { type: String, default: '' },
   login: { type: String, default: '' },
   displayName: { type: String, default: '' },
-  originType: { type: String, enum: ['shared_guest', 'shared_unknown'], default: 'shared_guest' },
   sourceBroadcasterUserId: { type: String, default: '' },
   sourceBroadcasterLogin: { type: String, default: '' },
   sourceBroadcasterDisplayName: { type: String, default: '' }

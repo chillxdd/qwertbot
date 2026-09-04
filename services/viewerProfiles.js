@@ -7,7 +7,7 @@ const {
   identityKey: sourceIdentityKey,
   sameIdentity,
   textMentionsAlias,
-  isPersistentLearningEligible
+  isSharedChatGuest
 } = require('./sourceRecords');
 const {
   normalizeConfidence,
@@ -849,7 +849,7 @@ function buildParticipantCounts(chatLogs = []) {
   const participantsByUsername = new Map();
 
   for (const record of normalizeChatRecords(chatLogs)) {
-    if (record.kind === 'bot_context' || record.author.role === 'bot' || !isPersistentLearningEligible(record)) continue;
+    if (record.kind === 'bot_context' || record.author.role === 'bot' || isSharedChatGuest(record)) continue;
     const identity = normalizeSourceIdentity(record.author);
     const username = normalizeUsername(identity.login || identity.displayName);
     const key = sourceIdentityKey(identity) || (username ? `login:${username}` : '');
@@ -1233,7 +1233,20 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4, optio
   const excludedIdentities = (Array.isArray(options.excludeIdentities) ? options.excludeIdentities : [])
     .filter(Boolean)
     .map((value) => normalizeSourceIdentity(value));
-  const profileIsExcluded = (profile) => excludedIdentities.some((identity) => sameIdentity(profileIdentity(profile), identity));
+  const excludedAliasKeys = new Set(excludedIdentities
+    .flatMap((identity) => identity.aliases || [])
+    .map((alias) => String(alias || '').normalize('NFKC').toLocaleLowerCase('en-US'))
+    .filter(Boolean));
+  const isExcludedProfile = (profile) => {
+    const identity = profileIdentity(profile);
+    if (excludedIdentities.some((excluded) => sameIdentity(identity, excluded))) return true;
+    // Guest-origin requesters must never auto-bind to a local profile merely
+    // because a stale profile, historical rename, or recycled Twitch login
+    // happens to share an alias while the stable user IDs disagree.
+    return identity.aliases.some((alias) => excludedAliasKeys.has(
+      String(alias || '').normalize('NFKC').toLocaleLowerCase('en-US')
+    ));
+  };
 
   const exactClauses = [];
   for (const identity of exactIdentities) {
@@ -1249,7 +1262,9 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4, optio
       optedOut: { $ne: true },
       $or: exactClauses
     }).lean();
-    for (const doc of exactDocs) docsById.set(String(doc._id), doc);
+    for (const doc of exactDocs) {
+      if (!isExcludedProfile(doc)) docsById.set(String(doc._id), doc);
+    }
   }
 
   // Aliases are not indexed, so question-subject matching still needs a bounded
@@ -1261,11 +1276,11 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4, optio
     optedOut: { $ne: true }
   }).lean();
   for (const doc of candidates) {
-    if (profileMatchesQuestion(doc, question)) docsById.set(String(doc._id), doc);
+    if (!isExcludedProfile(doc) && profileMatchesQuestion(doc, question)) docsById.set(String(doc._id), doc);
   }
 
   return [...docsById.values()]
-    .filter((profile) => !profileIsExcluded(profile))
+    .filter((profile) => !isExcludedProfile(profile))
     .map((profile) => ({
       profile,
       exactRank: profileIdentityRank(profile, exactIdentities),

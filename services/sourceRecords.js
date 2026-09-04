@@ -3,10 +3,6 @@
 const BOT_CONTEXT_PREFIX = '[BOT CONTEXT ONLY]';
 const MOD_ANNOUNCEMENT_PREFIX = '[MODERATOR ANNOUNCEMENT';
 const SHARED_CHAT_GUEST_PREFIX = '[SHARED CHAT GUEST]';
-const SHARED_CHAT_UNKNOWN_PREFIX = '[SHARED CHAT ORIGIN UNKNOWN]';
-const SHARED_CHAT_GUEST_ANNOUNCEMENT_PREFIX = '[SHARED CHAT GUEST ANNOUNCEMENT';
-const SHARED_CHAT_UNKNOWN_ANNOUNCEMENT_PREFIX = '[SHARED CHAT ORIGIN UNKNOWN ANNOUNCEMENT';
-const SHARED_CHAT_ORIGIN_TYPES = new Set(['local', 'shared_local', 'shared_guest', 'shared_unknown']);
 const IDENTITY_ROLES = new Set(['viewer', 'moderator', 'broadcaster', 'bot', 'system', 'unknown']);
 const MESSAGE_KINDS = new Set(['viewer', 'bot_context', 'moderator_announcement']);
 
@@ -32,198 +28,157 @@ function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function twitchBoolean(value) {
-  return value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'true';
+function cleanMetadataValue(value, max = 1000) {
+  if (value === null || value === undefined || value === '') return '';
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const output = {};
+    for (const [rawKey, rawValue] of Object.entries(value).slice(0, 32)) {
+      const key = cleanInline(rawKey, 80);
+      if (!key) continue;
+      output[key] = cleanInline(rawValue, 160);
+    }
+    return output;
+  }
+  return cleanInline(value, max);
 }
 
-function normalizeBadgeMap(value) {
-  const out = {};
-  if (!value) return out;
-
-  if (Array.isArray(value)) {
-    for (const badge of value.slice(0, 64)) {
-      const key = cleanInline(badge?.set_id ?? badge?.setId ?? badge?.name, 80).toLowerCase();
-      if (!key) continue;
-      out[key] = cleanInline(badge?.id ?? badge?.version ?? '1', 80) || '1';
-    }
-    return out;
+function firstNonEmptyValue(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string' && !value.trim()) continue;
+    return value;
   }
-
-  if (typeof value === 'object') {
-    for (const [rawKey, rawValue] of Object.entries(value).slice(0, 64)) {
-      const key = cleanInline(rawKey, 80).toLowerCase();
-      if (!key) continue;
-      out[key] = cleanInline(rawValue, 80) || '1';
-    }
-    return out;
-  }
-
-  for (const item of String(value).split(',')) {
-    const [rawKey, ...rawValue] = item.split('/');
-    const key = cleanInline(rawKey, 80).toLowerCase();
-    if (!key) continue;
-    out[key] = cleanInline(rawValue.join('/'), 80) || '1';
-  }
-  return out;
-}
-
-function roleFromBadgeMap(value) {
-  const badges = normalizeBadgeMap(value);
-  if (badges.broadcaster) return 'broadcaster';
-  if (badges.moderator) return 'moderator';
-  return 'viewer';
+  return '';
 }
 
 function normalizeSharedChatOrigin(value = {}, fallback = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const base = fallback && typeof fallback === 'object' && !Array.isArray(fallback) ? fallback : {};
-  const destinationRoomId = normalizeUserId(
-    source.destinationRoomId ?? source.roomId ?? source.broadcasterUserId ??
-    base.destinationRoomId ?? base.roomId ?? base.broadcasterUserId
-  );
-  const sourceRoomId = normalizeUserId(
-    source.sourceRoomId ?? source.originRoomId ??
-    base.sourceRoomId ?? base.originRoomId
-  );
-  const sourceMessageId = cleanInline(
-    source.sourceMessageId ?? source.sourceId ?? source.originalMessageId ??
-    base.sourceMessageId ?? base.sourceId ?? base.originalMessageId,
-    160
-  );
-  const sourceOnly = twitchBoolean(source.sourceOnly ?? base.sourceOnly);
-  const sourceBadges = normalizeBadgeMap(source.sourceBadges ?? base.sourceBadges);
-  const sourceBadgeInfo = normalizeBadgeMap(source.sourceBadgeInfo ?? base.sourceBadgeInfo);
+  const destinationRoomId = normalizeUserId(firstNonEmptyValue(
+    source.destinationRoomId, source.roomId, source.broadcasterUserId,
+    base.destinationRoomId, base.roomId, base.broadcasterUserId
+  ));
+  const sourceRoomId = normalizeUserId(firstNonEmptyValue(
+    source.sourceRoomId, source.originRoomId,
+    base.sourceRoomId, base.originRoomId
+  ));
+  const sourceMessageId = cleanInline(firstNonEmptyValue(
+    source.sourceMessageId, source.originalMessageId,
+    base.sourceMessageId, base.originalMessageId
+  ), 160);
+  // For IRC Shared Chat, source-room-id is the source broadcaster's room/user ID.
+  // EventSub may provide the broadcaster ID explicitly instead.
+  const sourceBroadcasterUserId = normalizeUserId(firstNonEmptyValue(
+    source.sourceBroadcasterUserId, source.sourceBroadcasterId,
+    base.sourceBroadcasterUserId, base.sourceBroadcasterId,
+    sourceRoomId, base.sourceRoomId
+  ));
+  const sourceBroadcasterLogin = normalizeLogin(firstNonEmptyValue(
+    source.sourceBroadcasterLogin, source.sourceChannelLogin,
+    base.sourceBroadcasterLogin, base.sourceChannelLogin
+  ));
+  const sourceBroadcasterDisplayName = normalizeDisplayName(firstNonEmptyValue(
+    source.sourceBroadcasterDisplayName, source.sourceBroadcasterName, source.sourceChannelName,
+    base.sourceBroadcasterDisplayName, base.sourceBroadcasterName, base.sourceChannelName
+  ));
+  const sourceBadges = cleanMetadataValue(source.sourceBadges ?? base.sourceBadges, 1200);
+  const sourceBadgeInfo = cleanMetadataValue(source.sourceBadgeInfo ?? base.sourceBadgeInfo, 1200);
 
-  // Twitch IRC's authoritative provenance fields are source-room-id and room-id.
-  // The optional broadcaster fields are accepted only for forward compatibility;
-  // current IRC messages normally do not include a source channel name.
-  const sourceBroadcasterUserId = normalizeUserId(
-    source.sourceBroadcasterUserId ?? source.sourceBroadcasterId ??
-    base.sourceBroadcasterUserId ?? base.sourceBroadcasterId
+  const inferredGuest = Boolean(
+    (sourceRoomId && destinationRoomId && sourceRoomId !== destinationRoomId) ||
+    (sourceBroadcasterUserId && destinationRoomId && sourceBroadcasterUserId !== destinationRoomId)
   );
-  const sourceBroadcasterLogin = normalizeLogin(
-    source.sourceBroadcasterLogin ?? source.sourceChannelLogin ??
-    base.sourceBroadcasterLogin ?? base.sourceChannelLogin
-  );
-  const sourceBroadcasterDisplayName = normalizeDisplayName(
-    source.sourceBroadcasterDisplayName ?? source.sourceBroadcasterName ?? source.sourceChannelName ??
-    base.sourceBroadcasterDisplayName ?? base.sourceBroadcasterName ?? base.sourceChannelName
-  );
-
-  const explicitType = SHARED_CHAT_ORIGIN_TYPES.has(String(source.type || '').toLowerCase())
-    ? String(source.type).toLowerCase()
-    : (SHARED_CHAT_ORIGIN_TYPES.has(String(base.type || '').toLowerCase()) ? String(base.type).toLowerCase() : '');
+  // Never allow an accidentally persisted false flag to erase stronger Twitch
+  // provenance proving that the message came from a different room.
+  const isGuest = inferredGuest || source.isGuest === true || base.isGuest === true;
   const active = Boolean(
-    explicitType && explicitType !== 'local' ||
     source.active === true || source.isSharedChat === true || source.shared === true ||
     base.active === true || base.isSharedChat === true || base.shared === true ||
-    sourceRoomId || sourceMessageId || sourceOnly || Object.keys(sourceBadges).length || Object.keys(sourceBadgeInfo).length
+    sourceRoomId || sourceMessageId || sourceBroadcasterUserId || sourceBroadcasterLogin || sourceBroadcasterDisplayName
   );
 
-  let type = 'local';
-  if (active) {
-    if (sourceRoomId && destinationRoomId) {
-      type = sourceRoomId === destinationRoomId ? 'shared_local' : 'shared_guest';
-    } else if (explicitType === 'shared_local') {
-      type = 'shared_local';
-    } else if (explicitType === 'shared_guest' || source.isGuest === true || base.isGuest === true) {
-      // Compatibility path for already-rendered/persisted guest records.
-      type = 'shared_guest';
-    } else if (explicitType === 'shared_unknown') {
-      type = 'shared_unknown';
-    } else {
-      // A Shared Chat marker without enough room metadata must fail closed for
-      // permanent learning. It remains usable as temporary recap context.
-      type = 'shared_unknown';
-    }
-  }
-
   return {
-    active: type !== 'local',
-    type,
-    isGuest: type === 'shared_guest',
-    isUnknown: type === 'shared_unknown',
-    persistentLearningEligible: type === 'local' || type === 'shared_local',
+    active,
+    isGuest: active && isGuest,
     destinationRoomId,
     sourceRoomId,
     sourceMessageId,
-    sourceOnly,
     sourceBroadcasterUserId,
     sourceBroadcasterLogin,
     sourceBroadcasterDisplayName,
     sourceBadges,
-    sourceBadgeInfo,
-    sourceRole: roleFromBadgeMap(sourceBadges)
+    sourceBadgeInfo
   };
 }
 
 function sharedChatOriginFromTwitchTags(tags = {}) {
-  const hasMeaningfulValue = (key) => Object.prototype.hasOwnProperty.call(tags || {}, key) && tags[key] !== null && tags[key] !== undefined && tags[key] !== '';
-  const sharedChatMarkerPresent = [
-    'source-room-id', 'source-id', 'source-msg-id', 'source-only', 'source-badges', 'source-badge-info',
-    'source_room_id', 'source_id', 'source_message_id', 'source_msg_id', 'source_only', 'source_badges', 'source_badge_info',
-    'sourceRoomId', 'sourceId', 'sourceMessageId', 'sourceMsgId', 'sourceOnly', 'sourceBadges', 'sourceBadgeInfo'
-  ].some(hasMeaningfulValue);
+  const destinationRoomId = normalizeUserId(
+    tags?.['room-id'] ?? tags?.roomId ?? tags?.broadcaster_user_id ?? tags?.broadcasterUserId
+  );
+  const sourceRoomId = normalizeUserId(
+    tags?.['source-room-id'] ?? tags?.sourceRoomId ?? tags?.source_room_id
+  );
+  const sourceMessageId = cleanInline(
+    tags?.['source-id'] ?? tags?.sourceId ?? tags?.source_message_id ?? tags?.sourceMessageId,
+    160
+  );
+  const sourceBroadcasterUserId = normalizeUserId(
+    tags?.['source-broadcaster-user-id'] ?? tags?.source_broadcaster_user_id ?? tags?.sourceBroadcasterUserId ?? sourceRoomId
+  );
+  const sourceBroadcasterLogin = normalizeLogin(
+    tags?.['source-broadcaster-user-login'] ?? tags?.source_broadcaster_user_login ?? tags?.sourceBroadcasterUserLogin
+  );
+  const sourceBroadcasterDisplayName = normalizeDisplayName(
+    tags?.['source-broadcaster-user-name'] ?? tags?.source_broadcaster_user_name ?? tags?.sourceBroadcasterUserName
+  );
+  const active = Boolean(
+    sourceRoomId || sourceMessageId || sourceBroadcasterUserId || sourceBroadcasterLogin || sourceBroadcasterDisplayName
+  );
+  const isGuest = Boolean(
+    (sourceRoomId && destinationRoomId && sourceRoomId !== destinationRoomId) ||
+    (sourceBroadcasterUserId && destinationRoomId && sourceBroadcasterUserId !== destinationRoomId)
+  );
 
   return normalizeSharedChatOrigin({
-    active: sharedChatMarkerPresent,
-    destinationRoomId: tags?.['room-id'] ?? tags?.roomId ?? tags?.broadcaster_user_id ?? tags?.broadcasterUserId,
-    sourceRoomId: tags?.['source-room-id'] ?? tags?.sourceRoomId ?? tags?.source_room_id,
-    sourceMessageId: tags?.['source-id'] ?? tags?.source_id ?? tags?.sourceId ?? tags?.source_message_id ?? tags?.sourceMessageId,
-    sourceOnly: tags?.['source-only'] ?? tags?.source_only ?? tags?.sourceOnly,
+    active,
+    isGuest,
+    destinationRoomId,
+    sourceRoomId,
+    sourceMessageId,
+    sourceBroadcasterUserId,
+    sourceBroadcasterLogin,
+    sourceBroadcasterDisplayName,
     sourceBadges: tags?.['source-badges'] ?? tags?.source_badges ?? tags?.sourceBadges,
-    sourceBadgeInfo: tags?.['source-badge-info'] ?? tags?.source_badge_info ?? tags?.sourceBadgeInfo,
-    // Forward-compatible aliases; these are not expected on current IRC data.
-    sourceBroadcasterUserId: tags?.['source-broadcaster-user-id'] ?? tags?.source_broadcaster_user_id ?? tags?.sourceBroadcasterUserId,
-    sourceBroadcasterLogin: tags?.['source-broadcaster-user-login'] ?? tags?.source_broadcaster_user_login ?? tags?.sourceBroadcasterUserLogin,
-    sourceBroadcasterDisplayName: tags?.['source-broadcaster-user-name'] ?? tags?.source_broadcaster_user_name ?? tags?.sourceBroadcasterUserName
+    sourceBadgeInfo: tags?.['source-badge-info'] ?? tags?.source_badge_info ?? tags?.sourceBadgeInfo
   });
 }
 
 function sharedChatOriginFromRecord(value = {}) {
   if (!value || typeof value !== 'object') return normalizeSharedChatOrigin();
-
-  // Derive from raw IRC tags first, then layer persisted structured provenance
-  // over it. This prevents an empty legacy sharedChat object from masking valid
-  // source-room-id/source-id tags and accidentally being treated as local chat.
-  const tagContainer = value.tags && typeof value.tags === 'object' ? value.tags : value;
-  let origin = sharedChatOriginFromTwitchTags(tagContainer);
-
+  if (value.sharedChat && typeof value.sharedChat === 'object') return normalizeSharedChatOrigin(value.sharedChat);
   if (value.metadata?.sharedChat && typeof value.metadata.sharedChat === 'object') {
-    origin = normalizeSharedChatOrigin(value.metadata.sharedChat, origin);
+    return normalizeSharedChatOrigin(value.metadata.sharedChat);
   }
-  if (value.sharedChat && typeof value.sharedChat === 'object') {
-    origin = normalizeSharedChatOrigin(value.sharedChat, origin);
+  if (value.tags && typeof value.tags === 'object') return sharedChatOriginFromTwitchTags(value.tags);
+  const tagKeys = [
+    'source-room-id', 'source-id', 'source-broadcaster-user-id',
+    'source_room_id', 'source_message_id', 'source_broadcaster_user_id'
+  ];
+  if (tagKeys.some((key) => Object.prototype.hasOwnProperty.call(value, key))) {
+    return sharedChatOriginFromTwitchTags(value);
   }
-
-  return origin;
+  return normalizeSharedChatOrigin(value);
 }
 
 function isSharedChatGuest(value = {}) {
   return sharedChatOriginFromRecord(value).isGuest === true;
 }
 
-function isSharedChatExternalOrUnknown(value = {}) {
-  const type = sharedChatOriginFromRecord(value).type;
-  return type === 'shared_guest' || type === 'shared_unknown';
-}
-
-function isPersistentLearningEligible(value = {}) {
-  return sharedChatOriginFromRecord(value).persistentLearningEligible === true;
-}
-
-function filterPersistentLearningChatRecords(values = []) {
-  return (Array.isArray(values) ? values : []).filter((value) => isPersistentLearningEligible(value));
-}
-
 function sharedChatSourceLabel(value = {}) {
   const origin = sharedChatOriginFromRecord(value);
-  if (origin.type === 'shared_unknown') return SHARED_CHAT_UNKNOWN_PREFIX;
   if (!origin.isGuest) return '';
   const sourceName = origin.sourceBroadcasterDisplayName || origin.sourceBroadcasterLogin;
-  return sourceName
-    ? `[SHARED CHAT GUEST - ${sourceName}]`
-    : SHARED_CHAT_GUEST_PREFIX;
+  return sourceName ? `[SHARED CHAT GUEST - ${sourceName}]` : SHARED_CHAT_GUEST_PREFIX;
 }
 
 function normalizeRole(value) {
@@ -305,17 +260,15 @@ function sameIdentity(left = {}, right = {}) {
 
 function roleFromTwitchTags(tags = {}, { isBot = false } = {}) {
   if (isBot) return 'bot';
-  const badges = normalizeBadgeMap(tags?.badges);
-  const userId = normalizeUserId(tags?.['user-id'] ?? tags?.userId);
-  const roomId = normalizeUserId(tags?.['room-id'] ?? tags?.roomId);
-  if (badges.broadcaster || (userId && roomId && userId === roomId)) return 'broadcaster';
-  if (badges.moderator) return 'moderator';
-
-  // `badges` are the destination-room badges. `source-badges` describe the
-  // original Shared Chat room and are never authorization. For a guest/unknown
-  // copy, ignore an ambiguous standalone mod flag unless a local moderator badge
-  // is present. This prevents another channel's staff status from leaking power.
-  if (!isSharedChatExternalOrUnknown(tags) && twitchBoolean(tags?.mod)) return 'moderator';
+  // Shared Chat duplicates a source-room message into GeneralQwert's room.
+  // Any badges/mod flags attached to that duplicated copy must not be treated
+  // as proof of authority in GeneralQwert's destination room. Keep the local
+  // role conservative; a guest who also has local authority can invoke staff
+  // controls from GeneralQwert's own chat instead.
+  if (isSharedChatGuest({ tags })) return 'viewer';
+  const badges = tags?.badges || {};
+  if (badges.broadcaster === '1') return 'broadcaster';
+  if (tags.mod === true || tags.mod === '1' || tags.mod === 1 || badges.moderator === '1') return 'moderator';
   return 'viewer';
 }
 
@@ -334,42 +287,9 @@ function parseLegacyChatLine(line, kindHint = '') {
   let kind = MESSAGE_KINDS.has(kindHint) ? kindHint : 'viewer';
   let sharedChat = normalizeSharedChatOrigin();
 
-  const guestAnnouncementMatch = value.match(
-    /^\[SHARED CHAT GUEST ANNOUNCEMENT(?:\s+from\s+([^\]]+?))?\s+by\s+([^\]]+)\]:\s*([\s\S]*)$/i
-  );
-  if (guestAnnouncementMatch) {
-    return {
-      kind: 'moderator_announcement',
-      text: cleanInline(guestAnnouncementMatch[3]),
-      // Source-room staff status is useful context, but it is never local
-      // authorization inside GeneralQwert's room.
-      author: normalizeIdentity({ displayName: guestAnnouncementMatch[2], role: 'viewer' }),
-      metadata: {},
-      sharedChat: normalizeSharedChatOrigin({
-        active: true,
-        type: 'shared_guest',
-        isGuest: true,
-        sourceBroadcasterDisplayName: cleanInline(guestAnnouncementMatch[1] || '', 80)
-      })
-    };
-  }
-
-  const unknownAnnouncementMatch = value.match(
-    /^\[SHARED CHAT ORIGIN UNKNOWN ANNOUNCEMENT\s+by\s+([^\]]+)\]:\s*([\s\S]*)$/i
-  );
-  if (unknownAnnouncementMatch) {
-    return {
-      kind: 'moderator_announcement',
-      text: cleanInline(unknownAnnouncementMatch[2]),
-      author: normalizeIdentity({ displayName: unknownAnnouncementMatch[1], role: 'viewer' }),
-      metadata: {},
-      sharedChat: normalizeSharedChatOrigin({ active: true, type: 'shared_unknown' })
-    };
-  }
-
-  // Preserve provenance when an already-rendered structured line is fed back
-  // through a compatibility path. This prevents guest-origin text from losing
-  // its Shared Chat marker and accidentally becoming permanent Qwert learning.
+  // Preserve provenance if a rendered structured line is later normalized again.
+  // Without this, compatibility paths could accidentally turn guest-origin text
+  // into ordinary GeneralQwert learning input.
   const sharedChatMatch = value.match(/^\[SHARED CHAT GUEST(?:\s*-\s*([^\]]+))?\]\s*/i);
   if (sharedChatMatch) {
     sharedChat = normalizeSharedChatOrigin({
@@ -378,12 +298,6 @@ function parseLegacyChatLine(line, kindHint = '') {
       sourceBroadcasterDisplayName: cleanInline(sharedChatMatch[1] || '', 80)
     });
     value = value.slice(sharedChatMatch[0].length).trim();
-  } else {
-    const unknownSharedChatMatch = value.match(/^\[SHARED CHAT ORIGIN UNKNOWN\]\s*/i);
-    if (unknownSharedChatMatch) {
-      sharedChat = normalizeSharedChatOrigin({ active: true, type: 'shared_unknown' });
-      value = value.slice(unknownSharedChatMatch[0].length).trim();
-    }
   }
 
   if (value.startsWith(BOT_CONTEXT_PREFIX)) {
@@ -397,10 +311,11 @@ function parseLegacyChatLine(line, kindHint = '') {
       return {
         kind: 'moderator_announcement',
         text: cleanInline(match[3]),
-        author: normalizeIdentity({
-          displayName: match[2],
-          role: sharedChat.persistentLearningEligible ? 'moderator' : 'viewer'
-        }),
+        // A rendered Shared Chat announcement proves that the author had
+        // announcement authority in the source room, not in GeneralQwert's
+        // destination room. Keep the local role conservative when the original
+        // destination-room badges are no longer available.
+        author: normalizeIdentity({ displayName: match[2], role: sharedChat.isGuest ? 'viewer' : 'moderator' }),
         metadata: { color: cleanInline(match[1], 40) },
         sharedChat
       };
@@ -456,17 +371,14 @@ function normalizeChatRecord(value, defaults = {}) {
   const kind = MESSAGE_KINDS.has(source?.kind)
     ? source.kind
     : (MESSAGE_KINDS.has(parsed?.kind) ? parsed.kind : (MESSAGE_KINDS.has(defaults.kind) ? defaults.kind : 'viewer'));
-
   const metadata = {
     ...(parsed?.metadata || {}),
     ...(defaults.metadata && typeof defaults.metadata === 'object' ? defaults.metadata : {}),
     ...(source?.metadata && typeof source.metadata === 'object' ? source.metadata : {})
   };
   const sharedChat = normalizeSharedChatOrigin(
-    source?.sharedChat || metadata.sharedChat || parsed?.sharedChat || defaults.sharedChat || {},
-    source ? sharedChatOriginFromRecord(source) : sharedChatOriginFromRecord(defaults)
+    source?.sharedChat || parsed?.sharedChat || metadata.sharedChat || defaults.sharedChat || {}
   );
-
   const author = normalizeIdentity(
     source?.author || {
       userId: source?.authorUserId,
@@ -477,14 +389,12 @@ function normalizeChatRecord(value, defaults = {}) {
     parsed?.author || defaults.author || { role: kind === 'bot_context' ? 'bot' : 'viewer' }
   );
   if (kind === 'bot_context' && author.role === 'unknown') author.role = 'bot';
-  if (kind === 'moderator_announcement') {
-    if (!sharedChat.persistentLearningEligible) {
-      // An announcement copied from another Shared Chat room is contextual
-      // source-channel activity, never GeneralQwert-room authority.
-      author.role = 'viewer';
-    } else if (!['moderator', 'broadcaster'].includes(author.role)) {
-      author.role = 'moderator';
-    }
+  if (
+    kind === 'moderator_announcement' &&
+    !sharedChat.isGuest &&
+    !['moderator', 'broadcaster'].includes(author.role)
+  ) {
+    author.role = 'moderator';
   }
 
   const textCandidates = [
@@ -517,23 +427,14 @@ function normalizeChatRecord(value, defaults = {}) {
   };
 }
 
-function renderChatRecord(value, { includeBotMarker = true, includeSourceId = false, includeOriginMarker = true } = {}) {
+function renderChatRecord(value, { includeBotMarker = true, includeSourceId = false } = {}) {
   const record = normalizeChatRecord(value);
   const sourceId = includeSourceId ? `[${chatSourceId(record)}] ` : '';
-  const sharedChatLabel = includeOriginMarker ? sharedChatSourceLabel(record) : '';
+  const sharedChatLabel = sharedChatSourceLabel(record);
   const originPrefix = sharedChatLabel ? `${sharedChatLabel} ` : '';
   const name = record.author.displayName || record.author.login || (record.kind === 'bot_context' ? 'SqwertArmyBot' : 'Unknown viewer');
   if (record.kind === 'moderator_announcement') {
     const color = cleanInline(record.metadata?.color, 40);
-    if (record.sharedChat?.type === 'shared_guest') {
-      if (!includeOriginMarker) return `${sourceId}${name}: ${record.text}`.trim();
-      const sourceName = record.sharedChat?.sourceBroadcasterDisplayName || record.sharedChat?.sourceBroadcasterLogin;
-      return `${sourceId}[SHARED CHAT GUEST ANNOUNCEMENT${sourceName ? ` from ${sourceName}` : ''} by ${name}]: ${record.text}`.trim();
-    }
-    if (record.sharedChat?.type === 'shared_unknown') {
-      if (!includeOriginMarker) return `${sourceId}${name}: ${record.text}`.trim();
-      return `${sourceId}[SHARED CHAT ORIGIN UNKNOWN ANNOUNCEMENT by ${name}]: ${record.text}`.trim();
-    }
     return `${sourceId}${originPrefix}[MODERATOR ANNOUNCEMENT${color ? ` (${color})` : ''} by ${name}]: ${record.text}`.trim();
   }
   const line = `${originPrefix}${name}: ${record.text}`.trim();
@@ -716,9 +617,6 @@ module.exports = {
   BOT_CONTEXT_PREFIX,
   MOD_ANNOUNCEMENT_PREFIX,
   SHARED_CHAT_GUEST_PREFIX,
-  SHARED_CHAT_UNKNOWN_PREFIX,
-  SHARED_CHAT_GUEST_ANNOUNCEMENT_PREFIX,
-  SHARED_CHAT_UNKNOWN_ANNOUNCEMENT_PREFIX,
   cleanInline,
   normalizeLogin,
   normalizeDisplayName,
@@ -728,9 +626,6 @@ module.exports = {
   sharedChatOriginFromTwitchTags,
   sharedChatOriginFromRecord,
   isSharedChatGuest,
-  isSharedChatExternalOrUnknown,
-  isPersistentLearningEligible,
-  filterPersistentLearningChatRecords,
   sharedChatSourceLabel,
   normalizeRole,
   strongestIdentityRole,
@@ -738,7 +633,6 @@ module.exports = {
   identityKey,
   sameIdentity,
   uniqueAliases,
-  normalizeBadgeMap,
   roleFromTwitchTags,
   identityFromTwitchTags,
   normalizeReplyReference,

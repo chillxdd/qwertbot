@@ -14,11 +14,13 @@ const DEFAULT_NATIVE_RESPONSES = Object.freeze({
   },
   setlast: {
     success: '',
-    fail: 'Couldn\'t set !last. Make sure Qwert is live in an approved Pokémon category and the URL is a valid Qwert Twitch clip.'
+    fail: 'Couldn\'t set !last. Make sure Qwert is live in an approved Pokémon category and the URL is a valid Qwert Twitch clip.',
+    cooldown: '@$(user), !setlast is on cooldown. Try again in $(remaining).'
   },
   cliplast: {
     success: 'Last notable run saved: $(clipurl)',
-    fail: 'Couldn\'t create or save the notable run clip. Make sure Qwert is live in an approved Pokémon category and clipping is available.'
+    fail: 'Couldn\'t create or save the notable run clip. Make sure Qwert is live in an approved Pokémon category and clipping is available.',
+    cooldown: '@$(user), !cliplast is on cooldown. Try again in $(remaining).'
   },
   clip: {
     success: 'Clip created: $(clipurl)',

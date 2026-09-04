@@ -2,7 +2,7 @@ const CustomCommand = require('../models/CustomCommand');
 const CustomCommandSettings = require('../models/CustomCommandSettings');
 const { getFollowInfo: getTwitchFollowInfo, formatFollowAge, formatFollowDate } = require('./twitchFollowers');
 const { getGameInfo: getTwitchGameInfo } = require('./twitchChannels');
-const { normalizeBadgeMap, roleFromTwitchTags, isPersistentLearningEligible } = require('./sourceRecords');
+const { isSharedChatGuest } = require('./sourceRecords');
 
 const MAX_COMMAND_NAME_LENGTH = 80;
 const MAX_PUBLIC_DESCRIPTION_LENGTH = 300;
@@ -422,18 +422,15 @@ function chooseResponseTemplate(command, responses, query) {
 }
 
 function getViewerUserLevel(tags = {}) {
-  const badges = normalizeBadgeMap(tags.badges);
-  const role = roleFromTwitchTags(tags);
-  if (role === 'broadcaster') return 'owner';
-  if (role === 'moderator') return 'moderator';
-  // These are destination-room badges. Source-room badges from Shared Chat
-  // never grant GeneralQwert command access.
-  if (badges.vip) return 'twitch_vip';
-  if (
-    badges.subscriber ||
-    badges.founder ||
-    (isPersistentLearningEligible(tags) && (tags.subscriber === true || tags.subscriber === '1' || tags.subscriber === 1))
-  ) return 'subscriber';
+  // A duplicated Shared Chat message proves participation in the current
+  // combined chat, but it does not prove subscriber/VIP/mod/owner status in
+  // GeneralQwert's room. Treat guest-origin invocations as viewer-level only.
+  if (isSharedChatGuest({ tags })) return 'everyone';
+  const badges = tags.badges || {};
+  if (badges.broadcaster === '1') return 'owner';
+  if (tags.mod === true || tags.mod === '1' || badges.moderator === '1') return 'moderator';
+  if (badges.vip === '1') return 'twitch_vip';
+  if (tags.subscriber === true || tags.subscriber === '1' || badges.subscriber || badges.founder) return 'subscriber';
   return 'everyone';
 }
 

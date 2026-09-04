@@ -1,13 +1,7 @@
 const { setViewerProfileOptOut, syncViewerIdentity, recordViewerCommandUsage } = require('./viewerProfiles');
 const { parseLoreDirective, tryHandleLoreDirective, consumeOwnResponse: consumeLoreDirectiveResponse } = require('./loreDirectives');
 const { detectPromptInjection } = require('./promptSecurity');
-const {
-  identityFromTwitchTags,
-  sharedChatOriginFromTwitchTags,
-  isSharedChatExternalOrUnknown,
-  isPersistentLearningEligible,
-  roleFromTwitchTags
-} = require('./sourceRecords');
+const { identityFromTwitchTags, sharedChatOriginFromTwitchTags, isSharedChatGuest } = require('./sourceRecords');
 
 const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
@@ -28,7 +22,12 @@ function isPokemonCommunityGameCommand(message) {
 }
 
 function isModOrBroadcaster(tags = {}) {
-  return ['moderator', 'broadcaster'].includes(roleFromTwitchTags(tags));
+  // Never inherit moderator/broadcaster authority from another room in
+  // Twitch Shared Chat. Staff-only controls must be invoked from Qwert's own
+  // room, where the destination-room badges are authoritative.
+  if (isSharedChatGuest({ tags })) return false;
+  const badges = tags.badges || {};
+  return badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || tags.mod === 1 || badges.moderator === '1';
 }
 
 function extractReplyContext(tags = {}) {
@@ -86,8 +85,10 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 
 
   function recordCommandBehavior({ channel, username, displayName, tags = {}, rawMessage, streamLive = false, recognized = true }) {
+    // Guest-origin Shared Chat behavior is valid current-stream context, but must
+    // never become a permanent GeneralQwert Viewer Profile command habit.
+    if (isSharedChatGuest({ tags })) return;
     const command = getCommandName(rawMessage);
-    if (!isPersistentLearningEligible(tags)) return;
     if (!command.startsWith('!') || PROFILE_COMMAND_EXCLUSIONS.has(command) || command.startsWith('!poke')) return;
     void recordViewerCommandUsage(channel, {
       username,
@@ -171,7 +172,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const displayName = tags['display-name'] || tags.username || 'viewer';
     const replyContext = extractReplyContext(tags);
     const sharedChatOrigin = sharedChatOriginFromTwitchTags(tags);
-    const requesterIsSharedChatExternal = isSharedChatExternalOrUnknown({ sharedChat: sharedChatOrigin });
+    const requesterIsSharedChatGuest = isSharedChatGuest({ sharedChat: sharedChatOrigin });
     let sourceRecorded = false;
     const recordViewerSource = () => {
       if (sourceRecorded) return true;
@@ -181,6 +182,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
         tags,
         author: identityFromTwitchTags(tags, displayName),
         twitchMessageId: tags.id || tags['message-id'] || '',
+        sourceMessageId: sharedChatOrigin.sourceMessageId || '',
         timestamp: tags['tmi-sent-ts'] || Date.now(),
         replyTo: replyContext,
         sharedChat: sharedChatOrigin
@@ -190,11 +192,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     };
 
     if (username === 'nightbot') {
-      // A Nightbot response duplicated from a collaborator's Shared Chat room
-      // must never consume a pending command from GeneralQwert's own room.
-      if (isPersistentLearningEligible({ sharedChat: sharedChatOrigin })) {
-        handleNightbotResponse(rawMessage);
-      }
+      handleNightbotResponse(rawMessage);
       return;
     }
 
@@ -203,11 +201,11 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     if (isPokemonCommunityGameCommand(rawMessage)) return;
     if (isBotHourlyRecap(username, rawMessage)) return;
 
-    // Twitch user ID is the stable viewer identity. Only synchronize Viewer Profiles
-    // for messages originating in Qwert's own room. Shared Chat guest-community
-    // messages remain available to the current recap/session but must not create,
-    // rename, or refresh Qwert-channel persistent profiles.
-    if (isPersistentLearningEligible({ sharedChat: sharedChatOrigin })) {
+    // Twitch user ID is the stable viewer identity. Keep an existing Viewer Profile
+    // synchronized with the mutable login/display name before any Tagged Question or
+    // learning path can use it. The service caches stable identities, so this does not
+    // become a Mongo query on every message once a viewer is synchronized.
+    if (!requesterIsSharedChatGuest) {
       try {
         await syncViewerIdentity(channel, {
           username,
@@ -326,9 +324,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
                 metadata: {
                   source: 'tagged_question',
                   askerUserId: String(tags['user-id'] || ''),
-                  requesterSharedChatGuest: requesterIsSharedChatExternal,
-                  requesterSharedChatExternal: requesterIsSharedChatExternal,
-                  requesterSharedChatOrigin: sharedChatOrigin
+                  requesterSharedChat: sharedChatOrigin
                 }
               });
             }
@@ -468,6 +464,5 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
 module.exports = {
   createTwitchMessageHandler,
   isPokemonCommunityGameCommand,
-  extractReplyContext,
-  isModOrBroadcaster
+  extractReplyContext
 };

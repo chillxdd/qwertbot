@@ -75,7 +75,6 @@ async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block 
       userId: String(guest?.userId || '').trim(),
       login: String(guest?.login || '').trim(),
       displayName: String(guest?.displayName || guest?.login || '').trim(),
-      originType: guest?.originType === 'shared_unknown' ? 'shared_unknown' : 'shared_guest',
       sourceBroadcasterUserId: String(guest?.sourceBroadcasterUserId || '').trim(),
       sourceBroadcasterLogin: String(guest?.sourceBroadcasterLogin || '').trim(),
       sourceBroadcasterDisplayName: String(guest?.sourceBroadcasterDisplayName || guest?.sourceBroadcasterLogin || '').trim()

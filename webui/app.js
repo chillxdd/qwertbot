@@ -124,11 +124,13 @@ const NATIVE_RESPONSE_FIELDS = {
   ],
   setlast: [
     ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
-    ['fail', 'Fail Response', 'Variable: $(user)']
+    ['fail', 'Fail Response', 'Variable: $(user)'],
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)']
   ],
   cliplast: [
     ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
-    ['fail', 'Fail Response', 'Variable: $(user)']
+    ['fail', 'Fail Response', 'Variable: $(user)'],
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)']
   ],
   clip: [
     ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
@@ -222,7 +224,8 @@ function renderNativeResponseFields(command) {
     info.push(`<div class="detail">Built-in global cooldown: ${esc(nativeClipCooldowns.clipSeconds)}s.</div>`);
   }
   if (command === 'setlast' || command === 'cliplast') {
-    info.push('<div class="detail">No cooldown. This command only works while Qwert is live in an approved official Pokémon game category.</div>');
+    const seconds = nativeClipCooldowns?.[`${command}Seconds`] ?? 60;
+    info.push(`<div class="detail">Built-in global cooldown: ${esc(seconds)}s, shared between <code>!setlast</code> and <code>!cliplast</code>. This command only works while Qwert is live in an approved official Pokémon game category.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
     info.push(`<div class="detail">Syntax: <code>!${esc(command)} &lt;title&gt;</code> or <code>!${esc(command)} &lt;duration&gt; | &lt;title&gt;</code>. Duration accepts both <code>60</code> and <code>60s</code>. A title beginning with a number is treated as a title unless a pipe is present.</div>`);

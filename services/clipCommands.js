@@ -9,6 +9,7 @@ const MIN_CLIP_DURATION = 5;
 const MAX_CLIP_DURATION = 60;
 const LAST_COMMAND_COOLDOWN_MS = 30 * 1000;
 const CLIP_COMMAND_COOLDOWN_MS = 60 * 1000;
+const LAST_UPDATE_COOLDOWN_MS = 60 * 1000;
 const DEFAULT_CLIP_SETTINGS = Object.freeze({
   clip: { defaultTitle: 'Qwert Clip', defaultDuration: 45 },
   cliplast: { defaultTitle: 'Last Notable Run End', defaultDuration: 45 }
@@ -150,6 +151,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
   const channel = normalizeChannelName(channelName);
   let lastCommandUse = 0;
   let clipCommandUse = 0;
+  let lastUpdateCommandUse = 0;
   let lastUpdateBusy = false;
 
   async function readConfig() {
@@ -254,6 +256,14 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
       await say(channelArg, await response('setlast', 'fail', { user: displayName }));
       return { matched: true, responded: true, reason: 'invalid_url' };
     }
+    const now = Date.now();
+    if (lastUpdateCommandUse && now - lastUpdateCommandUse < LAST_UPDATE_COOLDOWN_MS) {
+      await say(channelArg, await response('setlast', 'cooldown', {
+        user: displayName,
+        remaining: formatRemaining(LAST_UPDATE_COOLDOWN_MS - (now - lastUpdateCommandUse))
+      }));
+      return { matched: true, responded: true, reason: 'cooldown' };
+    }
     if (lastUpdateBusy) {
       await say(channelArg, await response('setlast', 'fail', { user: displayName }));
       return { matched: true, responded: true, reason: 'busy' };
@@ -263,6 +273,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
       await requireOfficialPokemonLive();
       const clip = await validateClipForChannel(channel, arg);
       const saved = await saveLastClip(clip, 'setlast', identity);
+      lastUpdateCommandUse = Date.now();
       await say(channelArg, await response('setlast', 'success', { user: displayName, clipurl: saved.url, cliptitle: saved.title || '' }));
       console.log(`[Clips] !setlast updated !last to ${saved.url} by ${identity.displayName || identity.login || 'moderator'}.`);
       return { matched: true, responded: true, reason: 'success', clip: saved };
@@ -277,6 +288,14 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
 
   async function handleClipLast({ channel: channelArg, rawMessage, displayName, tags }) {
     const identity = userIdentityFromTags(tags, displayName);
+    const now = Date.now();
+    if (lastUpdateCommandUse && now - lastUpdateCommandUse < LAST_UPDATE_COOLDOWN_MS) {
+      await say(channelArg, await response('cliplast', 'cooldown', {
+        user: displayName,
+        remaining: formatRemaining(LAST_UPDATE_COOLDOWN_MS - (now - lastUpdateCommandUse))
+      }));
+      return { matched: true, responded: true, reason: 'cooldown' };
+    }
     if (lastUpdateBusy) {
       await say(channelArg, await response('cliplast', 'fail', { user: displayName }));
       return { matched: true, responded: true, reason: 'busy' };
@@ -289,6 +308,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
       if (parsed?.error) throw new Error(parsed.error);
       const clip = await createClip(channel, parsed);
       const saved = await saveLastClip(clip, 'cliplast', identity);
+      lastUpdateCommandUse = Date.now();
       await say(channelArg, await response('cliplast', 'success', { user: displayName, clipurl: saved.url, cliptitle: saved.title || '' }));
       console.log(`[Clips] !cliplast created and saved ${saved.url} by ${identity.displayName || identity.login || 'moderator'}.`);
       return { matched: true, responded: true, reason: 'success', clip: saved };
@@ -345,8 +365,9 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
       cooldowns: {
         lastSeconds: LAST_COMMAND_COOLDOWN_MS / 1000,
         clipSeconds: CLIP_COMMAND_COOLDOWN_MS / 1000,
-        setlastSeconds: 0,
-        cliplastSeconds: 0
+        setlastSeconds: LAST_UPDATE_COOLDOWN_MS / 1000,
+        cliplastSeconds: LAST_UPDATE_COOLDOWN_MS / 1000,
+        lastUpdateShared: true
       },
       approvedPokemonCategories: [...OFFICIAL_POKEMON_CATEGORY_NAMES]
     };
@@ -365,6 +386,7 @@ module.exports = {
   MAX_CLIP_DURATION,
   LAST_COMMAND_COOLDOWN_MS,
   CLIP_COMMAND_COOLDOWN_MS,
+  LAST_UPDATE_COOLDOWN_MS,
   DEFAULT_CLIP_SETTINGS,
   OFFICIAL_POKEMON_CATEGORY_NAMES,
   normalizeCategory,

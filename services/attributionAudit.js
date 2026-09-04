@@ -12,7 +12,9 @@ const {
   eventSourceId,
   collectIdentityRegistry,
   textMentionsIdentity,
-  splitSentences
+  splitSentences,
+  isSharedChatGuest,
+  sharedChatSourceLabel
 } = require('./sourceRecords');
 
 const DEFAULT_SOURCE_CHAR_LIMIT = 32000;
@@ -116,6 +118,25 @@ function formatChatEvidence(records = []) {
     .join('\n') || '(none)';
 }
 
+
+function formatSharedChatAuditRules(chatRecords = []) {
+  const guests = normalizeChatRecords(chatRecords).filter((record) => isSharedChatGuest(record));
+  if (!guests.length) return '';
+  const sources = [...new Set(guests.map((record) => {
+    const label = sharedChatSourceLabel(record);
+    const match = label.match(/^\[SHARED CHAT GUEST\s*-\s*([^\]]+)\]$/i);
+    return String(match?.[1] || '').trim();
+  }).filter(Boolean))];
+  return `SHARED CHAT ATTRIBUTION RULES:
+- Source chat marked [SHARED CHAT GUEST] originated in another participating broadcaster's room and was duplicated into GeneralQwert's room for the current Shared Chat.${sources.length ? ` Source communities represented: ${sources.join(', ')}.` : ''}
+- Guest-origin messages are valid evidence for what that person said in the current combined conversation.
+- A guest-origin message does NOT establish that its author is a GeneralQwert regular, moderator, broadcaster, profile owner, or established GeneralQwert lore subject.
+- Source-room badges or roles do not grant a role in GeneralQwert's room.
+- A guest-origin moderator announcement belongs to its source room, not GeneralQwert's room.
+- Do not transfer another participating channel's relationships, culture, commands, inside jokes, or lore onto GeneralQwert's channel. Reject or minimally generalize any sentence that makes that unsupported transfer.
+- It is safe to describe the combined current discussion at a group level as Shared Chat/chat/viewers when no false membership or ownership claim is created.`;
+}
+
 function formatEventEvidence(records = []) {
   return normalizeEventRecords(records)
     .map((record, index) => {
@@ -142,7 +163,8 @@ function buildAuditPrompt({
   identities = [],
   trustedFacts = '',
   mode = 'recap',
-  label = 'generated text'
+  label = 'generated text',
+  sharedChatRules = ''
 }) {
   const sentences = splitSentences(text);
   const sentenceRows = sentences.map((sentence, index) => `[S${index + 1}] ${sentence}`).join('\n');
@@ -169,11 +191,10 @@ AUDIT SCOPE:
 - Audit ONLY identity/attribution correctness: who said, did, owned, created, liked, watched, experienced, decided, requested, or was related to whom.
 - Natural paraphrasing is allowed.
 - Generic group-level statements that do not assign a fact to a particular person may be supported when the source broadly supports them.
-- Source lines marked [SHARED CHAT GUEST ...] originated in another participating broadcaster's channel. Lines marked [SHARED CHAT ORIGIN UNKNOWN] were identified as Shared Chat traffic whose source room could not be safely resolved. They may support current joint-stream conversation facts, but they do NOT establish that the speaker is a regular GeneralQwert viewer/community member, a Qwert moderator/broadcaster, or the owner of GeneralQwert channel lore.
-- [SHARED CHAT GUEST ANNOUNCEMENT ...] and [SHARED CHAT ORIGIN UNKNOWN ANNOUNCEMENT ...] are source-channel/uncertain announcements, not official GeneralQwert moderator announcements. Only an unprefixed [MODERATOR ANNOUNCEMENT ...] line is an intentional GeneralQwert-room announcement.
-- Do not transfer another participating channel's community identity, relationships, running jokes, or ownership to GeneralQwert merely because the message appeared in Shared Chat.
 - Do not reject harmless style merely because it is sarcastic.
 ${modeRules}
+
+${sharedChatRules || formatSharedChatAuditRules(chatRecords)}
 
 FOR EACH SENTENCE:
 - supported must be the JSON boolean true ONLY when every named-person/entity attribution and relationship in that sentence is supported and directionally correct.
@@ -335,6 +356,7 @@ async function auditGeneratedAttribution({
   const events = normalizeEventRecords(eventRecords);
   const identities = collectIdentityRegistry({ chatRecords: chat, eventRecords: events, extraIdentities, channelName });
   const selectedChat = selectChatEvidence(current, chat, identities);
+  const sharedChatRules = formatSharedChatAuditRules(chat);
   const allUnsupported = [];
   let changed = false;
   let audited = 0;
@@ -349,7 +371,8 @@ async function auditGeneratedAttribution({
       identities,
       trustedFacts,
       mode,
-      label
+      label,
+      sharedChatRules
     });
 
     let parsed = null;
@@ -418,6 +441,7 @@ module.exports = {
   formatIdentityRegistry,
   formatChatEvidence,
   formatEventEvidence,
+  formatSharedChatAuditRules,
   buildAuditPrompt,
   parseAuditResults,
   hasAttributionRisk,

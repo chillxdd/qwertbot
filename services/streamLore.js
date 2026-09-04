@@ -175,6 +175,32 @@ function manualLoreEntryMatchesText(entry, sourceText) {
   return candidates.some((candidate) => manualLoreCandidateMatchesText(candidate, sourceText));
 }
 
+function normalizeLoreExclusionAliases(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const aliases = [];
+  const seen = new Set();
+  for (const item of raw) {
+    const alias = String(item || '').replace(/^@+/, '').replace(/\s+/g, ' ').trim();
+    if (!alias) continue;
+    const key = alias.normalize('NFKC').toLocaleLowerCase('en-US');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    aliases.push(alias);
+  }
+  return aliases;
+}
+
+function loreEntryMatchesExcludedAlias(entry, excludedAliases = []) {
+  if (normalizeManualLoreScope(entry?.scope) !== 'subject') return false;
+  const excluded = new Set(normalizeLoreExclusionAliases(excludedAliases)
+    .map((alias) => alias.normalize('NFKC').toLocaleLowerCase('en-US')));
+  if (!excluded.size) return false;
+  return [entry?.subject, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])]
+    .map((candidate) => String(candidate || '').replace(/^@+/, '').trim().normalize('NFKC').toLocaleLowerCase('en-US'))
+    .filter(Boolean)
+    .some((candidate) => excluded.has(candidate));
+}
+
 function formatManualLoreEntries(entries = []) {
   const active = (Array.isArray(entries) ? entries : [])
     .map(serializeManualLoreEntry)
@@ -203,12 +229,14 @@ function formatManualLoreEntries(entries = []) {
 function buildManualLoreContext(manualEntries = [], sourceText = '', options = {}) {
   const includeGlobal = options.includeGlobal !== false;
   const includeAllSubjects = options.includeAllSubjects === true;
+  const excludeSubjectAliases = normalizeLoreExclusionAliases(options.excludeSubjectAliases);
   const active = (Array.isArray(manualEntries) ? manualEntries : [])
     .map(serializeManualLoreEntry)
     .filter((entry) => entry.enabled && entry.text.trim());
 
   const selected = active.filter((entry) => {
     if (entry.scope === 'global') return includeGlobal;
+    if (loreEntryMatchesExcludedAlias(entry, excludeSubjectAliases)) return false;
     if (includeAllSubjects) return true;
     return manualLoreEntryMatchesText(entry, sourceText);
   });
@@ -219,6 +247,7 @@ function buildManualLoreContext(manualEntries = [], sourceText = '', options = {
 function buildLearnedLoreText(learnedObservations = [], sourceText = '', options = {}) {
   const includeGlobal = options.includeGlobal !== false;
   const includeAllSubjects = options.includeAllSubjects === true;
+  const excludeSubjectAliases = normalizeLoreExclusionAliases(options.excludeSubjectAliases);
   const approved = (Array.isArray(learnedObservations) ? learnedObservations : [])
     .map(serializeObservation)
     .filter((observation) => observation.approvalStatus === 'approved'
@@ -227,6 +256,7 @@ function buildLearnedLoreText(learnedObservations = [], sourceText = '', options
       && observation.text.trim())
     .filter((observation) => {
       if (observation.scope === 'global') return includeGlobal;
+      if (loreEntryMatchesExcludedAlias(observation, excludeSubjectAliases)) return false;
       if (includeAllSubjects) return true;
       return manualLoreEntryMatchesText(observation, sourceText);
     });
@@ -684,6 +714,8 @@ module.exports = {
   normalizeManualLoreSubject,
   normalizeManualLoreAliases,
   manualLoreEntryMatchesText,
+  normalizeLoreExclusionAliases,
+  loreEntryMatchesExcludedAlias,
   sameLoreScope,
   buildEffectiveLore,
   applyStreamLoreObservations,

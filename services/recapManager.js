@@ -18,7 +18,8 @@ const {
   normalizeIdentity,
   normalizeSharedChatOrigin,
   sharedChatOriginFromTwitchTags,
-  isPersistentLearningEligible,
+  sharedChatOriginFromRecord,
+  isSharedChatGuest,
   canonicalChatMessageId,
   normalizeChatRecord,
   normalizeChatRecords,
@@ -49,7 +50,7 @@ function toStoredChatRecord(value, defaults = {}) {
     ...record,
     body: record.text,
     // Preserve the legacy rendered field for existing Mongo documents/UI code.
-    text: renderChatRecord(record, { includeBotMarker: false, includeOriginMarker: false })
+    text: renderChatRecord(record, { includeBotMarker: false })
   };
 }
 
@@ -887,19 +888,6 @@ function createRecapManager({
     if (dedupeId && recapMessages.some((item, index) => canonicalChatMessageId(item, index) === dedupeId)) return false;
 
     const moderator = String(displayName || 'moderator').trim() || 'moderator';
-    const derivedAuthor = normalizeIdentity(author || identityFromTwitchTags(tags, moderator), {
-      displayName: moderator,
-      role: origin.persistentLearningEligible ? 'moderator' : 'viewer'
-    });
-    if (
-      origin.persistentLearningEligible &&
-      !['moderator', 'broadcaster'].includes(derivedAuthor.role)
-    ) {
-      // A local Twitch announcement callback is itself trusted evidence that
-      // the sender had local announcement permission. Do not apply that
-      // inference to Shared Chat guest/unknown copies.
-      derivedAuthor.role = 'moderator';
-    }
     messageSequence++;
     recapMessages.push(toStoredChatRecord({
       id: messageSequence,
@@ -907,17 +895,14 @@ function createRecapManager({
       sourceMessageId: canonicalSourceId,
       timestamp: sourceTimestamp(timestamp || tags?.['tmi-sent-ts']),
       kind: 'moderator_announcement',
-      author: derivedAuthor,
+      author: normalizeIdentity(author || identityFromTwitchTags(tags, moderator), { displayName: moderator, role: 'moderator' }),
       body,
       sharedChat: origin,
       metadata: { ...metadata, color: String(color || '').trim() }
     }));
 
     markActiveStateDirty();
-    const announcementKind = origin.type === 'shared_guest'
-      ? 'Shared Chat guest announcement'
-      : (origin.type === 'shared_unknown' ? 'Shared Chat unknown-origin announcement' : 'Moderator announcement');
-    console.log(`[Recap] ${announcementKind} recorded from ${moderator}: ${body}`);
+    console.log(`[Recap] ${origin.isGuest ? 'Shared Chat guest announcement' : 'Moderator announcement'} recorded from ${moderator}: ${body}`);
     return true;
   }
 
@@ -964,11 +949,11 @@ function createRecapManager({
     const snapshotMaxEventId = eventSnapshot.length ? eventSnapshot[eventSnapshot.length - 1].id : null;
     const chatRecords = normalizeChatRecords(messageSnapshot);
     const sessionMemoryChatRecords = chatRecords.filter((item) => item.kind !== 'bot_context');
-    const permanentLearningChatRecords = sessionMemoryChatRecords.filter((item) => isPersistentLearningEligible(item));
-    const sharedChatExternalCount = sessionMemoryChatRecords.length - permanentLearningChatRecords.length;
+    const permanentLearningChatRecords = sessionMemoryChatRecords.filter((item) => !isSharedChatGuest(item));
+    const sharedChatGuestCount = sessionMemoryChatRecords.length - permanentLearningChatRecords.length;
 
     console.log(`[Recap] Automatic recap triggered by ${reason}.`);
-    console.log(`[Recap] Window contains ${chatRecords.length} chat messages (${sharedChatExternalCount} Shared Chat external/unknown-origin) and ${eventSnapshot.length} verified Twitch event(s).`);
+    console.log(`[Recap] Window contains ${chatRecords.length} chat messages (${sharedChatGuestCount} Shared Chat guest-origin) and ${eventSnapshot.length} verified Twitch event(s).`);
 
     try {
       let twitchMessage;
@@ -988,8 +973,34 @@ function createRecapManager({
 
       try {
         streamLoreRecord = await getStreamLore(channelName);
-        const loreMatchSource = [...chatRecords.map((item) => renderChatRecord(item)), ...eventSnapshot.map((event) => renderEventRecord(event))].join('\n');
-        streamLore = buildEffectiveLore(streamLoreRecord?.manualEntries || [], streamLoreRecord?.learnedObservations || [], loreMatchSource, { includeGlobal: true });
+        // Guest messages can mention legitimate GeneralQwert lore subjects, so
+        // their message BODY remains useful for matching. Their guest display
+        // name/source community must not auto-bind a same-named GeneralQwert
+        // subject simply because Twitch copied that speaker into the room.
+        const loreMatchSource = [
+          ...chatRecords.map((item) => isSharedChatGuest(item) ? String(item.text || '') : renderChatRecord(item)),
+          ...eventSnapshot.map((event) => renderEventRecord(event))
+        ].join('\n');
+        const sharedChatLoreExclusions = [...new Set(chatRecords
+          .filter((item) => isSharedChatGuest(item))
+          .flatMap((item) => {
+            const origin = sharedChatOriginFromRecord(item);
+            return [
+              ...(Array.isArray(item?.author?.aliases) ? item.author.aliases : []),
+              item?.author?.displayName,
+              item?.author?.login,
+              origin.sourceBroadcasterDisplayName,
+              origin.sourceBroadcasterLogin
+            ];
+          })
+          .map((value) => String(value || '').trim())
+          .filter(Boolean))];
+        streamLore = buildEffectiveLore(
+          streamLoreRecord?.manualEntries || [],
+          streamLoreRecord?.learnedObservations || [],
+          loreMatchSource,
+          { includeGlobal: true, excludeSubjectAliases: sharedChatLoreExclusions }
+        );
         if (streamLore) console.log(`[Recap] Loaded ${streamLore.length} characters of stream-specific lore from MongoDB.`);
       } catch (loreErr) {
         console.error('[Recap] Could not load stream-specific lore. Continuing without it:', loreErr.message || loreErr);
@@ -1065,12 +1076,12 @@ function createRecapManager({
           const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
           // Bot answers can help the public recap understand surrounding viewer conversation,
           // but they must not become self-learning evidence. Shared Chat guest messages remain
-          // useful TEMPORARY same-stream context, while permanent Qwert viewer profiles and
+          // useful TEMPORARY same-stream context, while permanent Qwert Viewer Profiles and
           // Stream Lore only learn from messages originating in Qwert's own room.
           const memoryChatRecords = sanitizeChatForGemini(sessionMemoryChatRecords).records;
           const permanentLearningRecords = sanitizeChatForGemini(permanentLearningChatRecords).records;
-          if (sharedChatExternalCount > 0) {
-            console.log(`[Shared Chat] Kept ${sharedChatExternalCount} Shared Chat external/unknown-origin message(s) in recap/session context and excluded them from permanent Viewer Profile and Stream Lore learning.`);
+          if (sharedChatGuestCount > 0) {
+            console.log(`[Shared Chat] Kept ${sharedChatGuestCount} guest-origin message(s) in recap/session context and excluded them from permanent Viewer Profile and Stream Lore learning.`);
           }
 
           if (sessionMemoryConfig.enabled) {

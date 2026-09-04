@@ -67,7 +67,7 @@ const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap to use more of the avai
 - Do not count narrower wording as a new detail. If a broad idea is already covered, do not repeat a narrower version unless it adds a clearly different supported event, conclusion, or reaction.
 - Avoid semantic duplication even when the wording is different.
 - If several messages belong to the same topic, summarize that topic once and use remaining space for a different noteworthy topic when one exists.
-- Preserve only unprefixed [MODERATOR ANNOUNCEMENT ...] lines as intentional GeneralQwert moderator/broadcaster statements when relevant. Shared Chat guest/unknown announcements belong to their source/uncertain room and are not Qwert-channel authority.
+- Preserve moderator announcements as intentional moderator/broadcaster statements when relevant without inventing implications beyond their text.
 - Do not pad, repeat, or add mundane filler just to hit the target.`;
 
 function normalizeChannelName(channelName) {
