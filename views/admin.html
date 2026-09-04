@@ -707,7 +707,7 @@
           <div class="native-command-card" data-native-command="clip" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!clip</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Creates a Twitch clip with an optional title and duration override. Uses a 60-second global cooldown.</div>
+              <div class="detail">Creates a live Twitch clip. Blank titles get a fast neutral gaming title from Gemini, with deterministic/Twitch fallback. Uses a 60-second global cooldown.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
@@ -715,7 +715,7 @@
           <div class="native-command-card" data-native-command="cliplast" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!cliplast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Creates a Twitch clip and saves it as !last. No cooldown; only works while live in an approved official Pokémon category.</div>
+              <div class="detail">Creates a Twitch clip and saves it as !last. Blank titles get a fast negative run-loss title from Gemini. Shares a 60-second cooldown with !setlast and only works while live in an approved official Pokémon category.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button><span class="native-command-status enabled">Built-in</span></div>
           </div>
@@ -723,7 +723,7 @@
           <div class="native-command-card" data-native-command="setlast" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!setlast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Validates a Qwert Twitch clip URL and saves it as !last. No cooldown; only works while live in an approved official Pokémon category.</div>
+              <div class="detail">Validates a Qwert Twitch clip URL and saves it as !last. Shares a 60-second cooldown with !cliplast and only works while live in an approved official Pokémon category.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
           </div>

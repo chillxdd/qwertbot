@@ -16,11 +16,9 @@ const lastClipSchema = new mongoose.Schema({
 const clipCommandConfigSchema = new mongoose.Schema({
   channelName: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
   clip: {
-    defaultTitle: { type: String, default: 'Qwert Clip', trim: true },
     defaultDuration: { type: Number, default: 45 }
   },
   cliplast: {
-    defaultTitle: { type: String, default: 'Last Notable Run End', trim: true },
     defaultDuration: { type: Number, default: 45 }
   },
   lastClip: { type: lastClipSchema, default: () => ({}) }

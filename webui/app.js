@@ -166,16 +166,14 @@ const NATIVE_RESPONSE_FIELDS = {
   ]
 };
 const NATIVE_SETTING_DEFAULTS = {
-  clip: { defaultTitle: 'Qwert Clip', defaultDuration: 45 },
-  cliplast: { defaultTitle: 'Last Notable Run End', defaultDuration: 45 }
+  clip: { defaultDuration: 45 },
+  cliplast: { defaultDuration: 45 }
 };
 const NATIVE_SETTING_FIELDS = {
   clip: [
-    ['defaultTitle', 'Default Clip Title', 'Used by !clip when no title is supplied.', 'text'],
     ['defaultDuration', 'Default Duration', '5–60 seconds. Used when no explicit <duration> | prefix is supplied.', 'number']
   ],
   cliplast: [
-    ['defaultTitle', 'Default Clip Title', 'Used by !cliplast when no title is supplied.', 'text'],
     ['defaultDuration', 'Default Duration', '5–60 seconds. Used when no explicit <duration> | prefix is supplied.', 'number']
   ]
 };
@@ -206,7 +204,7 @@ function renderNativeResponseFields(command) {
 
   const settingFields = (NATIVE_SETTING_FIELDS[command] || []).map(([key, label, help, type]) => {
     const value = nativeClipSettings?.[command]?.[key] ?? '';
-    const attrs = type === 'number' ? ' min="5" max="60" step="1"' : ' maxlength="250"';
+    const attrs = type === 'number' ? ' min="5" max="60" step="1"' : '';
     return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><input data-native-setting-key="${esc(key)}" type="${type}" value="${esc(value)}"${attrs}><div class="detail">${esc(help)}</div></div>`;
   });
 
@@ -228,7 +226,10 @@ function renderNativeResponseFields(command) {
     info.push(`<div class="detail">Built-in global cooldown: ${esc(seconds)}s, shared between <code>!setlast</code> and <code>!cliplast</code>. This command only works while Qwert is live in an approved official Pokémon game category.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
-    info.push(`<div class="detail">Syntax: <code>!${esc(command)} &lt;title&gt;</code> or <code>!${esc(command)} &lt;duration&gt; | &lt;title&gt;</code>. Duration accepts both <code>60</code> and <code>60s</code>. A title beginning with a number is treated as a title unless a pipe is present.</div>`);
+    const tone = command === 'clip'
+      ? 'a short neutral gaming title'
+      : 'a short negative run-loss title';
+    info.push(`<div class="detail">Syntax: <code>!${esc(command)}</code>, <code>!${esc(command)} &lt;title&gt;</code>, <code>!${esc(command)} &lt;duration&gt; | &lt;title&gt;</code>, or <code>!${esc(command)} &lt;duration&gt; |</code>. Duration accepts both <code>60</code> and <code>60s</code>. A title beginning with a number is treated as a title unless a pipe is present. When the title is blank, Gemini gets up to 3 seconds to generate ${tone} with no chat/context; then QWERTBOT uses a dated stream-timestamp fallback, and finally Twitch's own default if necessary.</div>`);
   }
 
   $('nativeResponseFields').innerHTML = [...settingFields, ...responseFields, ...info].join('');

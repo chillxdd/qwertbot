@@ -4,15 +4,17 @@ const {
   getLiveStreamInfo,
   validateClipForChannel
 } = require('./twitchClips');
+const { requestGeminiText } = require('./geminiClient');
 
 const MIN_CLIP_DURATION = 5;
 const MAX_CLIP_DURATION = 60;
 const LAST_COMMAND_COOLDOWN_MS = 30 * 1000;
 const CLIP_COMMAND_COOLDOWN_MS = 60 * 1000;
 const LAST_UPDATE_COOLDOWN_MS = 60 * 1000;
+const AUTO_TITLE_TIMEOUT_MS = 3000;
 const DEFAULT_CLIP_SETTINGS = Object.freeze({
-  clip: { defaultTitle: 'Qwert Clip', defaultDuration: 45 },
-  cliplast: { defaultTitle: 'Last Notable Run End', defaultDuration: 45 }
+  clip: { defaultDuration: 45 },
+  cliplast: { defaultDuration: 45 }
 });
 
 // Exact normalized Twitch categories. This intentionally excludes fan games and
@@ -83,19 +85,16 @@ function clampDuration(value, fallback = 45) {
   return Math.min(MAX_CLIP_DURATION, Math.max(MIN_CLIP_DURATION, Math.round(number * 10) / 10));
 }
 
-function normalizeTitle(value, fallback) {
-  const text = String(value ?? '').trim();
-  return (text || String(fallback || '').trim()).slice(0, 250);
+function normalizeTitle(value) {
+  return String(value ?? '').trim().slice(0, 250);
 }
 
 function normalizeClipSettings(input = {}) {
   return {
     clip: {
-      defaultTitle: normalizeTitle(input?.clip?.defaultTitle, DEFAULT_CLIP_SETTINGS.clip.defaultTitle),
       defaultDuration: clampDuration(input?.clip?.defaultDuration, DEFAULT_CLIP_SETTINGS.clip.defaultDuration)
     },
     cliplast: {
-      defaultTitle: normalizeTitle(input?.cliplast?.defaultTitle, DEFAULT_CLIP_SETTINGS.cliplast.defaultTitle),
       defaultDuration: clampDuration(input?.cliplast?.defaultDuration, DEFAULT_CLIP_SETTINGS.cliplast.defaultDuration)
     }
   };
@@ -109,29 +108,143 @@ function parseClipArguments(rawMessage, commandName, defaults = {}) {
   if (token !== prefix) return null;
   const args = firstSpace === -1 ? '' : raw.slice(firstSpace).trim();
   const defaultDuration = clampDuration(defaults.defaultDuration, 45);
-  const defaultTitle = normalizeTitle(defaults.defaultTitle, 'Qwert Clip');
 
-  if (!args) return { title: defaultTitle, duration: defaultDuration, usedDefaults: true };
+  if (!args) {
+    return { title: '', duration: defaultDuration, autoTitle: true, usedDefaults: true };
+  }
 
   // A leading number is a duration ONLY when followed by a pipe delimiter.
-  // This keeps "!clip 30 seconds to mars" as a title, while both
-  // "!clip 60 | title" and "!clip 60s | title" explicitly override duration.
-  const explicit = args.match(/^([0-9]+(?:\.[0-9]+)?)\s*s?\s*\|\s*(.+)$/i);
+  // This keeps "!clip 30 seconds to mars" as a title. Both "60 | title"
+  // and "60s | title" override duration. A blank right side intentionally
+  // means "use this duration and generate an automatic title".
+  const explicit = args.match(/^([0-9]+(?:\.[0-9]+)?)\s*s?\s*\|\s*(.*)$/i);
   if (explicit) {
     const duration = Number(explicit[1]);
-    const title = String(explicit[2] || '').trim();
+    const title = normalizeTitle(explicit[2]);
     if (!Number.isFinite(duration) || duration < MIN_CLIP_DURATION || duration > MAX_CLIP_DURATION) {
       return { error: `Duration must be between ${MIN_CLIP_DURATION} and ${MAX_CLIP_DURATION} seconds.` };
     }
-    if (!title) return { error: 'A clip title is required after the pipe.' };
-    return { title: normalizeTitle(title, defaultTitle), duration, usedDefaults: false };
+    return {
+      title,
+      duration,
+      autoTitle: !title,
+      usedDefaults: false
+    };
   }
 
-  if (args.includes('|') && /^\s*[0-9]+(?:\.[0-9]+)?\s*s?\s*\|/i.test(args)) {
-    return { error: 'A clip title is required after the pipe.' };
+  return {
+    title: normalizeTitle(args),
+    duration: defaultDuration,
+    autoTitle: false,
+    usedDefaults: false
+  };
+}
+
+const NEUTRAL_CLIP_TITLE_PROMPT = `Generate one short, playful Twitch clip title for a general gaming moment.
+Rules:
+- 2 to 6 words.
+- Neutral tone only. Do not imply a win, loss, death, failure, success, clutch, throw, survival, or any specific outcome.
+- Keep it broadly gaming-related and random/varied.
+- Do not mention specific games, characters, players, streamers, usernames, moves, locations, or events.
+- Return only the title. No quotes, label, punctuation explanation, or extra text.`;
+
+const RUN_LOSS_CLIP_TITLE_PROMPT = `Generate one short, playful Twitch clip title for the end of a gaming challenge run that was lost.
+Rules:
+- 2 to 6 words.
+- Negative/loss tone is appropriate because the run is confirmed over.
+- Keep it generic and random/varied.
+- Do not invent or mention specific games, characters, moves, opponents, locations, players, streamers, usernames, or circumstances.
+- Return only the title. No quotes, label, punctuation explanation, or extra text.`;
+
+const NON_NEUTRAL_GENERAL_TITLE_RE = /\b(win|wins|won|winner|victory|victorious|clutch|clutched|fail|fails|failed|failure|loss|lost|lose|loses|death|dead|died|dies|kill|killed|kills|throw|threw|thrown|choke|choked|survive|survived|survival|miracle|saved|save|defeat|defeated)\b/i;
+
+function sanitizeGeneratedClipTitle(value, kind = 'clip') {
+  let text = String(value || '').trim();
+  if (!text) return '';
+  text = text.replace(/^```[^\n]*\n?/i, '').replace(/```$/i, '').trim();
+  text = text.split(/\r?\n/)[0].trim();
+  text = text.replace(/^\s*(?:title|clip title)\s*:\s*/i, '').trim();
+  text = text.replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '').trim();
+  text = text.replace(/\s+/g, ' ').slice(0, 100).trim();
+  if (!text) return '';
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length < 2 || words.length > 8) return '';
+  if (/https?:\/\//i.test(text)) return '';
+  if (kind === 'clip' && NON_NEUTRAL_GENERAL_TITLE_RE.test(text)) return '';
+  return text;
+}
+
+function formatPacificDate(ms = Date.now()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit'
+    }).formatToParts(new Date(ms));
+    const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    if (byType.month && byType.day && byType.year) return `${byType.month}/${byType.day}/${byType.year}`;
+  } catch (_) {}
+  return '';
+}
+
+function formatElapsedStreamTime(startedAt, nowMs = Date.now()) {
+  const startMs = Date.parse(String(startedAt || ''));
+  if (!Number.isFinite(startMs) || startMs <= 0 || !Number.isFinite(Number(nowMs)) || Number(nowMs) < startMs) return '';
+  const totalSeconds = Math.max(0, Math.floor((Number(nowMs) - startMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function buildFallbackClipTitle(kind, liveInfo, nowMs = Date.now()) {
+  const date = formatPacificDate(nowMs);
+  const elapsed = formatElapsedStreamTime(liveInfo?.startedAt, nowMs);
+  if (!date || !elapsed) return '';
+  const prefix = kind === 'cliplast' ? 'Qwert Run Loss' : 'Qwert Clip';
+  return `${prefix} ${date} ${elapsed}`;
+}
+
+async function generateAutomaticClipTitle(kind, liveInfo, nowMs = Date.now()) {
+  const prompt = kind === 'cliplast' ? RUN_LOSS_CLIP_TITLE_PROMPT : NEUTRAL_CLIP_TITLE_PROMPT;
+  const started = Date.now();
+  try {
+    const request = requestGeminiText(prompt, {
+      priority: 'high',
+      timeoutMs: Math.max(1000, AUTO_TITLE_TIMEOUT_MS - 500),
+      deadlineAt: started + AUTO_TITLE_TIMEOUT_MS
+    });
+    let timeoutId = null;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        const err = new Error('Gemini clip-title request timed out.');
+        err.clipTitleTimeout = true;
+        reject(err);
+      }, AUTO_TITLE_TIMEOUT_MS);
+    });
+    let generated;
+    try {
+      generated = await Promise.race([request, timeout]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+    const clean = sanitizeGeneratedClipTitle(generated, kind);
+    if (clean) return { title: clean, source: 'gemini' };
+    console.warn(`[Clips] Gemini returned an unusable automatic ${kind} title; using deterministic fallback.`);
+  } catch (err) {
+    console.warn(`[Clips] Automatic ${kind} title unavailable after ${Date.now() - started}ms: ${err?.message || err}`);
   }
 
-  return { title: normalizeTitle(args, defaultTitle), duration: defaultDuration, usedDefaults: false };
+  const fallback = buildFallbackClipTitle(kind, liveInfo, nowMs);
+  if (fallback) return { title: fallback, source: 'fallback' };
+  return { title: '', source: 'twitch' };
+}
+
+async function resolveClipTitle(kind, parsed, liveInfo) {
+  const supplied = normalizeTitle(parsed?.title);
+  if (supplied) return { title: supplied, source: 'moderator' };
+  return generateAutomaticClipTitle(kind, liveInfo);
 }
 
 function formatRemaining(ms) {
@@ -302,11 +415,12 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     }
     lastUpdateBusy = true;
     try {
-      await requireOfficialPokemonLive();
+      const liveInfo = await requireOfficialPokemonLive();
       const { settings } = await readConfig();
       const parsed = parseClipArguments(rawMessage, '!cliplast', settings.cliplast);
       if (parsed?.error) throw new Error(parsed.error);
-      const clip = await createClip(channel, parsed);
+      const resolvedTitle = await resolveClipTitle('cliplast', parsed, liveInfo);
+      const clip = await createClip(channel, { ...parsed, title: resolvedTitle.title });
       const saved = await saveLastClip(clip, 'cliplast', identity);
       lastUpdateCommandUse = Date.now();
       await say(channelArg, await response('cliplast', 'success', { user: displayName, clipurl: saved.url, cliptitle: saved.title || '' }));
@@ -332,10 +446,13 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     }
     clipCommandUse = now;
     try {
+      const liveInfo = await getLiveStreamInfo(channel);
+      if (!liveInfo.live) throw new Error('The channel is not live.');
       const { settings } = await readConfig();
       const parsed = parseClipArguments(rawMessage, '!clip', settings.clip);
       if (parsed?.error) throw new Error(parsed.error);
-      const clip = await createClip(channel, parsed);
+      const resolvedTitle = await resolveClipTitle('clip', parsed, liveInfo);
+      const clip = await createClip(channel, { ...parsed, title: resolvedTitle.title });
       await say(channelArg, await response('clip', 'success', { user: displayName, clipurl: clip.url, cliptitle: clip.title || '' }));
       console.log(`[Clips] !clip created ${clip.url} by ${displayName}.`);
       return { matched: true, responded: true, reason: 'success', clip };
@@ -387,11 +504,16 @@ module.exports = {
   LAST_COMMAND_COOLDOWN_MS,
   CLIP_COMMAND_COOLDOWN_MS,
   LAST_UPDATE_COOLDOWN_MS,
+  AUTO_TITLE_TIMEOUT_MS,
   DEFAULT_CLIP_SETTINGS,
   OFFICIAL_POKEMON_CATEGORY_NAMES,
   normalizeCategory,
   isOfficialPokemonCategory,
   normalizeClipSettings,
   parseClipArguments,
+  sanitizeGeneratedClipTitle,
+  formatElapsedStreamTime,
+  buildFallbackClipTitle,
+  generateAutomaticClipTitle,
   createClipCommandManager
 };
