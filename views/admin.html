@@ -663,7 +663,7 @@
         <div class="custom-command-header">
           <div>
             <h3>Native Commands</h3>
-            <div class="detail">Built-in commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they belong to bot features; user-facing responses can be customized here.</div>
+            <div class="detail">Commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they belong to bot features; user-facing responses can be customized here.</div>
           </div>
           <div class="custom-command-list-controls">
             <label class="custom-command-sort-label" for="nativeCommandUserLevelFilter">User Level
@@ -685,7 +685,7 @@
               <div class="native-command-title"><code>!commands</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Links viewers to the public SqwertArmyBot command directory.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="recap" data-user-level="everyone">
@@ -693,7 +693,7 @@
               <div class="native-command-title"><code>!recap</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="last" data-user-level="everyone">
@@ -701,23 +701,23 @@
               <div class="native-command-title"><code>!last</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Shows the saved last notable Pokémon run clip. Uses a 30-second global cooldown.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="clip" data-user-level="moderator">
             <div class="native-command-main">
-              <div class="native-command-title"><code>!clip</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="native-command-title"><code>!clip</code><span class="user-level-badge user-level-moderator">Moderator</span><span class="native-command-status enabled">AI</span></div>
               <div class="detail">Creates a live Twitch clip. Blank titles get a fast neutral gaming title from Gemini, with deterministic/Twitch fallback. Uses a 60-second global cooldown.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="cliplast" data-user-level="moderator">
             <div class="native-command-main">
-              <div class="native-command-title"><code>!cliplast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="native-command-title"><code>!cliplast</code><span class="user-level-badge user-level-moderator">Moderator</span><span class="native-command-status enabled">AI</span></div>
               <div class="detail">Creates a Twitch clip and saves it as !last. Blank titles get a fast negative run-loss title from Gemini. Shares a 60-second cooldown with !setlast and only works while live in an approved official Pokémon category.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="setlast" data-user-level="moderator">
@@ -725,7 +725,7 @@
               <div class="native-command-title"><code>!setlast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Validates a Qwert Twitch clip URL and saves it as !last. Shares a 60-second cooldown with !cliplast and only works while live in an approved official Pokémon category.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="startrecap" data-user-level="moderator">
@@ -733,7 +733,7 @@
               <div class="native-command-title"><code>!startrecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="stoprecap" data-user-level="moderator">
@@ -741,7 +741,7 @@
               <div class="native-command-title"><code>!stoprecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="repin" data-user-level="moderator">
@@ -749,7 +749,7 @@
               <div class="native-command-title"><code>!repin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Enables Persistent Stream Pin and restores the configured pin immediately.</div>
             </div>
-            <div class="custom-command-actions"><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"></div>
           </div>
 
           <div class="native-command-card" data-native-command="unpin" data-user-level="moderator">
@@ -757,7 +757,7 @@
               <div class="native-command-title"><code>!unpin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
               <div class="detail">Unpins the current message and disables Persistent Stream Pin.</div>
             </div>
-            <div class="custom-command-actions"><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"></div>
           </div>
 
           <div class="native-command-card" data-native-command="optout" data-user-level="everyone">
@@ -765,7 +765,7 @@
               <div class="native-command-title"><code>!optout</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Opts the viewer out of Viewer Profiles immediately. Learning and AI use stop at once; the existing profile is retained for 30 days in case they opt back in, then its stored profile content is deleted.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="optin" data-user-level="everyone">
@@ -773,7 +773,7 @@
               <div class="native-command-title"><code>!optin</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
               <div class="detail">Opts the viewer back into Viewer Profiles. If they return within 30 days, their retained profile is reactivated; after that, a new profile starts fresh.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button><span class="native-command-status enabled">Built-in</span></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
         </div>
 
