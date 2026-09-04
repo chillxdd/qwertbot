@@ -166,7 +166,158 @@ function noteTemporaryFailure(err) {
   if (delayMs > 0) globalBackoffUntil = Math.max(globalBackoffUntil, Date.now() + delayMs);
 }
 
-async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true } = {}) {
+function buildGeminiHttpError(response, data) {
+  const err = new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
+  err.status = response.status;
+  err.retryable = RETRYABLE_STATUSES.has(response.status);
+  err.retryAfterMs = parseRetryAfterMs(response, data);
+  err.geminiData = data;
+  noteTemporaryFailure(err);
+  return err;
+}
+
+function streamEventFailure(event) {
+  const interaction = event?.interaction && typeof event.interaction === 'object' ? event.interaction : null;
+  const status = String(interaction?.status || event?.status || '').trim().toLowerCase();
+  const eventType = String(event?.event_type || '').trim().toLowerCase();
+  const failed = eventType === 'interaction.failed' || ['failed', 'cancelled', 'budget_exceeded'].includes(status);
+  if (!failed) return null;
+  const message = interaction?.error?.message || event?.error?.message || `Gemini interaction ended with status ${status || eventType || 'failed'}.`;
+  const err = new Error(message);
+  err.status = Number(interaction?.error?.code || event?.error?.code || 0) || undefined;
+  err.retryable = err.status ? RETRYABLE_STATUSES.has(err.status) : false;
+  return err;
+}
+
+async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout }) {
+  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
+
+  const controller = new AbortController();
+  const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
+  const startedAt = Date.now();
+  const timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
+  let response;
+
+  try {
+    response = await fetch(GEMINI_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/event-stream',
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({ model: GEMINI_MODEL, input: prompt, stream: true }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      let data = null;
+      try { data = await response.json(); } catch (_) {}
+      throw buildGeminiHttpError(response, data);
+    }
+
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      const err = new Error('Gemini streaming response did not include a readable body.');
+      err.retryable = true;
+      throw err;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let outputText = '';
+    let finalInteraction = null;
+    let firstEventAt = 0;
+
+    const processBlock = (block) => {
+      const dataLines = String(block || '')
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart());
+      if (!dataLines.length) return;
+      const payload = dataLines.join('\n').trim();
+      if (!payload || payload === '[DONE]') return;
+
+      let event;
+      try {
+        event = JSON.parse(payload);
+      } catch (_) {
+        return;
+      }
+
+      if (!firstEventAt) {
+        firstEventAt = Date.now();
+        const openMs = firstEventAt - startedAt;
+        if (openMs >= 5000) console.info(`[Gemini] ${label} stream opened in ${(openMs / 1000).toFixed(1)}s.`);
+      }
+
+      const failure = streamEventFailure(event);
+      if (failure) throw failure;
+
+      if (event?.event_type === 'step.delta' && event?.delta?.type === 'text' && typeof event.delta.text === 'string') {
+        outputText += event.delta.text;
+      }
+      if (event?.interaction && typeof event.interaction === 'object') {
+        finalInteraction = event.interaction;
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const match = buffer.match(/\r?\n\r?\n/);
+        if (!match || match.index === undefined) break;
+        const block = buffer.slice(0, match.index);
+        buffer = buffer.slice(match.index + match[0].length);
+        processBlock(block);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) processBlock(buffer);
+
+    const data = finalInteraction && typeof finalInteraction === 'object'
+      ? { ...finalInteraction }
+      : {};
+    if (outputText && !extractGeminiText(data)) data.output_text = outputText;
+    if (!extractGeminiText(data)) {
+      const err = new Error('Gemini stream completed without readable text.');
+      err.retryable = true;
+      throw err;
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= 10000) {
+      console.info(`[Gemini] ${label} streamed completion in ${(elapsedMs / 1000).toFixed(1)}s.`);
+    }
+    return data;
+  } catch (err) {
+    const timedOut = controller.signal.aborted;
+    if (timedOut) {
+      const wrapped = new Error('Gemini streaming request timed out.');
+      wrapped.timedOut = true;
+      wrapped.retryable = retryOnTimeout !== false;
+      wrapped.elapsedMs = Date.now() - startedAt;
+      console.warn(`[Gemini] ${label} streaming request timed out after ${(wrapped.elapsedMs / 1000).toFixed(1)}s${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
+      noteTemporaryFailure(wrapped);
+      throw wrapped;
+    }
+    noteTemporaryFailure(err);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false } = {}) {
+  if (stream === true) {
+    return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout });
+  }
+
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
@@ -212,15 +363,7 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, la
     throw err;
   }
 
-  if (!response.ok) {
-    const err = new Error(data?.error?.message || data?.message || `Gemini API returned HTTP ${response.status}`);
-    err.status = response.status;
-    err.retryable = RETRYABLE_STATUSES.has(response.status);
-    err.retryAfterMs = parseRetryAfterMs(response, data);
-    err.geminiData = data;
-    noteTemporaryFailure(err);
-    throw err;
-  }
+  if (!response.ok) throw buildGeminiHttpError(response, data);
 
   const elapsedMs = Date.now() - startedAt;
   if (elapsedMs >= 10000) {

@@ -322,7 +322,7 @@ function conservativeFallback(text, identities, mode, safeFallback = '') {
   };
 }
 
-async function requestAudit(prompt, { label, priority, timeoutMs, retryOnTimeout = true, requestText }) {
+async function requestAudit(prompt, { label, priority, timeoutMs, retryOnTimeout = true, stream = false, requestText }) {
   const send = typeof requestText === 'function'
     ? requestText
     : (value, options) => requestGeminiTextWithRetry(value, options);
@@ -331,6 +331,7 @@ async function requestAudit(prompt, { label, priority, timeoutMs, retryOnTimeout
     priority,
     timeoutMs,
     retryOnTimeout,
+    stream,
     maxRetries: 1,
     retryDelaysMs: [1200, 2500]
   });
@@ -346,7 +347,7 @@ async function auditGeneratedAttribution({
   mode = 'recap',
   label = 'attribution-audit',
   priority = mode === 'tagged' ? 'high' : 'normal',
-  timeoutMs = mode === 'tagged' ? 6500 : 60000,
+  timeoutMs = mode === 'tagged' ? 6500 : 180000,
   safeFallback = '',
   maxPasses = 2,
   requestText = null
@@ -384,7 +385,7 @@ async function auditGeneratedAttribution({
       try {
         const raw = await requestAudit(
           schemaAttempt === 0 ? prompt : `${prompt}\n\nSCHEMA RETRY: Your previous output was malformed or incomplete. Return exactly one S-row per sentence, with supported as a literal JSON boolean.`,
-          { label: `${label}-pass-${pass + 1}${schemaAttempt ? '-schema-retry' : ''}`, priority, timeoutMs, retryOnTimeout: mode === 'tagged', requestText }
+          { label: `${label}-pass-${pass + 1}${schemaAttempt ? '-schema-retry' : ''}`, priority, timeoutMs, retryOnTimeout: mode === 'tagged', stream: mode !== 'tagged', requestText }
         );
         parsed = parseAuditResults(raw, sentences.length);
         if (parsed.valid) break;

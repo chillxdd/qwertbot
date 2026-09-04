@@ -59,8 +59,9 @@ async function callBackgroundGemini(prompt, label) {
   return requestGeminiTextWithRetry(prompt, {
     label,
     priority: 'low',
-    timeoutMs: 60000,
+    timeoutMs: 180000,
     retryOnTimeout: false,
+    stream: true,
     maxRetries: 1,
     onRetry: ({ attempt, maxRetries, delayMs, error }) => {
       console.warn(`[Gemini Background] ${label} temporary failure; retry ${attempt}/${maxRetries} in ${(delayMs / 1000).toFixed(1)}s: ${error?.message || error}`);
