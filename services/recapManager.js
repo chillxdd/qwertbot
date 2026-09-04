@@ -955,6 +955,8 @@ function createRecapManager({
     console.log(`[Recap] Automatic recap triggered by ${reason}.`);
     console.log(`[Recap] Window contains ${chatRecords.length} chat messages (${sharedChatGuestCount} Shared Chat guest-origin) and ${eventSnapshot.length} verified Twitch event(s).`);
 
+    let recapSent = false;
+
     try {
       let twitchMessage;
       let recapSummaryBody;
@@ -1041,8 +1043,30 @@ function createRecapManager({
       }
 
       await client.say(channelName, twitchMessage, { temporaryPin: true });
+      recapSent = true;
       console.log('[Recap] Sent:', twitchMessage);
       console.log(`[Recap] Length: ${twitchMessage.length}/500`);
+
+      // The public recap is complete as soon as Twitch accepts it. Do not keep
+      // recapInProgress=true while session memory / viewer / lore learning runs,
+      // otherwise the admin UI misleadingly shows GENERATING, the next-recap
+      // countdown sits at 0m 0s, and the completed snapshot remains in the
+      // displayed current-window count. Post-recap learning uses the local
+      // snapshots above, so it is safe to roll the live window forward now.
+      discardMessageSnapshot(snapshotMaxId);
+      discardContextSnapshot(snapshotMaxContextId);
+      discardEventSnapshot(snapshotMaxEventId);
+      firstRecapSent = true;
+      recapInProgress = false;
+      nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
+      scheduleRecapAt(nextRecapAt);
+      markActiveStateDirty();
+      try {
+        await persistActiveState({ force: true });
+      } catch (stateErr) {
+        console.error('[Recap Persistence] Public recap succeeded, but active-state persistence failed:', stateErr?.message || stateErr);
+      }
+      console.log(`[Recap] Public recap cycle complete. Next automatic recap remains on the anchored hourly cadence at ${new Date(nextRecapAt).toISOString()}.`);
 
       if (currentStreamId && recapSummaryBody) {
         try {
@@ -1146,17 +1170,30 @@ function createRecapManager({
         }
       }
 
-      discardMessageSnapshot(snapshotMaxId);
-      discardContextSnapshot(snapshotMaxContextId);
-      discardEventSnapshot(snapshotMaxEventId);
-      firstRecapSent = true;
-      recapInProgress = false;
-      nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
-      scheduleRecapAt(nextRecapAt);
-      markActiveStateDirty();
-      await persistActiveState({ force: true });
-      console.log(`[Recap] Next automatic recap remains on the anchored hourly cadence at ${new Date(nextRecapAt).toISOString()}.`);
+      console.log('[Recap] Post-recap memory/profile/lore processing complete.');
     } catch (err) {
+      if (recapSent) {
+        // Never retry a recap that Twitch already received. Any unexpected
+        // failure after send belongs to background post-processing only.
+        console.error('[Recap] Post-send processing failed. Public recap remains successful:', err);
+        discardMessageSnapshot(snapshotMaxId);
+        discardContextSnapshot(snapshotMaxContextId);
+        discardEventSnapshot(snapshotMaxEventId);
+        firstRecapSent = true;
+        recapInProgress = false;
+        if (!nextRecapAt || nextRecapAt <= Date.now()) {
+          nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
+          scheduleRecapAt(nextRecapAt);
+        }
+        markActiveStateDirty();
+        try {
+          await persistActiveState({ force: true });
+        } catch (stateErr) {
+          console.error('[Recap Persistence] Could not persist state after post-send failure:', stateErr?.message || stateErr);
+        }
+        return;
+      }
+
       console.error('[Recap] Automatic recap failed:', err);
 
       if (err.inputBlocked) {
