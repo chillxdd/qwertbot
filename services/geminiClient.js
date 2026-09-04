@@ -196,7 +196,16 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
   const controller = new AbortController();
   const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
-  const timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
+  let timeout = null;
+  let lastActivityAt = startedAt;
+  let timeoutPhase = 'waiting for response';
+  const armTimeout = (phase = timeoutPhase) => {
+    timeoutPhase = phase;
+    lastActivityAt = Date.now();
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
+  };
+  armTimeout('waiting for response');
   let response;
 
   try {
@@ -216,6 +225,12 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
       try { data = await response.json(); } catch (_) {}
       throw buildGeminiHttpError(response, data);
     }
+
+    // A 200 response only means the SSE connection opened. From here on,
+    // timeoutMs is an inactivity timeout, not a hard cap on total generation
+    // time. Healthy long recaps may legitimately stream for longer than the
+    // timeout as long as Gemini keeps sending data.
+    armTimeout('waiting for stream data');
 
     if (!response.body || typeof response.body.getReader !== 'function') {
       const err = new Error('Gemini streaming response did not include a readable body.');
@@ -255,6 +270,15 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
       const failure = streamEventFailure(event);
       if (failure) throw failure;
 
+      // The current Interactions streaming schema can place the first text
+      // fragment on the model_output step.start event, with later fragments in
+      // step.delta events. Capture both so a short response is never mistaken
+      // for an empty successful stream.
+      if (event?.event_type === 'step.start' && event?.step?.type === 'model_output' && Array.isArray(event.step.content)) {
+        for (const item of event.step.content) {
+          if (item?.type === 'text' && typeof item.text === 'string') outputText += item.text;
+        }
+      }
       if (event?.event_type === 'step.delta' && event?.delta?.type === 'text' && typeof event.delta.text === 'string') {
         outputText += event.delta.text;
       }
@@ -266,6 +290,7 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      armTimeout(firstEventAt ? 'waiting for next stream event' : 'waiting for first stream event');
       buffer += decoder.decode(value, { stream: true });
 
       while (true) {
@@ -298,18 +323,21 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
   } catch (err) {
     const timedOut = controller.signal.aborted;
     if (timedOut) {
-      const wrapped = new Error('Gemini streaming request timed out.');
+      const idleMs = Date.now() - lastActivityAt;
+      const wrapped = new Error(`Gemini streaming request timed out while ${timeoutPhase}.`);
       wrapped.timedOut = true;
       wrapped.retryable = retryOnTimeout !== false;
       wrapped.elapsedMs = Date.now() - startedAt;
-      console.warn(`[Gemini] ${label} streaming request timed out after ${(wrapped.elapsedMs / 1000).toFixed(1)}s${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
+      wrapped.idleMs = idleMs;
+      wrapped.timeoutPhase = timeoutPhase;
+      console.warn(`[Gemini] ${label} streaming request timed out after ${(idleMs / 1000).toFixed(1)}s of inactivity while ${timeoutPhase} (total ${(wrapped.elapsedMs / 1000).toFixed(1)}s)${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
       noteTemporaryFailure(wrapped);
       throw wrapped;
     }
     noteTemporaryFailure(err);
     throw err;
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }
 
