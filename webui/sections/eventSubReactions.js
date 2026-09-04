@@ -183,7 +183,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
 
   function updateAddActionState() {
     $('addEventReactionActionBtn').disabled = actionsEl.children.length >= limits.maxActions;
-    $('eventReactionActionHelp').textContent = `${actionsEl.children.length}/${limits.maxActions} actions. Each delay runs before its action; the first can be 0 seconds.`;
+    $('eventReactionActionHelp').textContent = `${actionsEl.children.length}/${limits.maxActions} actions`;
   }
 
   function addAction(action) { if (actionsEl.children.length >= limits.maxActions) return; actionsEl.appendChild(actionRow(action)); updateAddActionState(); }

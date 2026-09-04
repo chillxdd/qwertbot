@@ -40,14 +40,12 @@
     <div id="messagingPanel" class="section-panel">
       <div class="section-intro">
         <h3>AI Recap</h3>
-        <div class="detail">Manage hourly recaps, testing, chat messages, and prompts.</div>
       </div>
 
       <div id="recapControls" class="recap-control-card">
         <div class="recap-card-heading">
           <div>
             <div class="recap-card-title">Recap Control</div>
-            <div class="detail">Operational controls for the current stream's hourly recap session.</div>
           </div>
         </div>
         <div class="recap-status-grid">
@@ -65,7 +63,6 @@
 
       <div class="recap-utility-card">
         <div class="recap-card-title">Recap Testing</div>
-        <div class="detail">Generate a test using the current recap window without waiting for the next automatic send.</div>
         <button id="storedBtn" class="secondary" type="button">Test Current Recap Window</button>
         <div class="utility-output-label">Result</div>
         <div id="testResult"></div>
@@ -73,7 +70,6 @@
 
       <div class="recap-utility-card">
         <div class="recap-card-title">Send Message to Twitch</div>
-        <div class="detail">Send a manual message directly through the bot's Twitch chat connection.</div>
         <input id="chatMessage" placeholder="Message">
         <button id="sendBtn" type="button">Send to Chat</button>
         <div id="chatMsg" class="detail"></div>
@@ -109,8 +105,8 @@
       <div id="automationSpacingCard" class="custom-global-cooldown-card automation-spacing-card" hidden>
         <div class="custom-global-cooldown-copy">
           <strong id="automationSpacingTitle">Automation Spacing</strong>
-          <div id="automationSpacingDetail" class="detail">Minimum gap between automated recaps, timers, and EventSub reactions. Chat commands are unaffected.</div>
-          <div id="automationReactionTimingDetail" class="detail" hidden>Recaps and timers stay paused during a reaction sequence. Post-Reaction Hold can extend the quiet period afterward.</div>
+          <div id="automationSpacingDetail" class="detail">Minimum gap between recaps, timers, and reactions. Chat commands are unaffected.</div>
+          <div id="automationReactionTimingDetail" class="detail" hidden>Recaps and timers pause during reactions; post-hold extends the pause.</div>
         </div>
         <div class="custom-global-cooldown-control">
           <div class="custom-global-cooldown-input-row">
@@ -152,12 +148,10 @@
           <button id="refreshCustomCommandsBtn" class="secondary" type="button">Refresh</button>
         </div>
       </div>
-      <div class="detail">Create bot-native chat commands and inline phrase triggers.</div>
-
       <div class="custom-global-cooldown-card">
         <div class="custom-global-cooldown-copy">
           <strong>Global Cooldown</strong>
-          <div class="detail">Minimum spacing between any two SqwertArmyBot custom-command messages. Commands attempted during this window are silently ignored.</div>
+          <div class="detail">Minimum gap between custom-command messages; triggers during the gap are ignored.</div>
         </div>
         <div class="custom-global-cooldown-control">
           <div class="custom-global-cooldown-input-row">
@@ -200,7 +194,6 @@
         <div class="custom-editor-block">
           <label class="prompt-label" for="customCommandName">Name</label>
           <input id="customCommandName" type="text" maxlength="80" placeholder="Example: Hydrate">
-          <div class="detail">A friendly name for this command group. It does not trigger chat by itself; the triggers below do.</div>
           <label class="prompt-label" for="customCommandPublicDescription">Public Description <span class="detail">(optional)</span></label>
           <textarea id="customCommandPublicDescription" rows="3" maxlength="300" placeholder="Shown on the public commands page."></textarea>
           <div id="customCommandPublicDescriptionCount" class="detail">0/300 characters</div>
@@ -211,7 +204,7 @@
             <strong>Triggers</strong>
             <button id="addCustomTriggerBtn" class="secondary" type="button">Add Trigger</button>
           </div>
-          <div id="customTriggerHelp" class="detail">Add one or more command or inline-phrase triggers. All triggers share the same command settings.</div>
+          <div id="customTriggerHelp" class="detail">0/25 triggers</div>
           <div id="customCommandTriggers" class="custom-trigger-list"></div>
           <div id="customTriggerMsg" class="detail custom-field-message"></div>
         </div>
@@ -246,7 +239,7 @@
           <div id="customCooldownResponseWrap" class="custom-optional-panel" hidden>
             <label class="prompt-label" for="customCooldownResponse">Cooldown Message</label>
             <textarea id="customCooldownResponse" class="custom-cooldown-response" maxlength="500" placeholder="Example: Easy there $(user) — this command is still on cooldown."></textarea>
-            <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span><span class="detail">Sent when this command is triggered during cooldown. Variables are supported.</span></div>
+            <div class="custom-inline-footer"><span id="customCooldownResponseCount" class="detail">0/500</span></div>
           </div>
         </div>
 
@@ -274,7 +267,7 @@
               </select>
             </div>
           </div>
-          <div id="customSendAsHelp" class="detail">Chat Message sends a normal bot message.</div>
+          <div id="customSendAsHelp" class="detail"></div>
           <div class="custom-response-mode-wrap">
             <label class="prompt-label" for="customResponseMode">Mode</label>
             <select id="customResponseMode">
@@ -282,9 +275,9 @@
               <option value="weighted">Specified Weight</option>
               <option value="ifelse">If / Else (first word after trigger)</option>
             </select>
-            <div id="customResponseModeHelp" class="detail">Equal Odds randomly chooses between all responses.</div>
+            <div id="customResponseModeHelp" class="detail"></div>
             <label id="customAvoidImmediateRepeatWrap" class="inline-check" hidden><input id="customAvoidImmediateRepeat" type="checkbox"> Skip the last response used</label>
-            <div id="customAvoidImmediateRepeatHelp" class="detail" hidden>When 2+ Equal Odds responses exist, the next trigger will never immediately repeat the response used last time.</div>
+            <div id="customAvoidImmediateRepeatHelp" class="detail" hidden></div>
           </div>
           <div id="customResponseHelp" class="detail"></div>
           <div id="customCommandResponses"></div>
@@ -317,7 +310,6 @@
           <div class="custom-counter-body">
             <label class="prompt-label" for="customCounterValue">Value</label>
             <input id="customCounterValue" type="number" min="0" step="1" inputmode="numeric" autocomplete="off">
-            <div class="detail">Enter any whole number greater than or equal to 0.</div>
             <div id="customCounterMsg" class="detail custom-field-message" aria-live="polite"></div>
           </div>
           <div class="modal-actions custom-counter-actions">
@@ -367,18 +359,15 @@
             <button id="refreshTimersBtn" class="secondary" type="button">Refresh</button>
           </div>
         </div>
-        <div class="detail">Background chat messages that run only while Qwert is live.</div>
-
         <div class="custom-editor-block timer-global-settings">
           <div class="custom-response-heading">
-            <strong>Timer Settings</strong>
+            <strong>Global Timer Settings</strong>
             <button id="saveTimerSettingsBtn" class="secondary" type="button">Save Settings</button>
           </div>
           <div class="timer-settings-grid">
             <div>
-              <label class="prompt-label" for="timerGlobalStartDelay">Start Delay</label>
+              <label class="prompt-label" for="timerGlobalStartDelay">Global Start Delay</label>
               <div class="duration-field"><input id="timerGlobalStartDelay" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
-              <div class="detail">Earliest point in the stream when this timer may run.</div>
             </div>
           </div>
           <div id="timerSettingsMsg" class="detail custom-field-message"></div>
@@ -416,7 +405,6 @@
           <div class="custom-editor-block">
             <label class="prompt-label" for="timerName">Name</label>
             <input id="timerName" type="text" maxlength="80" placeholder="Example: Discord Reminder">
-            <div class="detail">A friendly dashboard name. It is never included in the Twitch message.</div>
           </div>
 
           <div class="custom-editor-block">
@@ -443,7 +431,7 @@
                 </select>
               </div>
             </div>
-            <div class="detail">A per-timer start delay is optional, but if set it cannot be lower than the global stream-start delay. Jitter is recalculated after each successful firing.</div>
+            <div class="detail">Per-timer delay cannot be earlier than global; jitter recalculates after each fire.</div>
             <div id="timerScheduleMsg" class="detail custom-field-message"></div>
           </div>
 
@@ -451,14 +439,12 @@
             <strong class="custom-block-title">Activity</strong>
             <div class="timer-settings-grid">
               <div>
-                <label class="prompt-label" for="timerMinimumMessages">Min Messages</label>
+                <label class="prompt-label" for="timerMinimumMessages">Min Messages (0 = off)</label>
                 <input id="timerMinimumMessages" type="number" min="0" max="100000" step="1" value="0">
-                <div class="detail">0 disables this requirement. Count resets after a successful scheduled/manual firing.</div>
               </div>
               <div>
-                <label class="prompt-label" for="timerMinimumViewers">Min Viewers</label>
+                <label class="prompt-label" for="timerMinimumViewers">Min Viewers (0 = off)</label>
                 <input id="timerMinimumViewers" type="number" min="0" max="1000000" step="1" value="0">
-                <div class="detail">0 disables this requirement. Uses Twitch's current stream viewer count.</div>
               </div>
             </div>
             <div id="timerActivityMsg" class="detail custom-field-message"></div>
@@ -474,9 +460,9 @@
                 <option value="equal">Equal Odds</option>
                 <option value="weighted">Specified Weight</option>
               </select>
-              <div id="timerResponseModeHelp" class="detail">Equal Odds randomly chooses between all actions.</div>
+              <div id="timerResponseModeHelp" class="detail"></div>
               <label id="timerAvoidImmediateRepeatWrap" class="inline-check" hidden><input id="timerAvoidImmediateRepeat" type="checkbox"> Skip the last action used</label>
-              <div id="timerAvoidImmediateRepeatHelp" class="detail" hidden>When 2+ Equal Odds actions exist, the next firing will never immediately repeat the action used last time.</div>
+              <div id="timerAvoidImmediateRepeatHelp" class="detail" hidden></div>
             </div>
             <div id="timerResponses"></div>
             <div class="custom-response-bottom-actions">
@@ -537,7 +523,6 @@
             <button id="refreshEventReactionsBtn" class="secondary" type="button">Refresh</button>
           </div>
         </div>
-        <div class="detail">Run ordered bot actions when Twitch EventSub events happen. Reactions can temporarily hold hourly recaps and scheduled timers so important moments are not interrupted.</div>
 
 
         <div id="eventReactionsMsg" class="detail"></div>
@@ -663,7 +648,6 @@
         <div class="custom-command-header">
           <div>
             <h3>Native Commands</h3>
-            <div class="detail">Commands handled directly by SqwertArmyBot code. They are reserved from Custom Commands because they belong to bot features; user-facing responses can be customized here.</div>
           </div>
           <div class="custom-command-list-controls">
             <label class="custom-command-sort-label" for="nativeCommandUserLevelFilter">User Level
@@ -683,7 +667,7 @@
           <div class="native-command-card" data-native-command="commands" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!commands</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
-              <div class="detail">Links viewers to the public SqwertArmyBot command directory.</div>
+              <div class="detail">Opens the public command directory.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -691,7 +675,7 @@
           <div class="native-command-card" data-native-command="recap" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!recap</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
-              <div class="detail">Reports the next hourly recap ETA or the current recap state. Uses its own 5-minute command cooldown.</div>
+              <div class="detail">Shows recap status and ETA.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -699,7 +683,7 @@
           <div class="native-command-card" data-native-command="last" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!last</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
-              <div class="detail">Shows the saved last notable Pokémon run clip. Uses a 30-second global cooldown.</div>
+              <div class="detail">Shows the last notable Pokémon run clip.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -707,7 +691,7 @@
           <div class="native-command-card" data-native-command="clip" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!clip</code><span class="user-level-badge user-level-moderator">Moderator</span><span class="native-command-status enabled">AI</span></div>
-              <div class="detail">Creates a live Twitch clip. Blank titles get a fast neutral gaming title from Gemini, with deterministic/Twitch fallback. Uses a 60-second global cooldown.</div>
+              <div class="detail">Creates a Twitch clip.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button></div>
           </div>
@@ -715,7 +699,7 @@
           <div class="native-command-card" data-native-command="cliplast" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!cliplast</code><span class="user-level-badge user-level-moderator">Moderator</span><span class="native-command-status enabled">AI</span></div>
-              <div class="detail">Creates a Twitch clip and saves it as !last. Blank titles get a fast negative run-loss title from Gemini. Shares a 60-second cooldown with !setlast and only works while live in an approved official Pokémon category.</div>
+              <div class="detail">Creates a clip and saves it as !last.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button></div>
           </div>
@@ -723,7 +707,7 @@
           <div class="native-command-card" data-native-command="setlast" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!setlast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Validates a Qwert Twitch clip URL and saves it as !last. Shares a 60-second cooldown with !cliplast and only works while live in an approved official Pokémon category.</div>
+              <div class="detail">Saves a Twitch clip as !last.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -731,7 +715,7 @@
           <div class="native-command-card" data-native-command="startrecap" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!startrecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Resumes automatic hourly recaps after they have been paused.</div>
+              <div class="detail">Resumes hourly recaps.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -739,7 +723,7 @@
           <div class="native-command-card" data-native-command="stoprecap" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!stoprecap</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Pauses automatic hourly recaps while preserving the current recap window.</div>
+              <div class="detail">Pauses hourly recaps.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -747,7 +731,7 @@
           <div class="native-command-card" data-native-command="repin" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!repin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Enables Persistent Stream Pin and restores the configured pin immediately.</div>
+              <div class="detail">Restores Persistent Stream Pin.</div>
             </div>
             <div class="custom-command-actions"></div>
           </div>
@@ -755,7 +739,7 @@
           <div class="native-command-card" data-native-command="unpin" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!unpin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Unpins the current message and disables Persistent Stream Pin.</div>
+              <div class="detail">Removes and disables Persistent Stream Pin.</div>
             </div>
             <div class="custom-command-actions"></div>
           </div>
@@ -763,7 +747,7 @@
           <div class="native-command-card" data-native-command="optout" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!optout</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
-              <div class="detail">Opts the viewer out of Viewer Profiles immediately. Learning and AI use stop at once; the existing profile is retained for 30 days in case they opt back in, then its stored profile content is deleted.</div>
+              <div class="detail">Stops Viewer Profile learning and use; retained data expires after 30 days.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -771,7 +755,7 @@
           <div class="native-command-card" data-native-command="optin" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!optin</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
-              <div class="detail">Opts the viewer back into Viewer Profiles. If they return within 30 days, their retained profile is reactivated; after that, a new profile starts fresh.</div>
+              <div class="detail">Restores Viewer Profile learning and use.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
@@ -781,12 +765,11 @@
           <div class="custom-dialog-header">
             <div>
               <h3 id="nativeResponseDialogTitle">Native Command Responses</h3>
-              <div class="detail">Customize user-facing responses and command-specific settings without changing command access rules.</div>
             </div>
             <button id="closeNativeResponseDialogBtn" class="secondary" type="button">Close</button>
           </div>
           <div id="nativeResponseFields" class="native-response-fields"></div>
-          <div class="detail">Variables: <code>$(user)</code> is available everywhere. Clip responses may also use <code>$(clipurl)</code> and <code>$(cliptitle)</code>; cooldown responses may use <code>$(remaining)</code>.</div>
+          <div class="detail">Variables: <code>$(user)</code>; clips: <code>$(clipurl)</code>, <code>$(cliptitle)</code>; cooldowns: <code>$(remaining)</code>.</div>
           <div class="custom-editor-actions">
             <button id="saveNativeResponseBtn" type="button">Save Responses</button>
             <button id="resetNativeResponseBtn" class="secondary" type="button">Reset Command to Defaults</button>
@@ -794,7 +777,6 @@
           <div id="nativeResponseMsg" class="detail"></div>
         </dialog>
 
-        <div class="native-command-note detail">Native Commands is for built-in bot features and controls. Ordinary user-defined text responses, counters, random replies, and inline triggers should stay in Custom Commands.</div>
       </div>
     </div>
 
@@ -815,12 +797,9 @@
         <div id="streamLoreAiView" class="subsection-view open">
           <div class="memory-block learned-lore-block">
             <div class="custom-response-heading"><strong>AI-Learned Stream Lore (Global)</strong><span id="streamLoreObservationCount" class="detail">0 observations</span></div>
-            <div class="detail">This is channel-wide lore, not per-viewer memory. New AI observations and suggested revisions stay in Pending Lore until a moderator reviews them. Approved lore can be toggled on/off with <strong>Use</strong>; Unlearn permanently deletes an approved item.</div>
-
 
             <div class="learned-review-section learned-review-pending">
               <div class="custom-response-heading"><strong>Pending Lore & Revisions</strong><span id="streamLorePendingCount" class="detail">0 pending reviews</span></div>
-              <div class="detail">Review both newly discovered lore and suggested revisions here. New lore can automatically refine while pending. Revision cards show the current approved wording beside the AI suggestion before you Accept Revision or Keep Current.</div>
               <div class="pending-confidence-filter-row">
                 <label class="custom-command-sort-label" for="streamLorePendingConfidenceFilter">Confidence
                   <select id="streamLorePendingConfidenceFilter" aria-label="Filter pending stream lore by confidence">
@@ -838,7 +817,6 @@
               <div class="custom-command-header learned-review-header">
                 <div>
                   <h4>Approved Lore</h4>
-                  <div class="detail">Approved observations are eligible for AI context when Use is enabled. New evidence can strengthen support or suggest a revision; any suggested revision appears in Pending Lore above. Approved wording never changes until you accept it.</div>
                 </div>
                 <div class="custom-command-list-controls">
                   <label class="list-search-wrap" for="streamLoreApprovedSearch">
@@ -878,7 +856,7 @@
 
             <div class="learned-review-section lore-directive-settings">
               <div class="custom-response-heading"><strong>Moderator Lore Directives</strong></div>
-              <div class="detail">Mods/Broadcaster can tag <code id="streamLoreDirectiveMention">@&lt;bot_username&gt;</code> without a trailing <code>?</code> and use a clear save/remember instruction such as <code>add the fire alarm to the lore</code>. Only recognized lore-save directives trigger this path. The bot makes one immediate Gemini extraction and sends the result to Pending Stream Lore for normal review.</div>
+              <div class="detail">Example: <code id="streamLoreDirectiveMention">@&lt;bot_username&gt;</code> <code>add the fire alarm to the lore</code></div>
               <div class="personality-controls">
                 <label class="inline-check"><input id="streamLoreDirectiveEnabled" type="checkbox" checked> Enable mod/broadcaster lore directives</label>
                 <label class="inline-check"><input id="streamLoreDirectiveSendResponses" type="checkbox" checked> Send chat responses for recognized directives</label>
@@ -890,7 +868,7 @@
                 <textarea id="streamLoreDirectiveAlreadyKnownResponse" maxlength="500" rows="2" placeholder="@$(user), that already matches existing Stream Lore."></textarea>
                 <label class="prompt-label" for="streamLoreDirectiveFailureResponse">Could-not-extract response</label>
                 <textarea id="streamLoreDirectiveFailureResponse" maxlength="500" rows="2" placeholder="@$(user), I couldn't turn that into a lore proposal. Give me a little more context."></textarea>
-                <div class="detail">These are deterministic templates, not personality replies. Variables: <code>$(user)</code>, <code>$(lore)</code> (the exact generated pending wording), and <code>$(status)</code>. The defaults deliberately do not use <code>$(lore)</code>, so the confirmation stays simple.</div>
+                <div class="detail">Variables: <code>$(user)</code>, <code>$(lore)</code>, <code>$(status)</code>.</div>
               </div>
               <div class="custom-editor-actions">
                 <button id="saveStreamLoreDirectiveSettingsBtn" type="button">Save Lore Directive Settings</button>
@@ -906,11 +884,10 @@
             <div class="custom-command-header">
               <div>
                 <h4>Manually Added Lore</h4>
-                <div class="detail">Structured moderator-written lore. <strong>Global</strong> entries are always available as background context. <strong>Subject-specific</strong> entries are only loaded when their subject or an alias is actually referenced.</div>
+                <div class="detail"><strong>Global</strong> is always available. <strong>Subject-specific</strong> loads only when its subject or alias is mentioned.</div>
               </div>
               <button id="addManualLoreBtn" type="button">Add Lore Entry</button>
             </div>
-            <div class="detail manual-lore-guidance">Use Subject-specific for people, characters, recurring entities, or topics such as <code>Motmo_</code>, <code>coosgoose</code>, <code>Chair</code>, or <code>Kaizo IronMon</code>. This keeps unrelated lore out of Tagged Questions.</div>
             <div class="custom-response-heading"><strong>Manual Lore Cards</strong><span id="manualLoreCount" class="detail">0 entries</span></div>
             <div id="manualLoreList" class="manual-lore-list"></div>
             <div id="loreMsg" class="detail"></div>
@@ -920,7 +897,6 @@
             <div class="custom-editor-header">
               <div>
                 <h4 id="manualLoreDialogTitle">Add Lore Entry</h4>
-                <div class="detail">Keep one subject or one global concept per card.</div>
               </div>
               <button id="manualLoreDialogClose" class="secondary" type="button">Close</button>
             </div>
@@ -934,12 +910,11 @@
             <input id="manualLoreSubject" type="text" maxlength="80" placeholder="Example: Chat culture">
             <div id="manualLoreSubjectHelp" class="detail">For Global lore this is only an organizational label.</div>
             <div id="manualLoreAliasesPanel" hidden>
-              <label class="prompt-label" for="manualLoreAliases">Aliases</label>
-              <input id="manualLoreAliases" type="text" placeholder="Comma-separated, e.g. Motmo, Motmo_">
-              <div class="detail">Any subject or alias match can load this card for a Tagged Question.</div>
+              <label class="prompt-label" for="manualLoreAliases">Aliases (comma-separated)</label>
+              <input id="manualLoreAliases" type="text" placeholder="Motmo, Motmo_">
             </div>
             <label class="prompt-label" for="manualLoreText">Lore</label>
-            <textarea id="manualLoreText" maxlength="2400" placeholder="Write the facts/context that belong to this subject or global concept."></textarea>
+            <textarea id="manualLoreText" maxlength="2400" placeholder="Facts and context"></textarea>
             <div id="manualLoreTextCount" class="detail">0/2400 characters</div>
             <label class="inline-check"><input id="manualLoreEnabled" type="checkbox" checked> Use this lore in AI context</label>
             <div class="custom-editor-actions">
@@ -954,10 +929,9 @@
       <div id="botPersonalityView" class="subsection-view">
       <div class="memory-block">
         <h4>Bot Personality & Tagged Questions</h4>
-        <div class="detail">When a message starts with <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> and ends with <code>?</code>, the bot can send the question to Gemini 3.5 Flash-Lite and answer in the personality below. Tagged AI answers reply directly to the triggering Twitch message when possible. Leaving the Personality field blank disables tagged AI answers.</div>
-        <label class="prompt-label" for="botPersonalityName">Name</label>
+        <div class="detail">Syntax: <code id="botTaggedQuestionMention">@&lt;bot_username&gt;</code> <code>&lt;question&gt;?</code></div>
+        <label class="prompt-label" for="botPersonalityName">Response Name <span class="detail">(optional)</span></label>
         <input id="botPersonalityName" type="text" maxlength="80" placeholder="Example: OakBot">
-        <div class="detail">Optional. Tagged AI replies will begin with a bold-styled Unicode prefix such as <code>(𝗮𝘀 𝗢𝗮𝗸𝗕𝗼𝘁):</code>. This affects tagged questions only; hourly recaps and other bot messages are unchanged.</div>
         <label class="prompt-label" for="botPersonality">Personality</label>
         <textarea id="botPersonality" maxlength="12000" placeholder="Example: You are Professor Oak with exhausted dad energy. Be knowledgeable, concise, slightly dramatic, and keep getting annoyed that nobody lets you out of the bag."></textarea>
         <div id="botPersonalityCount" class="detail">0/12000 characters</div>
@@ -967,25 +941,24 @@
           <div class="personality-cooldown-field">
             <label class="prompt-label" for="botPersonalityCooldown">Cooldown</label>
             <div class="duration-field"><input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
-            <div class="detail">Global cooldown for regular viewers. Minimum 5 seconds. Bypassing mods do not start or extend the viewer cooldown.</div>
+            <div class="detail">Regular viewers only; mods can bypass.</div>
           </div>
           <div class="personality-cooldown-field">
             <label class="prompt-label" for="botPersonalityRecapBuffer">Recap Collision Buffer</label>
             <div class="duration-field"><input id="botPersonalityRecapBuffer" type="number" min="0" max="120" step="1" value="12"><span class="duration-unit">seconds</span></div>
-            <div class="detail">Hourly recaps yield while a Tagged Question is being answered, then wait this long after its reply. Tagged Question replies are never delayed. Set to 0 to disable.</div>
+            <div class="detail">Recaps wait this long after an AI reply. Set 0 to disable.</div>
           </div>
           <label class="inline-check personality-audience-toggle"><input id="botPersonalityUseCooldownResponse" type="checkbox"> Send a custom response while tagged questions are on cooldown</label>
           <div id="botPersonalityCooldownResponsePanel" class="personality-cooldown-response-panel" hidden>
             <label class="prompt-label" for="botPersonalityCooldownResponse">Cooldown Message</label>
             <textarea id="botPersonalityCooldownResponse" maxlength="500" placeholder="$user, try asking again in $time."></textarea>
-            <div class="detail">Optional. <code>$user</code> inserts the viewer name and <code>$time</code> inserts the remaining cooldown, such as <code>14m 51s</code>. Also accepts <code>$(user)</code>, <code>$(time)</code>, and <code>$remaining</code>.</div>
+            <div class="detail">Variables: <code>$user</code>, <code>$time</code>.</div>
           </div>
         </div>
         <div class="ai-retry-panel">
           <div class="ai-retry-heading">
             <div>
               <div class="label">AI Retries</div>
-              <div class="detail">Retries temporary Gemini errors. If all attempts fail, the bot sends the fallback response below.</div>
             </div>
             <label class="inline-check personality-audience-toggle"><input id="botPersonalityRetryEnabled" type="checkbox" checked> Retry temporary AI failures</label>
           </div>
@@ -993,12 +966,12 @@
             <div>
               <label class="prompt-label" for="botPersonalityRetryCount">Retries</label>
               <input id="botPersonalityRetryCount" type="number" min="0" max="2" step="1" value="2">
-              <div class="detail">Default 2. Retry attempts are kept inside an approximately 15-second total retry window.</div>
+              <div class="detail">Max 2; about 15 seconds total.</div>
             </div>
             <div class="ai-retry-failure-response">
               <label class="prompt-label" for="botPersonalityFailureResponse">Failure Message</label>
               <textarea id="botPersonalityFailureResponse" maxlength="500">Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.</textarea>
-              <div class="detail"><code>$user</code> inserts the viewer name.</div>
+              <div class="detail">Variable: <code>$user</code>.</div>
             </div>
           </div>
         </div>
@@ -1006,40 +979,40 @@
           <div class="ai-retry-heading">
             <div>
               <div class="label">Prompt Injection Protection</div>
-              <div class="detail">Message sent when a tagged question is blocked as a likely prompt-injection attempt or when an AI response is suppressed for leaking protected prompt/configuration content.</div>
+              <div class="detail">Used when security checks block a question or response.</div>
             </div>
           </div>
           <label class="prompt-label" for="botPersonalitySecurityRefusalResponse">Security Refusal Message</label>
           <textarea id="botPersonalitySecurityRefusalResponse" maxlength="500">Cute. Chat does not get to rewrite my instructions or make me reveal them. Ask me an actual question.</textarea>
-          <div class="detail"><code>$user</code> or <code>$(user)</code> inserts the viewer name. Leaving this blank restores the built-in default when saved. Security protection itself remains enabled.</div>
+          <div class="detail">Variable: <code>$user</code>. Blank restores the default.</div>
         </div>
         <div class="session-memory-panel">
           <label class="inline-check personality-audience-toggle"><input id="sessionMemoryEnabled" type="checkbox" checked> Use Session Memory</label>
-          <div class="detail">Temporary current-stream memory is built from each completed hourly recap window so tagged questions can answer about earlier moments without relying on the short public recap. It is automatically removed when the stream ends.</div>
+          <div class="detail">Temporary current-stream memory; cleared when the stream ends.</div>
           <div id="sessionMemoryStatus" class="detail session-memory-status">Session memory status not loaded yet.</div>
           <button id="sessionMemorySettingsToggle" class="secondary advanced-toggle" type="button" aria-expanded="false" aria-controls="sessionMemorySettingsBody">Show Advanced Session Memory Settings</button>
           <div id="sessionMemorySettingsBody" class="advanced-settings-body">
-            <div class="advanced-warning">These settings control how much temporary stream memory is supplied to tagged AI questions. Detailed hourly blocks are still retained for the active stream; these limits primarily control what is injected into each question.</div>
+            <div class="advanced-warning">Controls how much current-stream memory is supplied to each Tagged Question.</div>
             <div class="session-memory-settings-grid">
               <div>
                 <label class="prompt-label" for="sessionMemoryRecentHours">Recent Detail (hours)</label>
                 <input id="sessionMemoryRecentHours" type="number" min="1" max="8" step="1" value="2">
-                <div class="detail">Completed memory blocks inside this recent window are included in full.</div>
+                <div class="detail">Blocks in this window are included in full.</div>
               </div>
               <div>
                 <label class="prompt-label" for="sessionMemoryRelevantOlder">Older Blocks</label>
                 <input id="sessionMemoryRelevantOlder" type="number" min="0" max="6" step="1" value="2">
-                <div class="detail">Older blocks are keyword-matched against the viewer's question. Compact summaries for the full stream remain available.</div>
+                <div class="detail">Number of keyword-matched older blocks.</div>
               </div>
               <div>
                 <label class="prompt-label" for="sessionMemoryRecentChat">Recent Chat</label>
                 <input id="sessionMemoryRecentChat" type="number" min="0" max="100" step="1" value="30">
-                <div class="detail">Covers the current hour before the next memory block is generated. Set to 0 to disable.</div>
+                <div class="detail">Current-window messages before the next recap. Set 0 to disable.</div>
               </div>
               <div>
                 <label class="prompt-label" for="sessionMemoryMaxContext">Max Context (characters)</label>
                 <input id="sessionMemoryMaxContext" type="number" min="4000" max="40000" step="500" value="18000">
-                <div class="detail">Hard cap on temporary memory injected into one tagged question.</div>
+                <div class="detail">Per-question character cap.</div>
               </div>
             </div>
             <label class="prompt-label" for="sessionMemoryPromptInstructions">Memory Instructions</label>
@@ -1064,13 +1037,11 @@
         <div class="memory-block">
           <div>
             <h4>Viewer Profiles</h4>
-            <div class="detail">Viewer context learned from meaningful chat and available for tagged AI questions.</div>
           </div>
 
           <div class="viewer-profile-settings-card">
             <div>
               <strong>Profile Settings</strong>
-              <div class="detail">Learn useful, non-sensitive viewer context automatically. Learning and Tagged Question use can be enabled independently.</div>
             </div>
             <div class="viewer-profile-settings-toggles">
               <label class="inline-check"><input id="viewerProfileLearningEnabled" type="checkbox" checked> Automatic Learning</label>
@@ -1083,7 +1054,6 @@
 
           <div class="learned-review-section learned-review-pending viewer-profile-global-pending-review">
             <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingReviewCount" class="detail">0 pending reviews</span></div>
-            <div class="detail">Review newly learned viewer observations and suggested revisions here without opening each profile. Each item shows the viewer it belongs to. New observations use Approve/Reject; revisions use Accept Revision/Keep Current.</div>
             <div class="pending-confidence-filter-row">
               <label class="custom-command-sort-label" for="viewerProfilePendingConfidenceFilter">Confidence
                 <select id="viewerProfilePendingConfidenceFilter" aria-label="Filter pending viewer observations by confidence">
@@ -1102,7 +1072,6 @@
             <div class="custom-command-header learned-review-header">
               <div>
                 <h4>Viewer Profiles</h4>
-                <div class="detail">Open a profile for moderator notes, approved observations, revisions, per-viewer learning controls, or detailed history.</div>
               </div>
               <div class="custom-command-list-controls">
                 <label class="list-search-wrap" for="viewerProfileSearch">
@@ -1180,9 +1149,8 @@
               <div><label class="prompt-label" for="viewerProfileUsername">Twitch Username</label><input id="viewerProfileUsername" type="text" maxlength="80" placeholder="coosgoose"></div>
               <div><label class="prompt-label" for="viewerProfileDisplayName">Display Name</label><input id="viewerProfileDisplayName" type="text" maxlength="80" placeholder="CoosGoose"></div>
             </div>
-            <label class="prompt-label" for="viewerProfileAliases">Aliases / nicknames</label>
+            <label class="prompt-label" for="viewerProfileAliases">Aliases / nicknames (comma-separated)</label>
             <input id="viewerProfileAliases" type="text" maxlength="1000" placeholder="Coos, Goose">
-            <div class="detail">Comma-separated. Used to recognize profile references in tagged questions.</div>
             <div class="viewer-profile-form-grid viewer-profile-toggle-grid">
               <label class="inline-check"><input id="viewerProfileEnabled" type="checkbox" checked> Available to Tagged Questions</label>
               <label class="inline-check"><input id="viewerProfileLearningForUser" type="checkbox" checked> Allow Automatic Learning for this viewer</label>
@@ -1193,7 +1161,6 @@
               <div class="custom-command-header learned-review-header">
                 <div>
                   <div class="custom-response-heading"><strong>Approved Learned Observations</strong><span id="viewerProfileFactCount" class="detail">0 approved</span></div>
-                  <div class="detail">Only approved observations can be used as Tagged Question context. Use can temporarily disable one without deleting it. New evidence can strengthen support or suggest a revision; any suggested revision appears in Pending AI Observations below. Approved wording never changes until you accept it.</div>
                 </div>
                 <div class="custom-command-list-controls">
                   <label class="list-search-wrap" for="viewerProfileFactSearch">
@@ -1230,7 +1197,6 @@
             </div>
             <div class="learned-review-section learned-review-pending viewer-profile-pending-review">
               <div class="custom-response-heading"><strong>Pending AI Observations & Revisions</strong><span id="viewerProfilePendingFactCount" class="detail">0 pending reviews</span></div>
-              <div class="detail">This review queue contains both new observations and suggested revisions for this viewer. New observations can automatically refine while pending. Revision cards show the current approved wording beside the suggestion before you Accept Revision or Keep Current.</div>
               <div class="pending-confidence-filter-row">
                 <label class="custom-command-sort-label" for="viewerProfilePendingFactConfidenceFilter">Confidence
                   <select id="viewerProfilePendingFactConfidenceFilter" aria-label="Filter this viewer's pending observations by confidence">
@@ -1265,7 +1231,6 @@
     <div id="renderLogsPanel" class="section-panel">
       <div class="section-intro">
         <h3>Render Diagnostics</h3>
-        <div class="detail">Live process health and recent Render service logs. Runtime diagnostics come directly from the bot and do not require the Render API.</div>
       </div>
 
       <div class="runtime-diagnostics-grid" aria-label="Runtime diagnostics">
@@ -1282,7 +1247,7 @@
       <div class="render-log-heading">
         <div>
           <div class="recap-card-title">Recent Render Logs</div>
-          <div id="renderLogsMsg" class="detail">Open this section to load diagnostics and recent service logs.</div>
+          <div id="renderLogsMsg" class="detail"></div>
         </div>
       </div>
       <div class="render-log-toolbar">

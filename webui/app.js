@@ -171,10 +171,10 @@ const NATIVE_SETTING_DEFAULTS = {
 };
 const NATIVE_SETTING_FIELDS = {
   clip: [
-    ['defaultDuration', 'Default Duration', '5–60 seconds. Used when no explicit <duration> | prefix is supplied.', 'number']
+    ['defaultDuration', 'Default Duration', 'Used when duration is omitted.', 'number']
   ],
   cliplast: [
-    ['defaultDuration', 'Default Duration', '5–60 seconds. Used when no explicit <duration> | prefix is supplied.', 'number']
+    ['defaultDuration', 'Default Duration', 'Used when duration is omitted.', 'number']
   ]
 };
 let nativeResponses = null;
@@ -216,20 +216,17 @@ function renderNativeResponseFields(command) {
     info.push(`<div class="native-response-field native-current-clip"><label class="prompt-label">Current !last Clip</label><div class="detail">${current}</div></div>`);
   }
   if (command === 'last' && nativeClipCooldowns?.lastSeconds != null) {
-    info.push(`<div class="detail">Built-in global cooldown: ${esc(nativeClipCooldowns.lastSeconds)}s.</div>`);
+    info.push(`<div class="detail">Cooldown: ${esc(nativeClipCooldowns.lastSeconds)}s global.</div>`);
   }
   if (command === 'clip' && nativeClipCooldowns?.clipSeconds != null) {
-    info.push(`<div class="detail">Built-in global cooldown: ${esc(nativeClipCooldowns.clipSeconds)}s.</div>`);
+    info.push(`<div class="detail">Cooldown: ${esc(nativeClipCooldowns.clipSeconds)}s global.</div>`);
   }
   if (command === 'setlast' || command === 'cliplast') {
     const seconds = nativeClipCooldowns?.[`${command}Seconds`] ?? 60;
-    info.push(`<div class="detail">Built-in global cooldown: ${esc(seconds)}s, shared between <code>!setlast</code> and <code>!cliplast</code>. This command only works while Qwert is live in an approved official Pokémon game category.</div>`);
+    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with the other !last editor. Official Pokémon categories only.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
-    const tone = command === 'clip'
-      ? 'a short neutral gaming title'
-      : 'a short negative run-loss title';
-    info.push(`<div class="detail">Syntax: <code>!${esc(command)}</code>, <code>!${esc(command)} &lt;title&gt;</code>, <code>!${esc(command)} &lt;duration&gt; | &lt;title&gt;</code>, or <code>!${esc(command)} &lt;duration&gt; |</code>. Duration accepts both <code>60</code> and <code>60s</code>. A title beginning with a number is treated as a title unless a pipe is present. When the title is blank, Gemini gets up to 3 seconds to generate ${tone} with no chat/context; then QWERTBOT uses a dated stream-timestamp fallback, and finally Twitch's own default if necessary.</div>`);
+    info.push(`<div class="detail native-command-syntax"><code>!${esc(command)} [title]</code><br><code>!${esc(command)} [5–60s] | [title]</code><br>Leave title blank for automatic naming.</div>`);
   }
 
   $('nativeResponseFields').innerHTML = [...settingFields, ...responseFields, ...info].join('');

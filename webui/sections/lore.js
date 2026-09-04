@@ -415,8 +415,8 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
     $('manualLoreSubjectLabel').innerHTML = subjectMode ? 'Subject <span class="detail">(required)</span>' : 'Label <span class="detail">(optional)</span>';
     $('manualLoreSubject').placeholder = subjectMode ? 'Example: Motmo_' : 'Example: Chat culture';
     $('manualLoreSubjectHelp').textContent = subjectMode
-      ? 'The subject or any alias must be referenced before this card is loaded into a Tagged Question.'
-      : 'Global lore is always available as background context; this label is only for organization.';
+      ? 'Loaded when the subject or an alias is mentioned.'
+      : 'Always available; label is only for organization.';
   }
 
   function updateManualLoreTextCount() {
@@ -440,7 +440,7 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
           <button class="danger manual-lore-delete" type="button">Delete</button>
         </div>
       </div>`;
-    }).join('') : '<div class="detail custom-empty-state">No manual lore cards yet. Add Global lore for channel-wide context, or Subject-specific lore for a person, character, entity, or topic.</div>';
+    }).join('') : '<div class="detail custom-empty-state">No manual lore cards yet.</div>';
 
     $('manualLoreList').querySelectorAll('.manual-lore-edit').forEach((button) => {
       button.onclick = () => {
@@ -628,14 +628,9 @@ export function initLoreSection({ $, postJson, maxBotPersonalityNameLength, maxB
       setSessionMemorySettings(d.sessionMemory || {});
       syncCooldownResponseVisibility();
       updatePersonalityCount();
-      const audienceText = d.audience === 'everyone' ? 'Everyone can ask.' : 'Only Mods/Broadcaster can ask.';
-      const cooldownText = ` Cooldown: ${d.cooldownSeconds}s${d.modsBypassCooldown ? ' (Mods/Broadcaster bypass).' : '.'}`;
-      const recapBufferText = ` Recap buffer: ${d.recapCollisionBufferSeconds ?? 12}s.`;
-      const retryText = d.aiRetry?.enabled === false ? ' AI retries: disabled.' : ` AI retries: ${d.aiRetry?.maxRetries ?? 2}.`;
-      const memoryText = d.sessionMemory?.enabled === false ? ' Session Memory: disabled.' : ' Session Memory: enabled.';
       $('botPersonalityMsg').textContent = d.personality
-        ? `Saved. ${audienceText}${cooldownText}${recapBufferText}${retryText}${memoryText}`
-        : `Personality cleared; tagged AI answers are disabled. ${audienceText}${cooldownText}${recapBufferText}${retryText}${memoryText}`;
+        ? 'Saved.'
+        : 'Personality cleared; Tagged Questions disabled.';
       await loadSessionMemoryStatus();
     } catch (_) {
       $('botPersonalityMsg').textContent = 'Could not save personality settings.';

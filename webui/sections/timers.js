@@ -305,8 +305,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   function syncResponseMode() {
     const weighted = $('timerResponseMode').value === 'weighted';
     $('timerResponseModeHelp').textContent = weighted
-      ? 'Specified Weight chooses actions proportionally. Example: weights 1, 2, and 7 are approximately 10%, 20%, and 70%.'
-      : 'Equal Odds randomly chooses between all actions.';
+      ? 'Chosen proportionally by weight.'
+      : '';
     responsesEl.querySelectorAll('.timer-weight-row').forEach((el) => { el.hidden = !weighted; });
     const nonblankActions = [...responsesEl.querySelectorAll('.timer-response-input')].filter((input) => input.value.trim()).length;
     const avoidAvailable = !weighted && nonblankActions >= 2;

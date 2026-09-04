@@ -220,7 +220,7 @@ export function initViewerProfilesSection({ $, esc, postJson }) {
     const listEl = $('viewerProfileList');
 
     if (!page.length) {
-      listEl.innerHTML = `<div class="custom-empty-state detail">${profiles.length ? 'No viewer profiles match your search.' : 'No viewer profiles yet. Profiles can be learned automatically from meaningful chat during hourly recap processing.'}</div>`;
+      listEl.innerHTML = `<div class="custom-empty-state detail">${profiles.length ? 'No viewer profiles match your search.' : 'No viewer profiles yet.'}</div>`;
     } else {
       listEl.innerHTML = page.map((profile) => {
         const approvedFacts = (profile.facts || []).filter((fact) => (fact.approvalStatus || 'approved') === 'approved');

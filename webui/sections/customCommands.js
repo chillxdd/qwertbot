@@ -72,21 +72,19 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     const sendAs = $('customSendAs').value || 'chat';
     $('customAnnouncementColorWrap').hidden = sendAs !== 'announcement';
     $('customSendAsHelp').textContent = sendAs === 'announcement'
-      ? "Announcement sends the selected response using Twitch's highlighted announcement banner. The bot account must be a moderator and authorized for announcements."
-      : sendAs === 'reply'
-        ? 'Replies directly to the message that triggered the command.'
-        : 'Chat Message sends a normal bot message.';
+      ? 'Requires the bot to be a moderator with announcement permission.'
+      : '';
   }
 
   function updateResponseModeUi() {
     const mode = responseMode();
     const help = $('customResponseModeHelp');
     if (mode === 'weighted') {
-      help.textContent = 'Specified Weight chooses proportionally by weight. Example: weights 1, 2, 7 are roughly 10%, 20%, 70%.';
+      help.textContent = 'Chosen proportionally by weight.';
     } else if (mode === 'ifelse') {
-      help.textContent = 'If / Else checks the first word after the matched trigger, case-insensitively. Set a word such as genesect; leave one condition blank for Else.';
+      help.textContent = 'Matches the first word after the trigger; blank condition = Else.';
     } else {
-      help.textContent = 'Equal Odds randomly chooses between all responses.';
+      help.textContent = '';
     }
     responsesEl.querySelectorAll('.custom-response-row').forEach((row) => {
       row.querySelector('.custom-response-weight-wrap').hidden = mode !== 'weighted';
@@ -146,7 +144,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
 
   function updateAddTriggerState() {
     $('addCustomTriggerBtn').disabled = triggersEl.children.length >= maxTriggers;
-    $('customTriggerHelp').textContent = `${triggersEl.children.length}/${maxTriggers} trigger slots. Mix !Command and Inline Phrase triggers freely; every trigger runs the same command settings and response pool.`;
+    $('customTriggerHelp').textContent = `${triggersEl.children.length}/${maxTriggers} triggers`;
   }
 
   function addTrigger(value = { triggerType: 'command', trigger: '' }) {
@@ -202,11 +200,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('addCustomResponseBtn').disabled = responsesEl.children.length >= maxResponses;
     const mode = responseMode();
     const detail = mode === 'weighted'
-      ? 'Responses are selected proportionally by their weights.'
+      ? ' · weighted'
       : mode === 'ifelse'
-        ? 'The first word after the trigger selects a matching response; one blank condition can act as Else.'
-        : 'One response is selected at equal random odds each time the command actually fires.';
-    $('customResponseHelp').textContent = `${responsesEl.children.length}/${maxResponses} response slots. ${detail}`;
+        ? ' · If / Else'
+        : '';
+    $('customResponseHelp').textContent = `${responsesEl.children.length}/${maxResponses} responses${detail}`;
     updateAvoidImmediateRepeatUi();
   }
 
