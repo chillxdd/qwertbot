@@ -26,7 +26,8 @@ const MAX_BOT_PERSONALITY_COOLDOWN_RESPONSE_LENGTH = 500;
 const DEFAULT_TAGGED_QUESTION_RECAP_BUFFER_SECONDS = 12;
 const MAX_TAGGED_QUESTION_RECAP_BUFFER_SECONDS = 120;
 const MAX_TAGGED_QUESTION_RETRIES = 2;
-const TAGGED_QUESTION_RETRY_WINDOW_MS = 15000;
+const TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS = 30000;
+const TAGGED_QUESTION_RETRY_WINDOW_MS = 120000;
 const TAGGED_QUESTION_FAILURE_GUARD_MS = 20000;
 const MAX_TAGGED_QUESTION_FAILURE_RESPONSE_LENGTH = 500;
 const DEFAULT_TAGGED_QUESTION_FAILURE_RESPONSE = 'Sorry $user, my AI brain is overloaded right now. Try asking me again in a moment.';
@@ -229,7 +230,7 @@ async function callGeminiWithRetries(prompt, retryConfig, onRetry) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 1000) break;
     try {
-      return await requestGeminiText(prompt, { label: 'tagged-question', priority: 'high', timeoutMs: Math.min(8000, remainingMs), deadlineAt: deadline });
+      return await requestGeminiText(prompt, { label: 'tagged-question', priority: 'high', timeoutMs: Math.min(TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS, remainingMs), deadlineAt: deadline });
     } catch (err) {
       lastError = err;
       if (!retry.enabled || !isRetryableGeminiError(err)) break;
@@ -436,8 +437,8 @@ Output only the repaired response.`;
     const repaired = String(await requestGeminiText(prompt, {
       label: 'tagged-question-identity-repair',
       priority: 'high',
-      timeoutMs: 5000,
-      deadlineAt: Date.now() + 6000
+      timeoutMs: 12000,
+      deadlineAt: Date.now() + 15000
     }) || '').trim();
     if (repaired && !hasObviousSelfOtherDirective(repaired, identity)) return repaired;
   } catch (err) {
@@ -478,8 +479,8 @@ Output only the repaired response.`;
     const repaired = String(await requestGeminiText(prompt, {
       label: 'tagged-question-lore-outcome-repair',
       priority: 'high',
-      timeoutMs: 5000,
-      deadlineAt: Date.now() + 6000
+      timeoutMs: 12000,
+      deadlineAt: Date.now() + 15000
     }) || '').trim();
     return repaired || original;
   } catch (err) {
@@ -527,8 +528,8 @@ Output only the repaired response.`;
     const repaired = String(await requestGeminiText(prompt, {
       label: 'tagged-question-relay-perspective',
       priority: 'high',
-      timeoutMs: 5000,
-      deadlineAt: Date.now() + 6000
+      timeoutMs: 12000,
+      deadlineAt: Date.now() + 15000
     }) || '').trim();
     if (!repaired) return { text: '', verified: false, reason: 'empty_repair' };
     return { text: repaired, verified: true };
@@ -1329,7 +1330,7 @@ ${sharedChatRequesterContext}` : '',
         mode: 'tagged',
         label: 'tagged-question-final-attribution',
         priority: 'high',
-        timeoutMs: 7500,
+        timeoutMs: 15000,
         safeFallback: "I don't have enough reliable context to answer that without mixing people up.",
         maxPasses: 2
       });

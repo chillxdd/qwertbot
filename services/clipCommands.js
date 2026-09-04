@@ -11,7 +11,7 @@ const MAX_CLIP_DURATION = 60;
 const LAST_COMMAND_COOLDOWN_MS = 30 * 1000;
 const CLIP_COMMAND_COOLDOWN_MS = 60 * 1000;
 const LAST_UPDATE_COOLDOWN_MS = 60 * 1000;
-const AUTO_TITLE_TIMEOUT_MS = 3000;
+const AUTO_TITLE_TIMEOUT_MS = 10000;
 const DEFAULT_CLIP_SETTINGS = Object.freeze({
   clip: { defaultDuration: 45 },
   cliplast: { defaultDuration: 45 }
