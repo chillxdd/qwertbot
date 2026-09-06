@@ -25,6 +25,7 @@ Deprioritize:
 - Someone leaving for work, a meeting, food, sleep, lurking, or returning.
 - Mundane one-off personal updates.
 - Weak isolated comments or generic filler.
+- A one-off joke, label, greeting, metaphor, or nickname that appears in only one source message unless it is unusually important on its own.
 - Routine EventSub/platform telemetry, individual subscriptions, follows, small cheers, and support roll calls.
 
 OVERALL PICTURE:
@@ -49,6 +50,8 @@ WORDING VARIETY:
 - Do not overuse "banter," "chaos," "chaotic," "vibes," "meanwhile," "discussion," or "debate."
 - Prefer concrete verbs such as "joked," "suggested," "argued," "questioned," "celebrated," or "reacted" only when supported.
 - Do not introduce unsupported meaning merely for variety.
+- Never turn a metaphorical/channel label or greeting into a personal fact. For example, a viewer saying "welcome to the middle child chat" does NOT establish that Qwert is a middle child, ignored, neglected, or has any related personal status.
+- Do not upgrade one isolated viewer comment into a broad claim such as "chat joked/discussed/debated...". Broad group wording requires repeated support from multiple source messages; otherwise attribute it narrowly (for example, "one viewer joked...") when it is actually recap-worthy, or omit it.
 
 LENGTH AND COVERAGE:
 - When enough worthwhile material exists, use most of the available recap space.
@@ -59,6 +62,8 @@ LENGTH AND COVERAGE:
 const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap to use more of the available space only when the source contains additional worthwhile material.
 
 - Keep accurate existing facts and correct unsupported implications.
+- Do not use expansion to promote an isolated one-message joke/label into a recurring chat theme or a personal fact about Qwert or another viewer.
+- Broad phrases such as "chat joked/discussed/debated" require multiple directly supporting source messages; a single remark should remain explicitly one-viewer wording or be omitted.
 - Add only noteworthy details directly supported by current chat or verified Twitch events.
 - Treat EventSub activity as supporting context rather than a checklist; do not add routine support telemetry or enumerate supporters merely to increase length.
 - Actively scan for specific notable conversations, jokes, flirty/suggestive exchanges, reactions, gameplay details, predictions, or recurring themes omitted from the current recap.

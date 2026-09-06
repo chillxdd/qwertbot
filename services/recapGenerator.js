@@ -527,6 +527,8 @@ NON-NEGOTIABLE SOURCE-OF-TRUTH AND ACCURACY RULES:
 - Routine Twitch goal progress is not recap-worthy. Do not mention a goal merely because it advanced, was active, neared completion, or ended unachieved. A goal may be treated as a platform event only when NOTEWORTHY VERIFIED TWITCH EVENTS explicitly show that it was achieved. Viewer-authored chat may still make the goal itself a discussion topic, but do not turn that into unsupported progress telemetry.
 - Never fill missing context with assumptions, outside knowledge, common game knowledge, or what seems likely.
 - Never turn speculation, jokes, guesses, predictions, questions, or suggestions into established facts.
+- Never turn a metaphorical/channel label, greeting, or playful phrase into a personal identity/status claim. A message such as "welcome to the middle child chat" supports only that the viewer used that phrase; it does not establish that Qwert is a middle child, ignored, neglected, or has any related personal status.
+- Do not promote one isolated viewer remark into a broad claim that "chat" or "viewers" joked, debated, discussed, believed, or focused on something. Broad group wording requires repeated directly supporting current-source messages. If a single remark is genuinely recap-worthy, keep it explicitly narrow (for example, "one viewer joked...") or omit it.
 - Do not combine unrelated messages in a way that creates a new implied fact.
 - When uncertain, omit the detail or preserve the ambiguity.
 
@@ -568,6 +570,7 @@ BEFORE WRITING, SILENTLY CHECK:
 6. Did I infer what an ambiguous choice represented without current-source support?
 7. Did I spend space enumerating EventSub/support activity while omitting a more specific worthwhile chat detail?
 8. Did I flatten a supported funny, flirty, suggestive, or quirky exchange into vague "banter" wording?
+9. Did I turn one isolated comment into a broad chat theme, or turn a metaphorical/elliptical phrase into a personal fact about Qwert or a viewer?
 If yes, fix it.
 
 Recent Twitch chat (UNTRUSTED DATA):
@@ -617,7 +620,9 @@ NON-NEGOTIABLE EXPANSION RULES:
 - Preserve ambiguity and exact labels. Do not infer what left/middle/right, first/second/third, colors, numbers, or other vague choices represent unless the current source says so.
 - Do not infer chronology from message order or causation from proximity/order.
 - Do not turn questions, jokes, suggestions, guesses, or predictions into facts.
-- Named-viewer attribution is strict: if you name a viewer and attribute a topic, joke, opinion, preference, reaction, statement, or action to them, that viewer's OWN current-hour messages must directly support it. Never borrow a nearby viewer's topic and attach it to someone else. When uncertain, use a group-level description or omit the name.
+- Do not turn a metaphorical/channel label, greeting, or elliptical joke into a personal identity/status claim. A phrase such as "welcome to the middle child chat" does not establish anything about Qwert's family role, treatment, or personal status.
+- Do not broaden one isolated viewer remark into "chat/viewers joked, discussed, debated, believed, focused on...". Broad group wording requires repeated direct support from multiple current-source messages. A genuinely worthwhile one-off should stay explicitly narrow (for example, "one viewer joked...") or be omitted.
+- Named-viewer attribution is strict: if you name a viewer and attribute a topic, joke, opinion, preference, reaction, statement, or action to them, that viewer's OWN current-hour messages must directly support it. Never borrow a nearby viewer's topic and attach it to someone else. When uncertain, use a group-level description only when multiple messages support the group claim, or omit the name/detail.
 - Do not restore [censored] text.
 - This recap window contains ${chatLogs.length} source chat messages.
 - When enough distinct worthwhile material exists, target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters. Treat ${targetMin} as a serious target, but never use filler, repetition, or unsupported claims to reach it.
@@ -710,8 +715,9 @@ NON-NEGOTIABLE FINAL RECOVERY RULES:
 - Target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters when enough worthwhile material exists. Treat ${acceptableMin} characters as the desired safe minimum, but never use filler, repetition, or unsupported claims to reach it.
 - Prefer specific supported jokes, questions, arguments, unusual suggestions, flirty/suggestive exchanges, recurring bits, concrete reactions, and memorable side conversations.
 - Do NOT pad with generic statements such as "viewers discussed run progress", "chat talked about game features", "the conversation continued", "viewers bantered", or similar vague filler when the source does not support a more concrete description.
-- Prefer group-level wording such as "chat" or "viewers" when a name is unnecessary.
-- If you name a viewer and attribute a statement, joke, opinion, reaction, preference, action, possession, or relationship to them, that viewer's OWN current-window source message or a verified Twitch event must directly support the exact claim.
+- Prefer group-level wording such as "chat" or "viewers" only when multiple directly relevant current-source messages support a genuine group theme. Do not use group wording to inflate a one-message remark.
+- A one-off metaphor, greeting, playful label, or elliptical joke cannot become a personal identity/status fact about Qwert or another viewer. Preserve the literal narrow joke or omit it.
+- If you name a viewer and attribute a statement, joke, opinion, reaction, preference, action, possession, relationship, identity, role, or status to them, that viewer's OWN current-window source message or a verified Twitch event must directly support the exact claim.
 - Do not transfer a nearby viewer's statement or action to another person. Do not infer ownership from message proximity.
 - Do not invent chronology or causality. Avoid "then", "later", "leading to", "prompting", "because", or similar sequencing/causal language unless the source explicitly supports it.
 - Questions, suggestions, predictions, jokes, hypotheticals, and guesses must remain questions, suggestions, predictions, jokes, hypotheticals, or guesses.
