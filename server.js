@@ -1,10 +1,12 @@
+// Database options must be configured before any module imports a model.
+const { connectDatabase, disconnectDatabase, isDatabaseConnected, initializeDatabaseModels } = require('./services/database');
+
 const express = require('express');
 const tmi = require('tmi.js');
 const path = require('path');
 
 const { createRecapManager, SUMMARY_PREFIX, TWITCH_MESSAGE_LIMIT } = require('./commands/recap');
 
-const { connectDatabase, disconnectDatabase, isDatabaseConnected } = require('./services/database');
 const context = require('./services/reliability/context');
 const delivery = require('./services/reliability/delivery');
 const { initializeStore, collection } = require('./services/reliability/store');
@@ -753,10 +755,7 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
   isConnected: isDatabaseConnected,
   initialize: async () => {
     await initializeStore();
-    for (const name of ['StreamRecapSession', 'StreamLifecycleState', 'ChatTimer', 'PersistentPinConfig']) {
-      // Build the unique stream ID and retention indexes before durable jobs.
-      await require(`./models/${name}`).init();
-    }
+    await initializeDatabaseModels();
     await ensureViewerProfileIndexes();
   },
   activate: activateBot,

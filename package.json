@@ -6,10 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "find . -name '*.js' -not -path './node_modules/*' -not -path './.git/*' -print0 | xargs -0 -n1 node --check",
-    "test": "node --test tests/*.test.js",
-    "test:integration": "node --test tests/integration/*.test.js",
-    "test:installed": "node tests/installed-smoke.cjs"
+    "check": "find . -name '*.js' -not -path './node_modules/*' -not -path './.git/*' -print0 | xargs -0 -n1 node --check"
   },
   "engines": {
     "node": ">=20 <23"

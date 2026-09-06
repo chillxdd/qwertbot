@@ -2,7 +2,7 @@
 const WRITE_OPTIONS = { writeConcern: { w: 'majority', wtimeoutMS: 5000 }, maxTimeMS: 5000 };
 function collection() {
   const mongoose = require('mongoose');
-  if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected. Durable operations are unavailable.');
+  if (mongoose.connection.readyState !== 1 || !mongoose.connection.db) throw new Error('MongoDB is not connected. Durable operations are unavailable.');
   return mongoose.connection.db.collection('bot_reliability', { readPreference: 'primary', readConcern: { level: 'majority' } });
 }
 async function initializeStore() {
