@@ -54,10 +54,14 @@ function registerRecapRoutes(app, { requireModSession, getDatabaseConnected, get
     if (!recapManager) return res.status(503).json({ success: false, error: 'Recap manager is not ready.' });
     try {
       let result;
-      if (req.body.action === 'stop') {
-        result = await recapManager.stopRecap({ channel: channelName, displayName: 'WebUI MOD', announce: false });
+      if (req.body.action === 'pause-generation' || req.body.action === 'stop') {
+        result = await recapManager.pauseGeneration({ channel: channelName, displayName: 'WebUI MOD', announce: false });
       } else if (req.body.action === 'start') {
         result = await recapManager.startRecap({ channel: channelName, displayName: 'WebUI MOD', announce: false });
+      } else if (req.body.action === 'stop-system') {
+        result = await recapManager.stopRecapSystem({ displayName: 'WebUI MOD' });
+      } else if (req.body.action === 'clear-window') {
+        result = await recapManager.clearCurrentWindow({ displayName: 'WebUI MOD' });
       } else if (req.body.action === 'abort-clear') {
         result = await recapManager.abortAndClearRecap({ displayName: 'WebUI MOD' });
       } else {

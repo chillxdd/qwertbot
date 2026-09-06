@@ -127,6 +127,7 @@ function createRecapManager({
   let twitchStreamStartedAt = 0;
   let nextRecapAt = 0;
   let recapPaused = false;
+  let collectionPaused = false;
   let pausedRemainingMs = 0;
   let recapTimer = null;
   let streamPollTimer = null;
@@ -318,7 +319,7 @@ function createRecapManager({
     currentStreamCategory = newCategory;
     currentStreamGameId = newGameId;
 
-    if (changed && streamLive && !recapPaused) {
+    if (changed && streamLive && !collectionPaused) {
       addStreamContext({ title: newTitle, category: newCategory, gameId: newGameId });
     }
   }
@@ -415,6 +416,7 @@ function createRecapManager({
       twitchStreamStartedAt,
       nextRecapAt,
       recapPaused,
+      collectionPaused,
       pausedRemainingMs
     };
   }
@@ -468,6 +470,12 @@ function createRecapManager({
       firstRecapSent = Boolean(saved.firstRecapSent);
       recapInProgress = false;
       recapPaused = Boolean(saved.recapPaused);
+      // Backward compatibility: older persisted states used recapPaused for both
+      // generation and collection. Preserve that behavior on the first restore
+      // after upgrade; all new saves persist collectionPaused independently.
+      collectionPaused = saved.collectionPaused == null
+        ? Boolean(saved.recapPaused)
+        : Boolean(saved.collectionPaused);
       pausedRemainingMs = Math.max(0, Number(saved.pausedRemainingMs || 0));
       streamSessionStartedAt = Number(saved.streamSessionStartedAt || 0) || Date.now();
       twitchStreamStartedAt = Number(saved.twitchStreamStartedAt || 0) || twitchStreamStartedAt || Date.now();
@@ -523,6 +531,7 @@ function createRecapManager({
     firstRecapSent = false;
     recapInProgress = false;
     recapPaused = false;
+    collectionPaused = false;
     pausedRemainingMs = 0;
 
     currentStreamId = String(status?.streamId || '').trim();
@@ -608,6 +617,7 @@ function createRecapManager({
     firstRecapSent = false;
     recapInProgress = false;
     recapPaused = false;
+    collectionPaused = false;
     pausedRemainingMs = 0;
     streamSessionStartedAt = 0;
     twitchStreamStartedAt = 0;
@@ -701,41 +711,115 @@ function createRecapManager({
     }
   }
 
-  async function stopRecap({ channel, displayName = 'MOD', announce = true }) {
+  function cancelRecapGeminiWork({ includeLearning = false } = {}) {
+    const prefixes = ['hourly-recap'];
+    if (includeLearning) prefixes.push('session-memory', 'viewer-learning', 'stream-lore');
+
+    return prefixes.reduce((totals, prefix) => {
+      const result = cancelGeminiRequestsByLabelPrefix(prefix);
+      return {
+        activeCancelled: totals.activeCancelled || Boolean(result.activeCancelled),
+        queuedCancelled: totals.queuedCancelled + Number(result.queuedCancelled || 0)
+      };
+    }, { activeCancelled: false, queuedCancelled: 0 });
+  }
+
+  async function waitForActiveStateSave() {
+    if (activeStateSaveInProgress && activeStateSavePromise) {
+      try { await activeStateSavePromise; } catch (_) {}
+    }
+  }
+
+  async function pauseGeneration({ channel, displayName = 'MOD', announce = true }) {
     if (!streamLive) {
       if (announce) await client.say(channel, await nativeResponse('stoprecap', 'offline', { user: displayName }, `@${displayName}, Qwert is offline, so the recap system is already inactive.`));
       return { success: false, message: 'Qwert is offline.' };
     }
 
-    if (recapPaused) {
-      if (announce) await client.say(channel, await nativeResponse('stoprecap', 'alreadyPaused', { user: displayName }, `@${displayName}, automatic hourly recaps are already paused.`));
-      return { success: false, message: 'Automatic hourly recaps are already paused.' };
+    if (recapPaused && !collectionPaused && !recapInProgress) {
+      if (announce) await client.say(channel, await nativeResponse('stoprecap', 'alreadyPaused', { user: displayName }, `@${displayName}, automatic hourly recap generation is already paused while collection remains active.`));
+      return { success: false, message: 'Recap generation is already paused; collection is still active.' };
     }
 
-    if (recapInProgress) {
-      if (announce) await client.say(channel, await nativeResponse('stoprecap', 'generating', { user: displayName }, `@${displayName}, an hourly recap is already being generated, so it can't be paused right now.`));
-      return { success: false, message: 'An hourly recap is currently being generated.' };
+    pausedRemainingMs = nextRecapAt ? Math.max(0, nextRecapAt - Date.now()) : pausedRemainingMs;
+
+    // Pause Generation must guarantee that no in-flight automatic recap can
+    // later reach Twitch. Collection stays active so the window keeps growing.
+    const wasGenerating = recapInProgress;
+    if (wasGenerating) {
+      recapGenerationEpoch += 1;
+      cancelRecapGeminiWork({ includeLearning: false });
     }
 
-    pausedRemainingMs = nextRecapAt ? Math.max(0, nextRecapAt - Date.now()) : 0;
     recapPaused = true;
+    collectionPaused = false;
+    recapInProgress = false;
     clearRecapTimer();
+    nextRecapAt = 0;
+
+    await waitForActiveStateSave();
     markActiveStateDirty();
     await persistActiveState({ force: true });
 
-    console.log(`[Recap] Paused by ${displayName}.`);
-    console.log(`[Recap] ${recapMessages.length} messages preserved.`);
-    console.log(`[Recap] ${formatCountdown(pausedRemainingMs)} remaining on timer.`);
-
+    console.log(`[Recap] Generation paused by ${displayName}; collection remains ACTIVE.${wasGenerating ? ' Active recap generation was cancelled.' : ''}`);
     if (announce) {
-      await client.say(channel, await nativeResponse('stoprecap', 'success', { user: displayName, messages: recapMessages.length, remaining: formatCountdown(pausedRemainingMs) }, `@${displayName}, automatic hourly recaps are paused. ${recapMessages.length} messages are preserved and the timer is frozen with ${formatCountdown(pausedRemainingMs)} remaining.`));
+      await client.say(channel, await nativeResponse('stoprecap', 'success', { user: displayName, messages: recapMessages.length, remaining: formatCountdown(pausedRemainingMs) }, `@${displayName}, automatic hourly recap generation is paused. Chat/event collection remains active with ${recapMessages.length} messages currently in the window.`));
     }
 
-    return { success: true, message: `Automatic hourly recaps paused with ${formatCountdown(pausedRemainingMs)} remaining.` };
+    return {
+      success: true,
+      message: `Recap generation paused. Collection remains ACTIVE; ${recapMessages.length} message(s) are currently in the window.`,
+      paused: true,
+      collectionPaused: false,
+      abortedGeneration: wasGenerating
+    };
+  }
+
+  // Backward-compatible name used by the Twitch !stoprecap command and older
+  // route code. Its semantics are now generation-only pause.
+  async function stopRecap(options) {
+    return pauseGeneration(options);
   }
 
 
-  async function abortAndClearRecap({ displayName = 'MOD' } = {}) {
+  async function stopRecapSystem({ displayName = 'MOD' } = {}) {
+    if (!streamLive) {
+      return { success: false, message: 'Qwert is offline. The recap system is already inactive.' };
+    }
+
+    const wasGenerating = recapInProgress;
+    pausedRemainingMs = nextRecapAt ? Math.max(0, nextRecapAt - Date.now()) : pausedRemainingMs;
+
+    // Invalidate every phase owned by an automatic recap and cancel both the
+    // public recap request and post-recap memory/profile/lore Gemini work.
+    recapGenerationEpoch += 1;
+    const cancelResult = cancelRecapGeminiWork({ includeLearning: true });
+
+    clearRecapTimer();
+    recapInProgress = false;
+    recapPaused = true;
+    collectionPaused = true;
+    nextRecapAt = 0;
+
+    await waitForActiveStateSave();
+    markActiveStateDirty();
+    await persistActiveState({ force: true });
+
+    console.warn(`[Recap] Recap system STOPPED by ${displayName}. Window preserved at ${recapMessages.length} message(s) / ${twitchEvents.length} event(s).${wasGenerating ? ' Active generation was cancelled.' : ''}`);
+    if (cancelResult.activeCancelled || cancelResult.queuedCancelled) {
+      console.warn(`[Recap] Cancelled recap-system Gemini work: active=${cancelResult.activeCancelled ? 1 : 0}, queued=${cancelResult.queuedCancelled}.`);
+    }
+
+    return {
+      success: true,
+      message: `Recap system stopped. Generation and collection are PAUSED. Current window preserved (${recapMessages.length} message(s), ${twitchEvents.length} event(s)).`,
+      paused: true,
+      collectionPaused: true,
+      abortedGeneration: wasGenerating || cancelResult.activeCancelled
+    };
+  }
+
+  async function clearCurrentWindow({ displayName = 'MOD' } = {}) {
     if (!streamLive) {
       return { success: false, message: 'Qwert is offline. There is no active recap window to clear.' };
     }
@@ -744,19 +828,14 @@ function createRecapManager({
     const clearedEvents = twitchEvents.length;
     const wasGenerating = recapInProgress;
 
-    // Invalidate the current sendAutomaticRecap invocation immediately. This
-    // prevents a result that finishes after the button press from ever being
-    // sent to Twitch, even if the underlying request was between await points.
-    recapGenerationEpoch += 1;
-    const cancelResult = cancelGeminiRequestsByLabelPrefix('hourly-recap');
-
-    clearRecapTimer();
-    recapInProgress = false;
-    recapPaused = true;
-    nextRecapAt = 0;
-    // Emergency reset means "start fresh". Resume begins a new 60-minute
-    // window rather than reviving an overdue timer from the discarded window.
-    pausedRemainingMs = RECURRING_RECAP_DELAY;
+    // A cleared window must never still be sent by an older generation.
+    // Cancelling only hourly-recap work leaves already-sent post-processing
+    // alone; those jobs use an immutable snapshot from the completed window.
+    if (wasGenerating) {
+      recapGenerationEpoch += 1;
+      cancelRecapGeminiWork({ includeLearning: false });
+      recapInProgress = false;
+    }
 
     recapMessages = [];
     messageSequence = 0;
@@ -770,30 +849,45 @@ function createRecapManager({
       gameId: currentStreamGameId
     });
 
-    // If a previous checkpoint is currently writing the pre-clear window,
-    // wait for it to finish before forcing the destructive reset state. This
-    // guarantees the success response means MongoDB has the cleared/paused
-    // state, rather than allowing a restart to resurrect the old window.
-    if (activeStateSaveInProgress && activeStateSavePromise) {
-      try { await activeStateSavePromise; } catch (_) {}
+    // Clearing data does not otherwise change the operator-selected mode.
+    // If automatic generation was active and we had to cancel an in-flight
+    // recap, continue on the next anchored hourly boundary with a fresh window.
+    if (!recapPaused && wasGenerating) {
+      nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
+      scheduleRecapAt(nextRecapAt);
     }
+
+    await waitForActiveStateSave();
     markActiveStateDirty();
     await persistActiveState({ force: true });
 
-    console.warn(`[Recap] Emergency abort/clear by ${displayName}: cleared ${clearedMessages} message(s) and ${clearedEvents} event(s); recaps are PAUSED.${wasGenerating ? ' Active recap generation was aborted.' : ''}`);
-    if (cancelResult.activeCancelled || cancelResult.queuedCancelled) {
-      console.warn(`[Recap] Cancelled Gemini recap work: active=${cancelResult.activeCancelled ? 1 : 0}, queued=${cancelResult.queuedCancelled}.`);
-    }
-
+    console.warn(`[Recap] Current window cleared by ${displayName}: ${clearedMessages} message(s), ${clearedEvents} event(s). Generation=${recapPaused ? 'PAUSED' : 'RUNNING'}, collection=${collectionPaused ? 'PAUSED' : 'ACTIVE'}.`);
     return {
       success: true,
-      message: `Recap reset complete. ${clearedMessages} message(s) and ${clearedEvents} event(s) were cleared. Automatic recaps are PAUSED; Resume Recaps starts a fresh 60-minute window.`,
+      message: `Current recap window cleared (${clearedMessages} message(s), ${clearedEvents} event(s)). Generation and collection modes were otherwise preserved.${wasGenerating ? ' The in-flight recap was cancelled to prevent sending cleared content.' : ''}`,
       clearedMessages,
       clearedEvents,
-      abortedGeneration: wasGenerating || cancelResult.activeCancelled,
-      paused: true
+      abortedGeneration: wasGenerating,
+      paused: recapPaused,
+      collectionPaused
     };
   }
+
+  // Legacy WebUI action kept so an older cached admin page cannot call a
+  // destructive endpoint with obsolete semantics. It now performs the safe
+  // composition explicitly: stop/freeze first, then clear the current window.
+  async function abortAndClearRecap({ displayName = 'MOD' } = {}) {
+    const stopped = await stopRecapSystem({ displayName });
+    if (!stopped.success) return stopped;
+    const cleared = await clearCurrentWindow({ displayName });
+    return {
+      ...cleared,
+      message: `${cleared.message} Recap system remains STOPPED.`,
+      paused: true,
+      collectionPaused: true
+    };
+  }
+
 
   async function startRecap({ channel, displayName = 'MOD', announce = true }) {
     if (!streamLive) {
@@ -807,6 +901,7 @@ function createRecapManager({
     }
 
     recapPaused = false;
+    collectionPaused = false;
     const resumeDelay = Math.max(1000, pausedRemainingMs);
     nextRecapAt = Date.now() + resumeDelay;
     pausedRemainingMs = 0;
@@ -818,19 +913,20 @@ function createRecapManager({
     });
 
     scheduleRecapAt(nextRecapAt);
+    await waitForActiveStateSave();
     markActiveStateDirty();
     await persistActiveState({ force: true });
-    console.log(`[Recap] Resumed by ${displayName}. Next recap in ${formatCountdown(resumeDelay)}.`);
+    console.log(`[Recap] Resumed by ${displayName}. Generation RUNNING, collection ACTIVE. Next recap in ${formatCountdown(resumeDelay)}.`);
 
     if (announce) {
       await client.say(channel, await nativeResponse('startrecap', 'success', { user: displayName, remaining: formatCountdown(resumeDelay) }, `@${displayName}, automatic hourly recaps resumed where they left off. Next recap in ${formatCountdown(resumeDelay)}.`));
     }
 
-    return { success: true, message: `Automatic hourly recaps resumed. Next recap in ${formatCountdown(resumeDelay)}.` };
+    return { success: true, message: `Recap generation resumed and collection is ACTIVE. Next recap in ${formatCountdown(resumeDelay)}.` };
   }
 
   function recordTwitchEvent(event) {
-    if (!streamLive || recapPaused) return false;
+    if (!streamLive || collectionPaused) return false;
     const normalized = normalizeEventRecord(event);
     if (!normalized.text) return false;
 
@@ -862,7 +958,7 @@ function createRecapManager({
     sharedChat = null,
     metadata = {}
   } = {}) {
-    if (!streamLive || recapPaused) return false;
+    if (!streamLive || collectionPaused) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
@@ -905,7 +1001,7 @@ function createRecapManager({
     replyTo = null,
     metadata = {}
   } = {}) {
-    if (!streamLive || recapPaused) return false;
+    if (!streamLive || collectionPaused) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || '').trim();
@@ -939,7 +1035,7 @@ function createRecapManager({
     sharedChat = null,
     metadata = {}
   } = {}) {
-    if (!streamLive || recapPaused) return false;
+    if (!streamLive || collectionPaused) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
@@ -1121,15 +1217,32 @@ function createRecapManager({
       console.log('[Recap] Sent:', twitchMessage);
       console.log(`[Recap] Length: ${twitchMessage.length}/500`);
 
-      // The HTTP/chat send itself cannot be retracted once it is already in
-      // flight. If the emergency reset was pressed during that final await,
-      // preserve the moderator-owned cleared/paused state instead of letting
-      // this older invocation revive timers or window data afterward.
+      // The Twitch send cannot be retracted once it is already in flight. If
+      // an operator pause/stop/clear lands during that final await and Twitch
+      // still accepts the message, treat the snapshot as successfully sent so
+      // it cannot be replayed after Resume/restart. Preserve only messages,
+      // events, and context that arrived after the sent snapshot.
       if (generationEpoch !== recapGenerationEpoch || recapPaused) {
+        discardMessageSnapshot(snapshotMaxId);
+        discardContextSnapshot(snapshotMaxContextId);
+        discardEventSnapshot(snapshotMaxEventId);
         firstRecapSent = true;
+        recapInProgress = false;
         markActiveStateDirty();
         try { await persistActiveState({ force: true }); } catch (_) {}
-        console.warn('[Recap] Twitch send completed while an emergency reset was taking effect. Cleared/paused recap state was preserved; no post-recap processing will run for this snapshot.');
+        if (currentStreamId && recapSummaryBody) {
+          try {
+            await saveStreamRecap({
+              streamId: currentStreamId,
+              channelName,
+              startedAt: streamSessionStartedAt || null,
+              text: recapSummaryBody
+            });
+          } catch (historyErr) {
+            console.error('[Recap] Twitch accepted recap during operator stop, but history storage failed:', historyErr?.message || historyErr);
+          }
+        }
+        console.warn('[Recap] Twitch accepted the recap while an operator pause/stop/clear was taking effect. Sent snapshot was removed to prevent duplicate replay; selected paused/stopped state was preserved and post-recap learning was skipped.');
         return;
       }
 
@@ -1154,6 +1267,11 @@ function createRecapManager({
       }
       console.log(`[Recap] Public recap cycle complete. Next automatic recap remains on the anchored hourly cadence at ${new Date(nextRecapAt).toISOString()}.`);
 
+      if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+        console.log('[Recap] Post-recap processing skipped because the recap system was stopped.');
+        return;
+      }
+
       if (currentStreamId && recapSummaryBody) {
         try {
           await saveStreamRecap({
@@ -1166,6 +1284,11 @@ function createRecapManager({
         } catch (historyErr) {
           console.error('[Recap] Recap sent successfully, but MongoDB history storage failed:', historyErr.message || historyErr);
         }
+      }
+
+      if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+        console.log('[Recap] Post-recap learning stopped by moderator.');
+        return;
       }
 
       if (currentStreamId) {
@@ -1206,6 +1329,10 @@ function createRecapManager({
                 config: sessionMemoryConfig,
                 channelName
               });
+              if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+                console.log('[Recap] Session-memory write skipped because the recap system was stopped.');
+                return;
+              }
               if (memoryBlock) {
                 await saveSessionMemoryBlock({
                   streamId: currentStreamId,
@@ -1220,10 +1347,19 @@ function createRecapManager({
             }
           }
 
+          if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+            console.log('[Recap] Remaining post-recap learning stopped by moderator.');
+            return;
+          }
+
           if (viewerProfileSettings.automaticLearningEnabled) {
             try {
               const existingProfiles = await getViewerLearningContext(channelName, permanentLearningRecords);
               const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: permanentLearningRecords, existingProfiles });
+              if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+                console.log('[Recap] Viewer-profile write skipped because the recap system was stopped.');
+                return;
+              }
               if (viewerUpdates.length) {
                 const profileResult = await applyViewerProfileUpdates({
                   channelName,
@@ -1239,11 +1375,20 @@ function createRecapManager({
             }
           }
 
+          if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+            console.log('[Recap] Remaining post-recap learning stopped by moderator.');
+            return;
+          }
+
           try {
             const loreObservations = await generateStreamLoreObservations({
               chatLogs: permanentLearningRecords,
               existingObservations: streamLoreRecord?.learnedObservations || []
             });
+            if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+              console.log('[Recap] Stream-lore write skipped because the recap system was stopped.');
+              return;
+            }
             if (loreObservations.length) {
               const loreResult = await applyStreamLoreObservations(channelName, loreObservations);
               console.log(`[Stream Lore] Dedicated hourly learning processed ${loreObservations.length} candidate(s): ${loreResult.created} new pending, ${loreResult.reinforced} reinforced, ${loreResult.refined} pending auto-refined, ${loreResult.revisionsProposed} approved revision proposal(s), ${loreResult.contradictions} contradiction update(s), ${loreResult.skipped} skipped.`);
@@ -1259,10 +1404,10 @@ function createRecapManager({
       console.log('[Recap] Post-recap memory/profile/lore processing complete.');
     } catch (err) {
       if (generationEpoch !== recapGenerationEpoch || err?.cancelled === true) {
-        // Emergency Abort & Clear owns the state transition and persistence.
-        // Do not schedule a five-minute retry or resurrect the cleared window.
+        // An operator-owned pause/stop/clear transition owns the state now.
+        // Do not schedule a five-minute retry or resurrect an older window.
         recapInProgress = false;
-        console.log('[Recap] Automatic recap generation cancelled by moderator; no retry scheduled.');
+        console.log('[Recap] Automatic recap operation cancelled by moderator; no retry scheduled.');
         return;
       }
 
@@ -1365,7 +1510,9 @@ function createRecapManager({
       currentStreamGameId: currentStreamGameId || null,
       currentViewerCount,
       recapPaused,
-      loggingMessages: streamStateInitialized && streamLive && !recapPaused,
+      collectionPaused,
+      recapSystemStopped: Boolean(recapPaused && collectionPaused),
+      loggingMessages: streamStateInitialized && streamLive && !collectionPaused,
       recapInProgress,
       firstRecapSent,
       messagesInWindow: recapMessages.length,
@@ -1493,7 +1640,10 @@ function createRecapManager({
     recordTwitchEvent,
     handleRecapCommand,
     stopRecap,
+    pauseGeneration,
     startRecap,
+    stopRecapSystem,
+    clearCurrentWindow,
     abortAndClearRecap,
     getCurrentWindowLogs,
     getCurrentWindowContexts,

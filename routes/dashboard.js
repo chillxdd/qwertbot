@@ -95,6 +95,8 @@ function registerDashboardRoutes(app, options) {
       currentStreamGameId: null,
       loggingMessages: false,
       recapPaused: false,
+      collectionPaused: false,
+      recapSystemStopped: false,
       messagesInWindow: 0,
       twitchEventsInWindow: 0,
       contextChangesInWindow: 0,
@@ -139,6 +141,8 @@ function registerDashboardRoutes(app, options) {
         online: getBotConnected(),
         loggingMessages: recapStatus.loggingMessages,
         recapPaused: recapStatus.recapPaused,
+        collectionPaused: Boolean(recapStatus.collectionPaused),
+        recapSystemStopped: Boolean(recapStatus.recapSystemStopped),
         messagesInWindow: recapStatus.messagesInWindow,
         twitchEventsInWindow: recapStatus.twitchEventsInWindow || 0,
         contextChangesInWindow: recapStatus.contextChangesInWindow,
@@ -204,6 +208,8 @@ function registerDashboardRoutes(app, options) {
       recap: {
         inProgress: Boolean(recapStatus.recapInProgress),
         paused: Boolean(recapStatus.recapPaused),
+        collectionPaused: Boolean(recapStatus.collectionPaused),
+        stopped: Boolean(recapStatus.recapSystemStopped),
         messagesInWindow: Number(recapStatus.messagesInWindow || 0),
         twitchEventsInWindow: Number(recapStatus.twitchEventsInWindow || 0)
       },

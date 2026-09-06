@@ -68,12 +68,22 @@ async function status() {
     // Keep Bot Status identical in mod and read-only views. Recap details live in AI Recap.
     $('bDetail').textContent = '';
 
-    const recapState = !d.qwert.live ? 'OFFLINE' : d.bot.recapPaused ? 'PAUSED' : d.bot.recapInProgress ? 'GENERATING' : 'RUNNING';
+    const recapStopped = Boolean(d.bot.recapSystemStopped);
+    const recapState = !d.qwert.live
+      ? 'OFFLINE'
+      : recapStopped
+        ? 'STOPPED'
+        : d.bot.recapInProgress
+          ? 'GENERATING'
+          : d.bot.recapPaused
+            ? 'PAUSED'
+            : 'RUNNING';
     $('recapState').textContent = recapState;
-    $('recapState').className = `value ${!d.qwert.live ? 'warn' : d.bot.recapPaused ? 'warn' : 'good'}`;
-    $('recapLogging').textContent = d.bot.loggingMessages ? 'ACTIVE' : 'IDLE';
-    $('recapLogging').className = `value ${d.bot.loggingMessages ? 'good' : 'warn'}`;
-    $('recapNext').textContent = d.bot.nextRecapAt ? countdown(d.bot.nextRecapAt - Date.now()) : '—';
+    $('recapState').className = `value ${!d.qwert.live || recapStopped || d.bot.recapPaused ? 'warn' : 'good'}`;
+    const collectionState = !d.qwert.live ? 'IDLE' : d.bot.collectionPaused ? 'PAUSED' : 'ACTIVE';
+    $('recapLogging').textContent = collectionState;
+    $('recapLogging').className = `value ${collectionState === 'ACTIVE' ? 'good' : 'warn'}`;
+    $('recapNext').textContent = !d.qwert.live ? '—' : d.bot.recapPaused ? 'PAUSED' : d.bot.nextRecapAt ? countdown(d.bot.nextRecapAt - Date.now()) : '—';
     $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${d.bot.twitchEventsInWindow || 0} event`;
 
     $('dbStatusLabel').textContent = 'Database Status';
@@ -101,9 +111,10 @@ async function status() {
       : '';
 
     if (loggedIn) {
-      $('pauseBtn').disabled = !d.qwert.live || d.bot.recapPaused || d.bot.recapInProgress;
-      $('resumeBtn').disabled = !d.qwert.live || !d.bot.recapPaused;
-      $('abortClearRecapBtn').disabled = !d.qwert.live;
+      $('pauseBtn').disabled = !d.qwert.live || (d.bot.recapPaused && !d.bot.collectionPaused && !d.bot.recapInProgress);
+      $('resumeBtn').disabled = !d.qwert.live || (!d.bot.recapPaused && !d.bot.collectionPaused);
+      $('stopRecapSystemBtn').disabled = !d.qwert.live || Boolean(d.bot.recapSystemStopped);
+      $('clearRecapWindowBtn').disabled = !d.qwert.live || ((d.bot.messagesInWindow || 0) === 0 && (d.bot.twitchEventsInWindow || 0) === 0 && !d.bot.recapInProgress);
       oauth.updateStatus(d);
     }
   } catch (_) {
@@ -366,16 +377,25 @@ async function recapAction(action) {
   $('recapMsg').textContent = d.message || d.error;
   status();
 }
-$('pauseBtn').onclick = () => recapAction('stop');
+$('pauseBtn').onclick = () => recapAction('pause-generation');
 $('resumeBtn').onclick = () => recapAction('start');
-$('abortClearRecapBtn').onclick = async () => {
+$('stopRecapSystemBtn').onclick = async () => {
   const confirmed = window.confirm(
-    'ABORT & CLEAR RECAP?\n\nThis will cancel the current hourly recap generation, permanently discard every message/event in the active recap window, and PAUSE automatic recaps.\n\nCompleted recap history and session memory are not deleted. Resume Recaps will start a fresh 60-minute window.'
+    'STOP RECAP SYSTEM?\n\nThis freezes the recap subsystem: automatic generation and chat/event collection will both pause, active recap Gemini work will be cancelled, and the current window will be PRESERVED.\n\nTagged Questions, timers, EventSub reactions, and normal bot operation are not stopped.'
   );
   if (!confirmed) return;
-  $('abortClearRecapBtn').disabled = true;
-  $('recapMsg').textContent = 'Aborting recap and clearing active window...';
-  await recapAction('abort-clear');
+  $('stopRecapSystemBtn').disabled = true;
+  $('recapMsg').textContent = 'Stopping recap system and preserving current window...';
+  await recapAction('stop-system');
+};
+$('clearRecapWindowBtn').onclick = async () => {
+  const confirmed = window.confirm(
+    'CLEAR CURRENT RECAP WINDOW?\n\nThis permanently deletes all chat messages and Twitch events currently collected for the active recap window. Completed recap history and session memory are not deleted.\n\nGeneration/collection mode will otherwise stay as it is. If a recap is actively generating from this window, that generation will be cancelled so cleared content cannot still be sent.'
+  );
+  if (!confirmed) return;
+  $('clearRecapWindowBtn').disabled = true;
+  $('recapMsg').textContent = 'Clearing current recap window...';
+  await recapAction('clear-window');
 };
 
 

@@ -50,14 +50,15 @@
         </div>
         <div class="recap-status-grid">
           <div class="recap-status-item"><div class="label">Current State</div><div id="recapState" class="value warn">Checking...</div></div>
-          <div class="recap-status-item"><div class="label">Logging</div><div id="recapLogging" class="value warn">Checking...</div></div>
+          <div class="recap-status-item"><div class="label">Collection</div><div id="recapLogging" class="value warn">Checking...</div></div>
           <div class="recap-status-item"><div class="label">Next Recap</div><div id="recapNext" class="value">—</div></div>
           <div class="recap-status-item"><div class="label">Current Window</div><div id="recapWindow" class="value">—</div></div>
         </div>
         <div class="recap-control-actions">
-          <button id="resumeBtn" type="button">Resume Recaps</button>
-          <button id="pauseBtn" class="danger" type="button">Pause Recaps</button>
-          <button id="abortClearRecapBtn" class="danger" type="button" title="Abort any in-flight hourly recap, permanently clear the active recap window, and pause automatic recaps.">Abort &amp; Clear Recap</button>
+          <button id="resumeBtn" type="button" title="Enable automatic recap generation and chat/event collection.">Resume Recaps</button>
+          <button id="pauseBtn" class="secondary" type="button" title="Pause automatic recap generation while continuing to collect chat and Twitch events.">Pause Generation</button>
+          <button id="stopRecapSystemBtn" class="danger" type="button" title="Freeze the recap subsystem: pause generation and collection, cancel active recap work, and preserve the current window.">Stop Recap System</button>
+          <button id="clearRecapWindowBtn" class="danger" type="button" title="Permanently clear messages and Twitch events from the current recap window without otherwise changing the selected recap mode.">Clear Current Window</button>
           <div id="recapMsg" class="detail"></div>
         </div>
       </div>

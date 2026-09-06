@@ -104,6 +104,7 @@ const activeStateSchema = new mongoose.Schema({
   twitchStreamStartedAt: { type: Number, default: 0 },
   nextRecapAt: { type: Number, default: 0 },
   recapPaused: { type: Boolean, default: false },
+  collectionPaused: { type: Boolean, default: null },
   pausedRemainingMs: { type: Number, default: 0 },
   savedAt: { type: Date, default: Date.now }
 }, { _id: false });
