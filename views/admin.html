@@ -60,7 +60,16 @@
           <button id="stopRecapSystemBtn" class="danger" type="button" title="Freeze the recap subsystem: pause generation and collection, cancel active recap work, and preserve the current window.">Stop Recap System</button>
           <button id="clearRecapWindowBtn" class="danger" type="button" title="Permanently clear messages and Twitch events from the current recap window without otherwise changing the selected recap mode.">Clear Current Window</button>
           <div id="recapMsg" class="detail"></div>
+          <div id="recapReliabilityNotice" class="detail warn" role="status"></div>
         </div>
+      </div>
+
+      <div class="recap-utility-card">
+        <div class="recap-card-title">Reliability &amp; Recovery</div>
+        <p class="detail">When Twitch may have received an action but its confirmation was lost, the bot holds that action instead of sending another copy. Check chat before resolving it.</p>
+        <button id="refreshReliabilityBtn" class="secondary" type="button">Refresh Recovery Queue</button>
+        <div id="reliabilityReviewMessage" class="detail" role="status"></div>
+        <div id="reliabilityReviewList" aria-live="polite">Checking recovery status...</div>
       </div>
 
       <div class="recap-utility-card">

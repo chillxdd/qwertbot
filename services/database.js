@@ -1,48 +1,22 @@
 const mongoose = require('mongoose');
-
-let connected = false;
-
+mongoose.set('bufferCommands', false);
+let connecting = null;
+let listenersInstalled = false;
+function isDatabaseConnected() { return mongoose.connection.readyState === 1; }
 async function connectDatabase() {
-  if (connected && mongoose.connection.readyState === 1) {
-    return mongoose.connection;
+  if (isDatabaseConnected()) return mongoose.connection;
+  if (connecting) return connecting;
+  const uri = String(process.env.MONGODB_URI || '').trim();
+  if (!uri) throw new Error('MONGODB_URI environment variable is not set.');
+  if (!listenersInstalled) {
+    listenersInstalled = true;
+    mongoose.connection.on('disconnected', () => console.warn('[Database] MongoDB disconnected; bot lease work will stop.'));
+    mongoose.connection.on('error', (err) => console.error('[Database] Connection error:', err.message));
   }
-
-  const uri = (process.env.MONGODB_URI || '').trim();
-
-  if (!uri) {
-    throw new Error('MONGODB_URI environment variable is not set.');
-  }
-
-  console.log('[Database] Connecting to MongoDB...');
-
-  await mongoose.connect(uri, {
-    serverSelectionTimeoutMS: 10000
-  });
-
-  connected = true;
-  console.log('[Database] MongoDB connected.');
-
-  mongoose.connection.on('disconnected', () => {
-    connected = false;
-    console.warn('[Database] MongoDB disconnected.');
-  });
-
-  mongoose.connection.on('error', (err) => {
-    console.error('[Database] MongoDB connection error:', err);
-  });
-
-  return mongoose.connection;
+  connecting = mongoose.connect(uri, { serverSelectionTimeoutMS: 5000, connectTimeoutMS: 10000,
+    socketTimeoutMS: 20000, maxPoolSize: 10 });
+  try { await connecting; console.log('[Database] MongoDB connected.'); return mongoose.connection; }
+  finally { connecting = null; }
 }
-
-async function disconnectDatabase() {
-  if (mongoose.connection.readyState !== 0) {
-    await mongoose.disconnect();
-  }
-
-  connected = false;
-}
-
-module.exports = {
-  connectDatabase,
-  disconnectDatabase
-};
+async function disconnectDatabase() { if (mongoose.connection.readyState !== 0) await mongoose.disconnect(); }
+module.exports = { connectDatabase, disconnectDatabase, isDatabaseConnected };

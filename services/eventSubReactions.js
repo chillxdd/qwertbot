@@ -1,3 +1,7 @@
+const context = require('./reliability/context');
+const delivery = require('./reliability/delivery');
+const { httpDeliveryError } = require('./reliability/twitchDelivery');
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const EventSubReaction = require('../models/EventSubReaction');
 const { MAX_AUTOMATION_SPACING_SECONDS } = require('./automationSpacing');
 const { beginEventReaction, endEventReaction, getEventReactionHoldStatus } = require('./eventReactionHold');
@@ -36,7 +40,7 @@ const MAX_ACTIONS = 12;
 const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
 const MAX_ACTION_DELAY_SECONDS = 300;
 
-function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function sleep(ms) { return context.sleep(ms); }
 function cleanText(value, max = 500) { return Array.from(String(value || '').trim()).slice(0, max).join(''); }
 
 function eventActor(event = {}, type = '') {
@@ -249,6 +253,9 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
   }
 
   async function sendTwitchShoutout(type, event) {
+    const key = context.nextDeliveryKey('shoutout');
+    if (key) return (await delivery.deliver({ key, kind: 'event-shoutout', payload: { type, event },
+      send: (saved) => sendTwitchShoutout(saved.type, saved.event) })).result;
     const actor = eventActor(event, type);
     if (!actor.userId) throw new Error('This EventSub payload does not include a target broadcaster ID for shoutout.');
     const [botAuth, broadcasterAuth, token] = await Promise.all([
@@ -270,11 +277,12 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     if (!response.ok) {
       let detail = '';
       try { detail = (await response.json())?.message || ''; } catch (_) {}
-      throw new Error(`Twitch shoutout failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+      throw httpDeliveryError('Twitch shoutout', response, detail);
     }
   }
 
   async function runAction(action, type, event) {
+    await context.assertOperation();
     if (action.delaySeconds > 0) await sleep(action.delaySeconds * 1000);
     if (action.type === 'chat_message') {
       const message = renderEventTemplate(action.value, type, event).trim();
@@ -316,16 +324,23 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     }
   }
 
-  async function runReaction(reaction, type, event) {
+  async function runReaction(reaction, type, event, durableStep = null) {
     beginEventReaction();
     console.log(`[EventSub Reactions] Starting ${reaction.name} for ${type}.`);
     try {
-      for (const action of reaction.actions || []) {
+      for (const [index, action] of (reaction.actions || []).entries()) {
         if (action.enabled === false) continue;
         try {
-          await runAction(action, type, event);
+          const execute = () => {
+            const parentKey = context.current().deliveryScope?.key;
+            return parentKey ? context.withDeliveryScope(`${parentKey}:reaction:${reaction._id}:action:${index}`, () => runAction(action, type, event))
+              : runAction(action, type, event);
+          };
+          if (durableStep) await durableStep(`reaction_${reaction._id}_action_${index}`, execute);
+          else await execute();
         } catch (err) {
           console.error(`[EventSub Reactions] ${reaction.name} action ${action.type} failed:`, err?.message || err);
+          throw err;
         }
       }
     } finally {
@@ -351,14 +366,18 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     }
   }
 
-  async function handleEvent(type, event = {}) {
+  function planEvent(type, event = {}) {
+    return JSON.parse(JSON.stringify(cache.filter((reaction) => reaction.enabled !== false && reaction.eventType === type &&
+      (!(Number(reaction.minimumValue) > 0) || numericEventValue(type, event) >= Number(reaction.minimumValue)))));
+  }
+  async function handleEvent(type, event = {}, { plan = null, durableStep = null } = {}) {
     if (!EVENT_TYPE_SET.has(type)) return;
     await waitForHigherPriorityAutomation();
-    const candidates = cache.filter((reaction) => reaction.enabled !== false && reaction.eventType === type);
+    const candidates = plan || planEvent(type, event);
     for (const reaction of candidates) {
       const minimum = Number(reaction.minimumValue || 0);
       if (minimum > 0 && numericEventValue(type, event) < minimum) continue;
-      void runReaction(reaction, type, event);
+      await runReaction(reaction, type, event, durableStep);
     }
   }
 
@@ -368,7 +387,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     saveReaction,
     deleteReaction,
     setEnabled,
-    handleEvent,
+    handleEvent, planEvent,
     refreshCache,
     getHoldStatus: getEventReactionHoldStatus,
     getAutomationSpacingSeconds: currentAutomationSpacingSeconds,

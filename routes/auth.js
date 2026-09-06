@@ -23,36 +23,7 @@ function escapeHtml(value) {
     .replace(/'/g, '&#039;');
 }
 
-function createOAuthStateStore(lifetimeMs) {
-  const states = new Map();
-
-  function cleanup() {
-    const now = Date.now();
-    for (const [state, createdAt] of states.entries()) {
-      if (now - createdAt > lifetimeMs) states.delete(state);
-    }
-  }
-
-  return {
-    has(state) {
-      cleanup();
-      return Boolean(state && states.has(state));
-    },
-    create() {
-      cleanup();
-      const state = crypto.randomBytes(32).toString('hex');
-      states.set(state, Date.now());
-      return state;
-    },
-    consume(state) {
-      cleanup();
-      if (!state || !states.has(state)) return false;
-      states.delete(state);
-      return true;
-    },
-    cleanup
-  };
-}
+const { createOAuthStateStore } = require('../services/reliability/oauthStates');
 
 function registerAuthRoutes(app, options) {
   const {
@@ -72,12 +43,12 @@ function registerAuthRoutes(app, options) {
     adminPath
   } = options;
 
-  const botStates = createOAuthStateStore(oauthStateLifetimeMs);
-  const broadcasterStates = createOAuthStateStore(oauthStateLifetimeMs);
+  const botStates = createOAuthStateStore(oauthStateLifetimeMs, 'bot');
+  const broadcasterStates = createOAuthStateStore(oauthStateLifetimeMs, 'broadcaster');
 
   const validQwertSecret = (value) => timingSafeStringEqual(value, qwertOAuthLinkSecret);
 
-  app.post('/auth/twitch/start', requireModSession, (req, res) => {
+  app.post('/auth/twitch/start', requireModSession, async (req, res) => {
     if (!clientId || !clientSecret) {
       return res.status(500).json({ success: false, error: 'TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET is not configured.' });
     }
@@ -86,7 +57,7 @@ function registerAuthRoutes(app, options) {
       return res.status(500).json({ success: false, error: 'MongoDB is not connected.' });
     }
 
-    const state = botStates.create();
+    const state = await botStates.create();
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
@@ -105,18 +76,13 @@ function registerAuthRoutes(app, options) {
   app.get('/auth/twitch/callback', async (req, res) => {
     const { code, state, error, error_description: errorDescription } = req.query;
 
-    botStates.cleanup();
-    broadcasterStates.cleanup();
-
-    const isBotAuthorization = botStates.has(state);
-    const isBroadcasterAuthorization = broadcasterStates.has(state);
+    const isBotAuthorization = await botStates.consume(state);
+    const isBroadcasterAuthorization = !isBotAuthorization && await broadcasterStates.consume(state);
 
     if (!isBotAuthorization && !isBroadcasterAuthorization) {
       return res.status(400).send(`<!doctype html><html><body style="font-family:Arial;background:#0f0f12;color:white;padding:40px"><h2>OAuth request expired</h2><p>Return to the dashboard and start authorization again.</p><p><a style="color:#bf94ff" href="${escapeHtml(adminPath)}">Return to dashboard</a></p></body></html>`);
     }
 
-    if (isBotAuthorization) botStates.consume(state);
-    if (isBroadcasterAuthorization) broadcasterStates.consume(state);
 
     if (error) {
       const who = isBroadcasterAuthorization ? 'Broadcaster' : 'Bot';
@@ -242,7 +208,7 @@ function registerAuthRoutes(app, options) {
       return res.status(500).send('Could not verify broadcaster authorization status.');
     }
 
-    const state = broadcasterStates.create();
+    const state = await broadcasterStates.create();
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,

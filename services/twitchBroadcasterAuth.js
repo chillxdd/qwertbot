@@ -1,3 +1,6 @@
+const { withDistributedLock } = require('./reliability/distributedLock');
+const { WRITE_OPTIONS } = require('./reliability/store');
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const TwitchBroadcasterAuth = require('../models/TwitchBroadcasterAuth');
 
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
@@ -82,6 +85,7 @@ async function saveBroadcasterAuth({
       }
     },
     {
+      ...WRITE_OPTIONS,
       upsert: true,
       new: true,
       setDefaultsOnInsert: true
@@ -142,7 +146,7 @@ async function refreshBroadcasterToken() {
   // newest token pair always wins in MongoDB.
   if (broadcasterRefreshInFlight) return broadcasterRefreshInFlight;
 
-  broadcasterRefreshInFlight = (async () => {
+  broadcasterRefreshInFlight = withDistributedLock('oauth:twitch-broadcaster', async (lease) => {
     const auth = await getStoredBroadcasterAuth();
 
     if (!auth?.refreshToken) {
@@ -183,20 +187,25 @@ async function refreshBroadcasterToken() {
     }
 
     const newRefreshToken = data.refresh_token || auth.refreshToken;
-    const validation = await validateBroadcasterAccessToken(data.access_token);
-
-    const saved = await saveBroadcasterAuth({
-      accessToken: data.access_token,
-      refreshToken: newRefreshToken,
-      expiresIn: data.expires_in,
-      scopes: validation.scopes || data.scope || auth.scopes || [],
-      twitchUserId: validation.user_id || auth.twitchUserId || '',
-      username: validation.login || auth.username || ''
-    });
+    // Commit the rotated pair BEFORE an optional validation request. Losing a
+    // validation reply must not throw away the only usable refresh token.
+    await lease.assertOwned();
+    const saved = await TwitchBroadcasterAuth.findOneAndUpdate(
+      { provider: 'twitch-broadcaster', refreshToken: auth.refreshToken, accessToken: auth.accessToken },
+      { $set: { accessToken: data.access_token, refreshToken: newRefreshToken,
+        expiresAt: new Date(Date.now() + Math.max(0, Number(data.expires_in) || 0) * 1000),
+        scopes: Array.isArray(data.scope) ? data.scope : (auth.scopes || []) } },
+      { ...WRITE_OPTIONS, new: true }
+    ).lean();
+    if (!saved) {
+      const current = await getStoredBroadcasterAuth();
+      if (current?.accessToken) return current;
+      throw new Error('Authorization changed while refreshing; please authorize again.');
+    }
 
     console.log('[OAuth Broadcaster] Twitch token refreshed and saved to MongoDB.');
     return saved;
-  })();
+  });
 
   try {
     return await broadcasterRefreshInFlight;

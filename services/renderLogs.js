@@ -1,3 +1,4 @@
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const RENDER_API_KEY = (process.env.RENDER_API_KEY || '').trim();
 const RENDER_SERVICE_ID = (process.env.RENDER_SERVICE_ID || '').trim();
 const RENDER_API_BASE = 'https://api.render.com/v1';

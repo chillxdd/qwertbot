@@ -1,3 +1,4 @@
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const { getValidAccessToken, refreshStoredToken } = require('./twitchAuth');
 
 const TWITCH_USERS_URL = 'https://api.twitch.tv/helix/users';

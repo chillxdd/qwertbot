@@ -1,3 +1,6 @@
+const { deliveryError, httpDeliveryError } = require('./reliability/twitchDelivery');
+const operationContext = require('./reliability/context');
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const { getStoredAuth } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
 
@@ -10,6 +13,7 @@ const REQUIRED_BROADCASTER_APP_SCOPES = ['channel:bot'];
 const REQUIRED_BOT_PIN_SCOPES = ['user:bot', 'moderator:manage:chat_messages'];
 const REQUIRED_BROADCASTER_PIN_SCOPES = ['channel:bot'];
 
+let appTokenInFlight = null;
 let cachedAppAccessToken = '';
 let cachedAppAccessTokenExpiresAt = 0;
 let activePinRestoreTimer = null;
@@ -74,7 +78,8 @@ async function getAppAccessToken({ forceRefresh = false } = {}) {
     return cachedAppAccessToken;
   }
 
-  return createAppAccessToken();
+  if (!appTokenInFlight) appTokenInFlight = createAppAccessToken().finally(() => { appTokenInFlight = null; });
+  return appTokenInFlight;
 }
 
 async function getAuthorizationSnapshot() {
@@ -172,56 +177,41 @@ async function twitchApiFetch(url, options = {}, { retry401 = true } = {}) {
 
 async function sendChatMessageViaApi(message, { replyParentMessageId = null } = {}) {
   const text = String(message || '').trim();
-
-  if (!text) {
-    throw new Error('Cannot send an empty Twitch chat message.');
-  }
-
-  if (text.length > 500) {
-    throw new Error(`Twitch chat message is ${text.length} characters; maximum is 500.`);
-  }
-
-  const readiness = await getChatApiReadiness();
-
-  if (!readiness.ready) {
-    throw new Error(describeReadinessFailure(readiness, 'Twitch Chat API'));
-  }
-
-  const response = await twitchApiFetch(TWITCH_SEND_CHAT_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      broadcaster_id: readiness.broadcasterUserId,
-      sender_id: readiness.botUserId,
-      message: text,
-      for_source_only: true,
-      ...(replyParentMessageId ? { reply_parent_message_id: String(replyParentMessageId) } : {})
-    })
-  });
-
-  let data = {};
+  if (!text) throw deliveryError('Cannot send an empty Twitch chat message.');
+  if (Array.from(text).length > 500) throw deliveryError('Twitch chat message exceeds 500 characters.');
+  await operationContext.assertOperation();
+  let readiness;
   try {
-    data = await response.json();
-  } catch (err) {
-    // Use status below.
+    readiness = await getChatApiReadiness();
+    if (!readiness.ready) throw deliveryError(describeReadinessFailure(readiness, 'Twitch Chat API'), { fallback: true });
+    // Obtain the app token before the chat POST, so a token-endpoint outage is
+    // known not to have delivered any chat message.
+    await getAppAccessToken();
+  } catch (cause) {
+    if (cause?.cancelled) throw cause;
+    if (cause?.deliveryState === 'NOT_SENT') throw cause;
+    throw deliveryError(`Twitch Chat API preflight failed: ${cause.message}`, { fallback: true, cause });
   }
-
-  if (!response.ok) {
-    const detail = data?.message || JSON.stringify(data || {});
-    throw new Error(`Twitch Send Chat Message API failed with HTTP ${response.status}: ${detail}`);
-  }
-
+  const response = await twitchApiFetch(TWITCH_SEND_CHAT_URL, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ broadcaster_id: readiness.broadcasterUserId,
+      sender_id: readiness.botUserId, message: text, for_source_only: true,
+      ...(replyParentMessageId ? { reply_parent_message_id: String(replyParentMessageId) } : {}) })
+  });
+  let data;
+  try { data = await response.json(); }
+  catch (cause) { throw deliveryError('Twitch chat response was incomplete or invalid; delivery is unknown.', { state: 'UNKNOWN', cause }); }
+  if (!response.ok) throw httpDeliveryError('Twitch Send Chat Message API', response, data?.message || '');
   const result = Array.isArray(data.data) ? data.data[0] : null;
-
-  if (!result?.is_sent) {
-    const dropReason = result?.drop_reason;
-    const reason = dropReason?.message || dropReason?.code || 'Twitch did not send the message.';
-    throw new Error(`Twitch dropped the chat message: ${reason}`);
+  if (result?.is_sent === true && result.message_id) return result;
+  if (result?.is_sent === false && result?.drop_reason) {
+    const reason = result.drop_reason;
+    const held = /automod|held|pending/i.test(`${reason.code || ''} ${reason.message || ''}`);
+    throw deliveryError(`Twitch ${held ? 'held' : 'dropped'} the chat message: ${reason.message || reason.code}`, {
+      state: held ? 'UNKNOWN' : 'NOT_SENT'
+    });
   }
-
-  return result;
+  throw deliveryError('Twitch did not return an unambiguous chat delivery receipt.', { state: 'UNKNOWN' });
 }
 
 async function getPinnedChatMessage() {
@@ -248,7 +238,7 @@ async function getPinnedChatMessage() {
 
   if (!response.ok) {
     const detail = data?.message || JSON.stringify(data || {});
-    throw new Error(`Get Pinned Chat Message failed with HTTP ${response.status}: ${detail}`);
+    throw Object.assign(new Error(`Get Pinned Chat Message failed with HTTP ${response.status}: ${detail}`), { status: response.status, deliveryState: response.status >= 500 ? 'UNKNOWN' : 'NOT_SENT' });
   }
 
   return Array.isArray(data.data) && data.data.length ? data.data[0] : null;
@@ -283,7 +273,7 @@ async function pinChatMessage(messageId, { durationSeconds = null } = {}) {
       // Use status below.
     }
     const detail = data?.message || JSON.stringify(data || {});
-    throw new Error(`Pin Chat Message failed with HTTP ${response.status}: ${detail}`);
+    throw Object.assign(new Error(`Pin Chat Message failed with HTTP ${response.status}: ${detail}`), { status: response.status, deliveryState: response.status >= 500 ? 'UNKNOWN' : 'NOT_SENT' });
   }
 }
 
@@ -311,7 +301,7 @@ async function unpinChatMessage(messageId) {
       // Use status below.
     }
     const detail = data?.message || JSON.stringify(data || {});
-    throw new Error(`Unpin Chat Message failed with HTTP ${response.status}: ${detail}`);
+    throw Object.assign(new Error(`Unpin Chat Message failed with HTTP ${response.status}: ${detail}`), { status: response.status, deliveryState: response.status >= 500 ? 'UNKNOWN' : 'NOT_SENT' });
   }
 }
 
@@ -379,7 +369,7 @@ async function startTemporaryChatPin({ messageId, previousPin = null, displaySec
   activeTemporaryPinMessageId = messageId;
   console.log(`[Recap Pins] Hourly recap pinned for approximately ${seconds} seconds.`);
 
-  activePinRestoreTimer = setTimeout(() => {
+  activePinRestoreTimer = operationContext.detached(() => setTimeout(() => {
     const temporaryMessageId = messageId;
     activePinRestoreTimer = null;
 
@@ -392,7 +382,7 @@ async function startTemporaryChatPin({ messageId, previousPin = null, displaySec
           activeTemporaryPinMessageId = null;
         }
       });
-  }, seconds * 1000);
+  }, seconds * 1000));
 
   return {
     temporaryMessageId: messageId,
@@ -401,7 +391,12 @@ async function startTemporaryChatPin({ messageId, previousPin = null, displaySec
   };
 }
 
+function stopTemporaryPinTimer() {
+  if (activePinRestoreTimer) clearTimeout(activePinRestoreTimer);
+  activePinRestoreTimer = null;
+}
 module.exports = {
+  stopTemporaryPinTimer,
   REQUIRED_BOT_APP_SCOPES,
   REQUIRED_BROADCASTER_APP_SCOPES,
   REQUIRED_BOT_PIN_SCOPES,

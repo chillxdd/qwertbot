@@ -16,6 +16,7 @@ const replyReferenceSchema = new mongoose.Schema({
 
 const recapEntrySchema = new mongoose.Schema(
   {
+    windowId: { type: String, default: '' },
     sequence: { type: Number, required: true },
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now }
@@ -77,6 +78,7 @@ const sessionMemoryClaimSchema = new mongoose.Schema({
 }, { _id: false });
 
 const sessionMemoryBlockSchema = new mongoose.Schema({
+  windowId: { type: String, default: '' },
   sequence: { type: Number, required: true },
   startedAtMs: { type: Number, default: null },
   endedAtMs: { type: Number, required: true },
@@ -93,6 +95,11 @@ const sessionMemoryBlockSchema = new mongoose.Schema({
 }, { _id: false });
 
 const activeStateSchema = new mongoose.Schema({
+  windowId: { type: String, default: '' },
+  windowCreatedAt: { type: Number, default: 0 },
+  capacityReached: { type: Boolean, default: false },
+  recoveryReason: { type: String, default: '' },
+  recoveryDeliveryKey: { type: String, default: '' },
   recapMessages: { type: [recapMessageSchema], default: [] },
   messageSequence: { type: Number, default: 0 },
   streamContexts: { type: [recapContextSchema], default: [] },
@@ -114,11 +121,18 @@ const streamRecapSessionSchema = new mongoose.Schema(
     channelName: { type: String, required: true, index: true },
     streamId: { type: String, required: true, unique: true, index: true },
     startedAt: { type: Date, default: null },
+    endedAt: { type: Date, default: null },
+    purgeAt: { type: Date, default: null },
+    writerFence: { type: Number, default: 0 },
+    recapSequence: { type: Number, default: 0 },
+    memorySequence: { type: Number, default: 0 },
     recaps: { type: [recapEntrySchema], default: [] },
     sessionMemoryBlocks: { type: [sessionMemoryBlockSchema], default: [] },
     activeState: { type: activeStateSchema, default: null }
   },
   { timestamps: true }
 );
+
+streamRecapSessionSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.models.StreamRecapSession || mongoose.model('StreamRecapSession', streamRecapSessionSchema);

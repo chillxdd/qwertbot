@@ -1,3 +1,8 @@
+const { randomUUID } = require('node:crypto');
+const operationContext = require('./reliability/context');
+const delivery = require('./reliability/delivery');
+const { createSerialWriter, createSerialExecutor } = require('./reliability/serialWriter');
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const {
   getRecentStreamRecaps,
   saveStreamRecap,
@@ -6,7 +11,7 @@ const {
   clearSessionMemory,
   getActiveRecapState,
   saveActiveRecapState,
-  clearStreamRecapsByChannel
+  clearStreamRecapsForStream
 } = require('./streamRecapHistory');
 const { getStreamLore, applyStreamLoreObservations, buildEffectiveLore } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
@@ -37,6 +42,11 @@ const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
 const ACTIVE_STATE_CHECKPOINT_INTERVAL = 30 * 1000;
+const STARTUP_GRACE_MS = 60000;
+const MAX_WINDOW_MESSAGES = 12000;
+const MAX_WINDOW_EVENTS = 2000;
+const MAX_WINDOW_BYTES = 4 * 1024 * 1024;
+const MAX_WINDOW_AGE_MS = 6 * 60 * 60 * 1000;
 
 function sourceTimestamp(value, fallback = Date.now()) {
   const numeric = Number(value);
@@ -106,6 +116,32 @@ function createRecapManager({
   getNativeCommandResponse = null,
   botUsername = ''
 }) {
+  let managerStopping = false;
+  let startPromise = null;
+  let started = false;
+  let pollInFlight = null;
+  let lifecycleRevision = 0;
+  let offlineChecks = 0;
+  let lastEndedStreamId = '';
+  let lastKnownPersistedStreamId = '';
+  let pendingEnd = null;
+  let windowId = randomUUID();
+  let windowCreatedAt = Date.now();
+  let windowBytes = 0;
+  let capacityReached = false;
+  let recoveryReason = '';
+  let recoveryDeliveryKey = '';
+  let lastPersistenceError = '';
+  let startupGraceUntil = 0;
+  const chatIds = new Set();
+  const eventIds = new Set();
+  const tasks = new Set();
+  const serializeControl = createSerialExecutor();
+  const serializeLifecycle = createSerialExecutor();
+  const serializeLearning = createSerialExecutor();
+  const stateWriter = createSerialWriter(async (snapshot) => {
+    await saveActiveRecapState(snapshot);
+  });
   let twitchClientId = (process.env.TWITCH_CLIENT_ID || '').trim();
   let streamStateInitialized = false;
   let streamLive = false;
@@ -157,13 +193,16 @@ function createRecapManager({
       if (!saved) return;
       lastStreamStartedAt = saved.lastStreamStartedAt ? new Date(saved.lastStreamStartedAt).getTime() : 0;
       lastStreamEndedAt = saved.lastStreamEndedAt ? new Date(saved.lastStreamEndedAt).getTime() : 0;
+      lastKnownPersistedStreamId = String(saved.lastKnownStreamId || '');
       lastStreamLifecycleEventType = String(saved.lastLifecycleEventType || '');
+      if (lastStreamLifecycleEventType === 'offline') lastEndedStreamId = lastKnownPersistedStreamId;
       lastStreamLifecycleEventAt = saved.lastLifecycleEventAt ? new Date(saved.lastLifecycleEventAt).getTime() : 0;
       if (lastStreamEndedAt) {
         console.log(`[Stream Lifecycle] Restored last stream end: ${new Date(lastStreamEndedAt).toISOString()}.`);
       }
     } catch (err) {
       console.error('[Stream Lifecycle] Could not restore persisted stream lifecycle state:', err?.message || err);
+      throw err;
     }
   }
 
@@ -172,6 +211,7 @@ function createRecapManager({
       await saveStreamLifecycleState(channelName, patch);
     } catch (err) {
       console.error('[Stream Lifecycle] Could not persist stream lifecycle state:', err?.message || err);
+      throw err;
     }
   }
 
@@ -259,8 +299,9 @@ function createRecapManager({
       return typeof tryReserveAutomationSlot === 'function'
         ? await tryReserveAutomationSlot('recap')
         : { allowed: true, status: { active: false } };
-    } catch (_) {
-      return { allowed: true, status: { active: false } };
+    } catch (err) {
+      console.warn('[Recap] Could not reserve an automation slot:', err.message);
+      return { allowed: false, status: { active: true, availableAt: Date.now() + 10000 } };
     }
   }
 
@@ -292,6 +333,7 @@ function createRecapManager({
 
     contextSequence++;
     streamContexts.push({ id: contextSequence, timestamp: Date.now(), ...item });
+    if (streamContexts.length > 500) streamContexts.shift();
     activeStateDirty = true;
     console.log('[Recap] Stream context recorded:', {
       title: item.title || 'Unknown',
@@ -370,6 +412,7 @@ function createRecapManager({
     }
 
     const data = await response.json();
+    if (!Array.isArray(data?.data)) throw new Error('Twitch returned malformed stream-status data; not treating it as offline.');
     const stream = Array.isArray(data.data) && data.data.length > 0 ? data.data[0] : null;
 
     return {
@@ -405,6 +448,7 @@ function createRecapManager({
 
   function buildActiveState() {
     return {
+      windowId, windowCreatedAt, capacityReached, recoveryReason, recoveryDeliveryKey,
       recapMessages: recapMessages.map((item) => toStoredChatRecord(item)),
       messageSequence,
       streamContexts,
@@ -424,30 +468,129 @@ function createRecapManager({
   async function persistActiveState({ force = false } = {}) {
     if (!currentStreamId || !streamLive) return;
     if (!force && !activeStateDirty) return;
-    if (activeStateSaveInProgress) {
-      activeStateDirty = true;
-      return;
-    }
-
-    activeStateSaveInProgress = true;
-    activeStateDirty = false;
-    const streamIdAtSave = currentStreamId;
-    const stateAtSave = buildActiveState();
-    activeStateSavePromise = saveActiveRecapState({
-      streamId: streamIdAtSave,
-      channelName,
+    if (!force && stateWriter.pending) return;
+    const snapshot = { streamId: currentStreamId, channelName,
       startedAt: twitchStreamStartedAt || streamSessionStartedAt || null,
-      state: stateAtSave
-    });
+      writerFence: operationContext.fence(), state: buildActiveState() };
+    activeStateDirty = false;
+    const saving = stateWriter.save(snapshot);
+    activeStateSavePromise = saving;
+    activeStateSaveInProgress = true;
     try {
-      await activeStateSavePromise;
+      await saving;
+      lastPersistenceError = '';
     } catch (err) {
       activeStateDirty = true;
-      console.error('[Recap Persistence] Could not checkpoint active recap window:', err.message || err);
+      lastPersistenceError = String(err?.message || err);
+      console.error('[Recap Persistence] State was NOT saved:', lastPersistenceError);
+      err.persistenceFailure = true;
+      throw err;
     } finally {
-      activeStateSavePromise = null;
-      activeStateSaveInProgress = false;
+      if (activeStateSavePromise === saving) {
+        activeStateSavePromise = null;
+        activeStateSaveInProgress = false;
+      }
     }
+  }
+
+  function rebuildWindowIndex() {
+    chatIds.clear(); eventIds.clear();
+    for (const item of recapMessages) {
+      const id = String(item.sourceMessageId || item.twitchMessageId || '');
+      if (id) chatIds.add(id);
+    }
+    for (const item of twitchEvents) if (item.sourceEventId) eventIds.add(String(item.sourceEventId));
+    windowBytes = Buffer.byteLength(JSON.stringify({ recapMessages, twitchEvents, streamContexts }));
+  }
+
+  function cancelTasks({ publicOnly = false, includePreview = false } = {}) {
+    for (const task of tasks) {
+      if (!publicOnly || task.phase === 'public' || (includePreview && task.phase === 'preview')) task.controller.abort();
+    }
+  }
+
+  function enterRecovery(message, key = '') {
+    recoveryReason = String(message || 'Recap requires operator review.');
+    recoveryDeliveryKey = key;
+    recapPaused = true;
+    recapInProgress = false;
+    clearRecapTimer();
+    nextRecapAt = 0;
+    markActiveStateDirty();
+  }
+
+  function admitWindowEntry(value, kind = 'chat') {
+    const bytes = Buffer.byteLength(JSON.stringify(value));
+    const countFull = kind === 'event' ? twitchEvents.length >= MAX_WINDOW_EVENTS : recapMessages.length >= MAX_WINDOW_MESSAGES;
+    if (capacityReached || countFull || windowBytes + bytes > MAX_WINDOW_BYTES ||
+        ((recapMessages.length || twitchEvents.length) && Date.now() - windowCreatedAt > MAX_WINDOW_AGE_MS)) {
+      if (!capacityReached) {
+        capacityReached = true;
+        collectionPaused = true;
+        cancelTasks();
+        enterRecovery('Recap window reached its retention limit. Collection is frozen; test or clear this window before resuming.');
+        console.warn('[Recap] ' + recoveryReason);
+        void persistActiveState({ force: true }).catch(() => {});
+      }
+      return false;
+    }
+    windowBytes += bytes;
+    return true;
+  }
+
+  async function commitSentWindow(payload) {
+    if (payload.streamId !== currentStreamId) return;
+    // Save the immutable, already-delivered recap before advancing its window.
+    // A crash here leaves the old identity recoverable through the send receipt.
+    await saveStreamRecap({ streamId: payload.streamId, channelName,
+      startedAt: payload.startedAt, text: payload.summary, windowId: payload.windowId });
+    if (payload.streamId !== currentStreamId) return;
+    discardMessageSnapshot(payload.snapshotMaxId);
+    discardContextSnapshot(payload.snapshotMaxContextId);
+    discardEventSnapshot(payload.snapshotMaxEventId);
+    if (windowId === payload.windowId) { windowId = randomUUID(); windowCreatedAt = Number(payload.windowThroughAt || Date.now()); }
+    if (recoveryDeliveryKey === `recap:${channelName}:${payload.streamId}:${payload.windowId}`) {
+      recoveryDeliveryKey = ''; recoveryReason = '';
+    }
+    firstRecapSent = true;
+    recapInProgress = false;
+    rebuildWindowIndex();
+    if (!recapPaused) nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
+    markActiveStateDirty();
+    await persistActiveState({ force: true });
+    if (!recapPaused) scheduleRecapAt(nextRecapAt);
+  }
+
+  async function recoverWindowDelivery() {
+    const key = `recap:${channelName}:${currentStreamId}:${windowId}`;
+    const row = await delivery.get(key);
+    if (row?.state === 'sent') {
+      console.warn('[Recap] Recovered a committed Twitch receipt; consuming its snapshot without resending.');
+      await commitSentWindow(row.payload);
+    } else if (row && ['sending', 'unknown'].includes(row.state)) {
+      enterRecovery('The previous recap may already have reached Twitch. Review chat and resolve its delivery before resuming, or clear the window.', key);
+      await persistActiveState({ force: true });
+    }
+  }
+
+  async function resolveDeliveryReview(outcome, expectedDeliveryKey = recoveryDeliveryKey) {
+    if (expectedDeliveryKey !== recoveryDeliveryKey) return { success: false, message: 'This recap changed since you opened the review. Refresh before resolving it.' };
+    if (!recoveryDeliveryKey) return { success: false, message: 'There is no ambiguous recap delivery to resolve.' };
+    const key = recoveryDeliveryKey;
+    const reviewedStreamId = currentStreamId;
+    const row = await delivery.resolve(key, outcome);
+    if (!row) return { success: false, message: 'The delivery record changed; refresh before reviewing it.' };
+    // An offline/new-stream transition can race an operator's database request.
+    // Resolve only that old receipt, never mutate the replacement live window.
+    if (currentStreamId !== reviewedStreamId || recoveryDeliveryKey !== key) return { success: false, message: 'The old receipt was reviewed, but the active stream changed. Refresh its status.' };
+    recoveryDeliveryKey = ''; recoveryReason = '';
+    if (outcome === 'sent') await commitSentWindow(row.payload);
+    pausedRemainingMs = outcome === 'sent' ? RECURRING_RECAP_DELAY : STARTUP_GRACE_MS;
+    markActiveStateDirty();
+    await persistActiveState({ force: true });
+    return { success: true, message: outcome === 'sent'
+      ? 'Marked delivered and removed the completed snapshot. Recaps remain paused until Resume.'
+      : 'Marked definitely not delivered. The window is preserved; press Resume to retry. Only use this after checking Twitch chat.' };
   }
 
   function markActiveStateDirty() {
@@ -461,6 +604,11 @@ function createRecapManager({
       const saved = await getActiveRecapState({ streamId });
       if (!saved) return false;
 
+      windowId = String(saved.windowId || randomUUID());
+      windowCreatedAt = Number(saved.windowCreatedAt || Date.now());
+      capacityReached = saved.capacityReached === true;
+      recoveryReason = String(saved.recoveryReason || '');
+      recoveryDeliveryKey = String(saved.recoveryDeliveryKey || '');
       recapMessages = normalizeChatRecords(saved.recapMessages || []).map((item) => toStoredChatRecord(item));
       messageSequence = Math.max(Number(saved.messageSequence || 0), recapMessages.at(-1)?.id || 0);
       streamContexts = Array.isArray(saved.streamContexts) ? saved.streamContexts : [];
@@ -482,20 +630,23 @@ function createRecapManager({
       nextRecapAt = Number(saved.nextRecapAt || 0);
 
       activeStateDirty = false;
+      rebuildWindowIndex();
+      await recoverWindowDelivery();
       if (!streamContexts.length) {
         addStreamContext({ title: currentStreamTitle, category: currentStreamCategory, gameId: currentStreamGameId });
       }
 
       if (!recapPaused) {
         if (!nextRecapAt) nextRecapAt = Date.now() + (firstRecapSent ? RECURRING_RECAP_DELAY : FIRST_RECAP_DELAY);
-        scheduleRecapAt(Math.max(Date.now() + 1000, nextRecapAt));
+        startupGraceUntil = Date.now() + STARTUP_GRACE_MS;
+        scheduleRecapAt(Math.max(startupGraceUntil, nextRecapAt));
       }
 
       console.log(`[Recap Persistence] Restored active recap window for stream ${streamId}: ${recapMessages.length} message(s), ${twitchEvents.length} event(s), next recap ${recapPaused ? 'paused' : new Date(nextRecapAt).toISOString()}.`);
       return true;
     } catch (err) {
-      console.error('[Recap Persistence] Could not restore active recap window; starting fresh:', err.message || err);
-      return false;
+      console.error('[Recap Persistence] Restore failed; refusing to overwrite saved state:', err.message || err);
+      throw err;
     }
   }
 
@@ -508,19 +659,23 @@ function createRecapManager({
 
   function scheduleRecapAt(timestamp) {
     clearRecapTimer();
-    if (recapPaused) return;
+    if (recapPaused || managerStopping || !operationContext.isActive()) return;
 
     nextRecapAt = timestamp;
     const delay = Math.max(0, timestamp - Date.now());
 
-    recapTimer = setTimeout(() => {
+    recapTimer = operationContext.detached(() => setTimeout(() => {
       sendAutomaticRecap(firstRecapSent ? '60-minute timer' : 'first 60-minute timer')
         .catch((err) => console.error('[Recap] Scheduled recap error:', err));
-    }, delay);
+    }, delay));
   }
 
   async function startStreamSession(status, alreadyLiveAtStartup = false) {
+    cancelTasks();
     clearRecapTimer();
+    windowId = randomUUID(); windowCreatedAt = Date.now(); windowBytes = 0;
+    capacityReached = false; recoveryReason = ''; recoveryDeliveryKey = '';
+    chatIds.clear(); eventIds.clear();
     streamLive = true;
     recapMessages = [];
     messageSequence = 0;
@@ -535,6 +690,7 @@ function createRecapManager({
     pausedRemainingMs = 0;
 
     currentStreamId = String(status?.streamId || '').trim();
+    lastKnownPersistedStreamId = currentStreamId;
     currentStreamTitle = String(status?.title || '').trim();
     currentStreamCategory = String(status?.category || '').trim();
     currentStreamGameId = String(status?.gameId || '').trim();
@@ -567,7 +723,7 @@ function createRecapManager({
       streamSessionStartedAt = Date.now();
     }
 
-    const restored = alreadyLiveAtStartup ? await restoreActiveStateIfAvailable(status) : false;
+    const restored = await restoreActiveStateIfAvailable(status);
     if (!restored) {
       addStreamContext({
         title: currentStreamTitle,
@@ -576,9 +732,9 @@ function createRecapManager({
       });
 
       nextRecapAt = streamSessionStartedAt + FIRST_RECAP_DELAY;
-      scheduleRecapAt(nextRecapAt);
       markActiveStateDirty();
       await persistActiveState({ force: true });
+      scheduleRecapAt(nextRecapAt);
     }
 
     console.log(`[Recap] Qwert is LIVE. Automatic recap session ${restored ? 'restored from MongoDB' : 'started'}.`);
@@ -587,128 +743,116 @@ function createRecapManager({
     console.log(restored ? '[Recap Persistence] Existing recap cadence preserved across restart.' : '[Recap] First recap will send after 60 minutes.');
   }
 
-  async function endStreamSession(endedAtMs = 0) {
-    const now = Date.now();
-    const resolvedEndedAt = Number(endedAtMs) || recentOfflineLifecycleTimestamp(now) || now;
-    lastStreamEndedAt = resolvedEndedAt;
-    lastStreamLifecycleEventType = 'offline';
-    lastStreamLifecycleEventAt = resolvedEndedAt;
-    clearRecapTimer();
-    streamLive = false;
-    const lifecycleSavePromise = persistStreamLifecycle({
-      lastStreamEndedAt,
-      lastLifecycleEventType: 'offline',
-      lastLifecycleEventAt: resolvedEndedAt
+  async function finishPendingEnd() {
+    if (!pendingEnd) return;
+    const ending = pendingEnd;
+    try { await stateWriter.flush(); } catch (err) { console.warn('[Recap] Prior checkpoint failed; applying the stream-end tombstone instead:', err.message); }
+    await persistStreamLifecycle({ lastStreamEndedAt: ending.endedAt,
+      lastKnownStreamId: ending.streamId, lastLifecycleEventType: 'offline',
+      lastLifecycleEventAt: ending.endedAt });
+    if (ending.streamId) await clearStreamRecapsForStream({
+      streamId: ending.streamId, channelName, writerFence: operationContext.fence()
     });
-    if (activeStateSavePromise) {
-      try { await activeStateSavePromise; } catch {}
+    if (pendingEnd !== ending) return;
+    currentStreamId = ''; currentStreamTitle = ''; currentStreamCategory = ''; currentStreamGameId = '';
+    currentViewerCount = 0; recapMessages = []; streamContexts = []; twitchEvents = [];
+    messageSequence = 0; contextSequence = 0; eventSequence = 0;
+    firstRecapSent = false; recapInProgress = false; recapPaused = false; collectionPaused = false;
+    pausedRemainingMs = 0; streamSessionStartedAt = 0; twitchStreamStartedAt = 0; nextRecapAt = 0;
+    activeStateDirty = false; chatIds.clear(); eventIds.clear(); windowBytes = 0;
+    capacityReached = false; recoveryReason = ''; recoveryDeliveryKey = ''; pendingEnd = null;
+    console.log('[Recap] Qwert is OFFLINE. Ended stream state was durably cleared without touching another stream.');
+  }
+
+  async function endStreamSession(endedAtMs = 0) {
+    const resolvedEndedAt = Number(endedAtMs) || recentOfflineLifecycleTimestamp() || Date.now();
+    const endedStreamId = currentStreamId || lastKnownPersistedStreamId;
+    lastStreamEndedAt = resolvedEndedAt; lastStreamLifecycleEventType = 'offline';
+    lastStreamLifecycleEventAt = resolvedEndedAt; lastEndedStreamId = endedStreamId;
+    cancelTasks(); recapGenerationEpoch += 1; clearRecapTimer();
+    streamLive = false; recapInProgress = false; nextRecapAt = 0;
+    pendingEnd ||= { streamId: endedStreamId, endedAt: resolvedEndedAt };
+    try { await finishPendingEnd(); }
+    catch (err) {
+      recoveryReason = 'Stream ended, but MongoDB cleanup is pending. The saved stream will be retried safely.';
+      throw err;
     }
-    currentStreamId = '';
-    currentStreamTitle = '';
-    currentStreamCategory = '';
-    currentStreamGameId = '';
-    currentViewerCount = 0;
-    recapMessages = [];
-    messageSequence = 0;
-    streamContexts = [];
-    contextSequence = 0;
-    twitchEvents = [];
-    eventSequence = 0;
-    firstRecapSent = false;
-    recapInProgress = false;
-    recapPaused = false;
-    collectionPaused = false;
-    pausedRemainingMs = 0;
-    streamSessionStartedAt = 0;
-    twitchStreamStartedAt = 0;
-    nextRecapAt = 0;
-    activeStateDirty = false;
-    clearStreamRecapsByChannel(channelName)
-      .then((result) => console.log(`[Recap] Cleared ${result?.deletedCount || 0} stored stream recap session(s) from MongoDB.`))
-      .catch((err) => console.error('[Recap] Could not clear stored stream recap history after stream end:', err.message || err));
-    await lifecycleSavePromise;
-    console.log('[Recap] Qwert is OFFLINE. Automatic recap session stopped and recap history cleared.');
   }
 
   async function noteStreamLifecycleEvent({ type, event = {}, timestamp = Date.now() } = {}) {
-    const normalizedType = String(type || '').trim();
     const receivedAt = Number(timestamp) || Date.now();
-
-    if (normalizedType === 'stream.offline') {
-      lastStreamEndedAt = receivedAt;
-      lastStreamLifecycleEventType = 'offline';
-      lastStreamLifecycleEventAt = receivedAt;
-      console.log(`[Stream Lifecycle] EventSub recorded stream end at ${new Date(receivedAt).toISOString()}.`);
-      if (streamStateInitialized && streamLive) {
-        await endStreamSession(receivedAt);
-      } else {
-        await persistStreamLifecycle({
-          lastStreamEndedAt,
-          lastLifecycleEventType: 'offline',
-          lastLifecycleEventAt: receivedAt
-        });
-      }
+    if (managerStopping || !operationContext.isActive()) return;
+    if (receivedAt < lastStreamLifecycleEventAt || (streamLive && receivedAt < twitchStreamStartedAt)) {
+      console.log('[Stream Lifecycle] Ignored an out-of-order lifecycle notification.');
       return;
     }
-
-    if (normalizedType === 'stream.online') {
-      const parsedStartedAt = Date.parse(event?.started_at || '');
-      const startedAt = Number.isNaN(parsedStartedAt) ? receivedAt : parsedStartedAt;
-      lastStreamStartedAt = startedAt;
-      lastStreamLifecycleEventType = 'online';
-      lastStreamLifecycleEventAt = receivedAt;
-      await persistStreamLifecycle({
-        lastStreamStartedAt,
-        lastKnownStreamId: String(event?.id || '').trim(),
-        lastLifecycleEventType: 'online',
-        lastLifecycleEventAt: receivedAt
-      });
-      console.log(`[Stream Lifecycle] EventSub recorded stream start at ${new Date(startedAt).toISOString()}.`);
-      if (streamStateInitialized && !streamLive) await checkStreamStatus();
-    }
+    lifecycleRevision += 1;
+    await serializeLifecycle(async () => {
+      if (managerStopping) return;
+      if (pendingEnd) await finishPendingEnd();
+      if (receivedAt < lastStreamLifecycleEventAt) return;
+      if (type === 'stream.offline') {
+        lastStreamEndedAt = receivedAt;
+        lastStreamLifecycleEventType = 'offline'; lastStreamLifecycleEventAt = receivedAt;
+        offlineChecks = 0;
+        if (streamLive) await endStreamSession(receivedAt);
+        else await persistStreamLifecycle({ lastStreamEndedAt, lastLifecycleEventType: 'offline', lastLifecycleEventAt: receivedAt });
+      } else if (type === 'stream.online') {
+        const parsed = Date.parse(event.started_at || '');
+        lastStreamStartedAt = Number.isNaN(parsed) ? receivedAt : parsed;
+        lastStreamLifecycleEventType = 'online'; lastStreamLifecycleEventAt = receivedAt;
+        await persistStreamLifecycle({ lastStreamStartedAt, lastKnownStreamId: String(event.id || ''),
+          lastLifecycleEventType: 'online', lastLifecycleEventAt: receivedAt });
+      }
+    });
+    if (type === 'stream.online') await checkStreamStatus();
   }
 
   async function checkStreamStatus() {
-    try {
-      const status = await fetchStreamStatus();
-
-      if (!streamStateInitialized) {
-        streamStateInitialized = true;
-        if (status.live) await startStreamSession(status, true);
-        else {
-          streamLive = false;
-          if (lastStreamStartedAt && (!lastStreamEndedAt || lastStreamStartedAt > lastStreamEndedAt)) {
-            // The bot restarted after a stream that began while we were online, but
-            // no trustworthy offline timestamp survived. Do not present an older
-            // stream's end time as though it were the most recent one.
-            lastStreamEndedAt = 0;
-            void persistStreamLifecycle({ lastStreamEndedAt: null });
-            console.warn('[Stream Lifecycle] Current status is offline, but the most recent stream start is newer than the stored end time. Exact last-stream end is unknown (likely missed during downtime).');
+    if (managerStopping || !operationContext.isActive()) return;
+    if (pollInFlight) return pollInFlight;
+    const revision = lifecycleRevision;
+    pollInFlight = (async () => {
+      try {
+        if (pendingEnd) await serializeLifecycle(finishPendingEnd);
+        const status = await fetchStreamStatus();
+        if (managerStopping || revision !== lifecycleRevision || !operationContext.isActive()) return;
+        await serializeLifecycle(async () => {
+          if (managerStopping || revision !== lifecycleRevision) return;
+          if (status.live) {
+            offlineChecks = 0;
+            if (status.streamId === lastEndedStreamId && lastStreamLifecycleEventType === 'offline' &&
+                Date.now() - lastStreamLifecycleEventAt < 60000) return;
+            if (!streamLive || status.streamId !== currentStreamId) {
+              if (streamLive) await endStreamSession();
+              try {
+                await startStreamSession(status, !streamStateInitialized);
+                streamStateInitialized = true;
+              } catch (err) {
+                clearRecapTimer(); streamLive = false; currentStreamId = ''; streamStateInitialized = false;
+                throw err;
+              }
+            } else updateCurrentStreamContext(status);
+          } else {
+            if (streamLive || (!streamStateInitialized && lastKnownPersistedStreamId && lastStreamLifecycleEventType === 'online')) {
+              offlineChecks += 1;
+              if (offlineChecks < 3) {
+                console.warn(`[Recap] Twitch returned offline (${offlineChecks}/3); preserving the live session pending confirmation.`);
+                return;
+              }
+              await endStreamSession();
+              offlineChecks = 0;
+            }
+            streamStateInitialized = true;
           }
-          clearStreamRecapsByChannel(channelName)
-            .then((result) => {
-              if (result?.deletedCount) console.log(`[Recap] Removed ${result.deletedCount} stale stored recap session(s) while Qwert is offline.`);
-            })
-            .catch((err) => console.error('[Recap] Could not clear stale stream recap history:', err.message || err));
-          console.log('[Recap] Qwert is currently offline. Waiting for stream start.');
-        }
-        return;
-      }
-
-      if (status.live && !streamLive) {
-        await startStreamSession(status, false);
-        return;
-      }
-
-      if (!status.live && streamLive) {
-        await endStreamSession();
-        return;
-      }
-
-      if (status.live && streamLive) updateCurrentStreamContext(status);
-    } catch (err) {
-      console.error('[Recap] Stream status check failed:', err.message || err);
-    }
+        });
+      } catch (err) {
+        // Network/auth errors are unknown, never evidence of an ended stream.
+        offlineChecks = 0;
+        console.error('[Recap] Stream status check failed:', err.message || err);
+      } finally { pollInFlight = null; }
+    })();
+    return pollInFlight;
   }
 
   function cancelRecapGeminiWork({ includeLearning = false } = {}) {
@@ -736,7 +880,7 @@ function createRecapManager({
       return { success: false, message: 'Qwert is offline.' };
     }
 
-    if (recapPaused && !collectionPaused && !recapInProgress) {
+    if (recapPaused && !collectionPaused && !recapInProgress && !lastPersistenceError) {
       if (announce) await client.say(channel, await nativeResponse('stoprecap', 'alreadyPaused', { user: displayName }, `@${displayName}, automatic hourly recap generation is already paused while collection remains active.`));
       return { success: false, message: 'Recap generation is already paused; collection is still active.' };
     }
@@ -748,6 +892,7 @@ function createRecapManager({
     const wasGenerating = recapInProgress;
     if (wasGenerating) {
       recapGenerationEpoch += 1;
+      cancelTasks({ publicOnly: true });
       cancelRecapGeminiWork({ includeLearning: false });
     }
 
@@ -793,6 +938,7 @@ function createRecapManager({
     // Invalidate every phase owned by an automatic recap and cancel both the
     // public recap request and post-recap memory/profile/lore Gemini work.
     recapGenerationEpoch += 1;
+    cancelTasks();
     const cancelResult = cancelRecapGeminiWork({ includeLearning: true });
 
     clearRecapTimer();
@@ -831,18 +977,21 @@ function createRecapManager({
     // A cleared window must never still be sent by an older generation.
     // Cancelling only hourly-recap work leaves already-sent post-processing
     // alone; those jobs use an immutable snapshot from the completed window.
+    cancelTasks({ publicOnly: true, includePreview: true });
     if (wasGenerating) {
       recapGenerationEpoch += 1;
       cancelRecapGeminiWork({ includeLearning: false });
       recapInProgress = false;
     }
 
+    windowId = randomUUID(); windowCreatedAt = Date.now(); capacityReached = false;
+    recoveryReason = ''; recoveryDeliveryKey = ''; windowBytes = 0; chatIds.clear(); eventIds.clear();
     recapMessages = [];
-    messageSequence = 0;
+    // Keep messageSequence monotonic across Clear.
     twitchEvents = [];
-    eventSequence = 0;
+    // Keep eventSequence monotonic across Clear.
     streamContexts = [];
-    contextSequence = 0;
+    // Keep contextSequence monotonic across Clear.
     addStreamContext({
       title: currentStreamTitle,
       category: currentStreamCategory,
@@ -900,9 +1049,12 @@ function createRecapManager({
       return { success: false, message: 'Automatic hourly recaps are already running.' };
     }
 
+    await recoverWindowDelivery();
+    if (recoveryDeliveryKey || capacityReached) return { success: false, message: recoveryReason };
     recapPaused = false;
     collectionPaused = false;
-    const resumeDelay = Math.max(1000, pausedRemainingMs);
+    recoveryReason = '';
+    const resumeDelay = Math.max(STARTUP_GRACE_MS, pausedRemainingMs);
     nextRecapAt = Date.now() + resumeDelay;
     pausedRemainingMs = 0;
 
@@ -912,10 +1064,11 @@ function createRecapManager({
       gameId: currentStreamGameId
     });
 
-    scheduleRecapAt(nextRecapAt);
     await waitForActiveStateSave();
     markActiveStateDirty();
-    await persistActiveState({ force: true });
+    try { await persistActiveState({ force: true }); }
+    catch (err) { recapPaused = true; nextRecapAt = 0; clearRecapTimer(); throw err; }
+    scheduleRecapAt(nextRecapAt);
     console.log(`[Recap] Resumed by ${displayName}. Generation RUNNING, collection ACTIVE. Next recap in ${formatCountdown(resumeDelay)}.`);
 
     if (announce) {
@@ -926,20 +1079,23 @@ function createRecapManager({
   }
 
   function recordTwitchEvent(event) {
-    if (!streamLive || collectionPaused) return false;
+    if (!streamLive || collectionPaused || managerStopping || !operationContext.isActive()) return false;
     const normalized = normalizeEventRecord(event);
-    if (!normalized.text) return false;
+    if (!normalized.text || sourceTimestamp(normalized.timestamp) < windowCreatedAt) return false;
 
-    if (normalized.sourceEventId && twitchEvents.some((item) => String(item?.sourceEventId || '') === normalized.sourceEventId)) {
+    if (normalized.sourceEventId && eventIds.has(normalized.sourceEventId)) {
       return false;
     }
 
     eventSequence++;
-    twitchEvents.push(toStoredEventRecord({
+    const storedEvent = toStoredEventRecord({
       ...normalized,
       id: eventSequence,
       timestamp: sourceTimestamp(normalized.timestamp)
-    }));
+    });
+    if (!admitWindowEntry(storedEvent, 'event')) return false;
+    twitchEvents.push(storedEvent);
+    if (storedEvent.sourceEventId) eventIds.add(storedEvent.sourceEventId);
 
     markActiveStateDirty();
     console.log(`[Recap] Verified Twitch event recorded: ${normalized.text}`);
@@ -958,7 +1114,7 @@ function createRecapManager({
     sharedChat = null,
     metadata = {}
   } = {}) {
-    if (!streamLive || collectionPaused) return false;
+    if (!streamLive || collectionPaused || managerStopping || !operationContext.isActive()) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
@@ -966,8 +1122,11 @@ function createRecapManager({
       sharedChat || metadata?.sharedChat || sharedChatOriginFromTwitchTags(tags)
     );
     const canonicalSourceId = String(sourceMessageId || origin.sourceMessageId || '').trim();
+    if (timestamp || tags?.['tmi-sent-ts']) {
+      if (sourceTimestamp(timestamp || tags['tmi-sent-ts']) < windowCreatedAt) return false;
+    }
     const dedupeId = canonicalSourceId || messageId;
-    if (dedupeId && recapMessages.some((item, index) => canonicalChatMessageId(item, index) === dedupeId)) return false;
+    if (dedupeId && chatIds.has(dedupeId)) return false;
 
     messageSequence++;
     const identity = normalizeIdentity(author || identityFromTwitchTags(tags, displayName), {
@@ -976,7 +1135,7 @@ function createRecapManager({
       userId: tags?.['user-id'] || '',
       role: 'viewer'
     });
-    recapMessages.push(toStoredChatRecord({
+    const storedMessage = toStoredChatRecord({
       id: messageSequence,
       twitchMessageId: messageId,
       sourceMessageId: canonicalSourceId,
@@ -987,7 +1146,11 @@ function createRecapManager({
       replyTo: replyReferenceFromInput(replyTo, tags),
       sharedChat: origin,
       metadata
-    }));
+    });
+    if (!admitWindowEntry(storedMessage)) return false;
+    recapMessages.push(storedMessage);
+    const storedId = String(storedMessage.sourceMessageId || storedMessage.twitchMessageId || '');
+    if (storedId) chatIds.add(storedId);
     markActiveStateDirty();
     return true;
   }
@@ -1001,15 +1164,16 @@ function createRecapManager({
     replyTo = null,
     metadata = {}
   } = {}) {
-    if (!streamLive || collectionPaused) return false;
+    if (!streamLive || collectionPaused || managerStopping || !operationContext.isActive()) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
+    if (timestamp && sourceTimestamp(timestamp) < windowCreatedAt) return false;
     const messageId = String(twitchMessageId || '').trim();
-    if (messageId && recapMessages.some((item) => String(item?.twitchMessageId || '') === messageId)) return false;
+    if (messageId && chatIds.has(messageId)) return false;
 
     const botName = String(displayName || botUsername || 'SqwertArmyBot').trim() || 'SqwertArmyBot';
     messageSequence++;
-    recapMessages.push(toStoredChatRecord({
+    const storedMessage = toStoredChatRecord({
       id: messageSequence,
       twitchMessageId: messageId,
       timestamp: sourceTimestamp(timestamp),
@@ -1018,7 +1182,11 @@ function createRecapManager({
       body,
       replyTo,
       metadata
-    }));
+    });
+    if (!admitWindowEntry(storedMessage)) return false;
+    recapMessages.push(storedMessage);
+    const storedId = String(storedMessage.sourceMessageId || storedMessage.twitchMessageId || '');
+    if (storedId) chatIds.add(storedId);
     markActiveStateDirty();
     return true;
   }
@@ -1035,7 +1203,7 @@ function createRecapManager({
     sharedChat = null,
     metadata = {}
   } = {}) {
-    if (!streamLive || collectionPaused) return false;
+    if (!streamLive || collectionPaused || managerStopping || !operationContext.isActive()) return false;
     const body = String(rawMessage || '').trim();
     if (!body) return false;
     const messageId = String(twitchMessageId || tags?.id || tags?.['message-id'] || '').trim();
@@ -1043,12 +1211,15 @@ function createRecapManager({
       sharedChat || metadata?.sharedChat || sharedChatOriginFromTwitchTags(tags)
     );
     const canonicalSourceId = String(sourceMessageId || origin.sourceMessageId || '').trim();
+    if (timestamp || tags?.['tmi-sent-ts']) {
+      if (sourceTimestamp(timestamp || tags['tmi-sent-ts']) < windowCreatedAt) return false;
+    }
     const dedupeId = canonicalSourceId || messageId;
-    if (dedupeId && recapMessages.some((item, index) => canonicalChatMessageId(item, index) === dedupeId)) return false;
+    if (dedupeId && chatIds.has(dedupeId)) return false;
 
     const moderator = String(displayName || 'moderator').trim() || 'moderator';
     messageSequence++;
-    recapMessages.push(toStoredChatRecord({
+    const storedMessage = toStoredChatRecord({
       id: messageSequence,
       twitchMessageId: messageId,
       sourceMessageId: canonicalSourceId,
@@ -1058,7 +1229,11 @@ function createRecapManager({
       body,
       sharedChat: origin,
       metadata: { ...metadata, color: String(color || '').trim() }
-    }));
+    });
+    if (!admitWindowEntry(storedMessage)) return false;
+    recapMessages.push(storedMessage);
+    const storedId = String(storedMessage.sourceMessageId || storedMessage.twitchMessageId || '');
+    if (storedId) chatIds.add(storedId);
 
     markActiveStateDirty();
     console.log(`[Recap] ${origin.isGuest ? 'Shared Chat guest announcement' : 'Moderator announcement'} recorded from ${moderator}: ${body}`);
@@ -1091,14 +1266,43 @@ function createRecapManager({
     }
   }
 
+  function createTask(phase) {
+    const task = { phase, streamId: currentStreamId, controller: new AbortController(), promise: null };
+    tasks.add(task);
+    return task;
+  }
+  function taskCurrent(task) { return !managerStopping && streamLive && currentStreamId === task.streamId && !task.controller.signal.aborted; }
+  async function runPreview(fn) {
+    if (managerStopping || (recapPaused && collectionPaused)) throw new Error('Recap system is stopped. Select Pause Generation to enable preview testing without automatic sends.');
+    if ([...tasks].some((task) => task.phase === 'preview')) throw new Error('A recap preview is already running.');
+    const task = createTask('preview');
+    const previewWindowId = windowId;
+    task.promise = operationContext.runOperation(async () => {
+      const result = await fn();
+      operationContext.throwIfCancelled();
+      return result;
+    }, { signal: task.controller.signal, isCurrent: () => taskCurrent(task) && windowId === previewWindowId });
+    try { return await task.promise; } finally { tasks.delete(task); }
+  }
   async function sendAutomaticRecap(reason) {
+    if (managerStopping || !operationContext.isActive() || !streamLive || recapPaused || recapInProgress) return;
+    const task = createTask('public');
+    task.promise = operationContext.runOperation(() => performAutomaticRecap(reason, task), {
+      signal: task.controller.signal, isCurrent: () => taskCurrent(task)
+    });
+    try { return await task.promise; } finally { tasks.delete(task); }
+  }
+  async function performAutomaticRecap(reason, task) {
     if (!streamLive || recapPaused || recapInProgress) return;
     if (deferForEventReaction()) return;
     if (deferForTaggedQuestionBuffer()) return;
     if (deferForAutomationSpacing()) return;
 
     recapInProgress = true;
-    const generationEpoch = recapGenerationEpoch;
+    const generationStreamId = currentStreamId;
+    const generationWindowId = windowId;
+    const generationStartedAt = streamSessionStartedAt;
+    const windowThroughAt = Date.now();
     clearRecapTimer();
 
     const messageSnapshot = [...recapMessages];
@@ -1126,7 +1330,7 @@ function createRecapManager({
 
       if (currentStreamId) {
         try {
-          previousRecaps = await getRecentStreamRecaps({ streamId: currentStreamId, limit: 5 });
+          previousRecaps = await getRecentStreamRecaps({ streamId: generationStreamId, limit: 5 });
           console.log(`[Recap] Loaded ${previousRecaps.length} previous hourly recap(s) from this stream for continuity context.`);
         } catch (historyErr) {
           console.error('[Recap] Could not load previous stream recap context. Continuing without it:', historyErr.message || historyErr);
@@ -1183,7 +1387,7 @@ function createRecapManager({
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
 
-      if (generationEpoch !== recapGenerationEpoch) {
+      if (!taskCurrent(task)) {
         console.log('[Recap] Automatic recap was aborted by moderator before send. Discarding generated output.');
         return;
       }
@@ -1207,90 +1411,28 @@ function createRecapManager({
         return;
       }
 
-      if (generationEpoch !== recapGenerationEpoch || recapPaused) {
+      if (!taskCurrent(task) || recapPaused) {
         console.log('[Recap] Automatic recap was aborted/paused before Twitch send. Generated output discarded.');
         return;
       }
 
-      await client.say(channelName, twitchMessage, { temporaryPin: true });
+      // Persist the window identity before attempting any external delivery.
+      await persistActiveState({ force: true });
+      const delivered = await delivery.deliver({
+        key: `recap:${channelName}:${generationStreamId}:${generationWindowId}`, kind: 'recap',
+        payload: { streamId: generationStreamId, windowId: generationWindowId,
+          startedAt: generationStartedAt, windowThroughAt, snapshotMaxId, snapshotMaxContextId, snapshotMaxEventId,
+          message: twitchMessage, summary: recapSummaryBody },
+        send: (payload) => client.say(channelName, payload.message, { temporaryPin: true })
+      });
       recapSent = true;
-      console.log('[Recap] Sent:', twitchMessage);
-      console.log(`[Recap] Length: ${twitchMessage.length}/500`);
+      console.log(`[Recap] ${delivered.replayed ? 'Recovered already-sent recap' : 'Sent recap'} (${twitchMessage.length}/500).`);
+      await commitSentWindow(delivered.payload);
+      if (!taskCurrent(task) || collectionPaused || delivered.replayed) return;
+      task.phase = 'learning';
 
-      // The Twitch send cannot be retracted once it is already in flight. If
-      // an operator pause/stop/clear lands during that final await and Twitch
-      // still accepts the message, treat the snapshot as successfully sent so
-      // it cannot be replayed after Resume/restart. Preserve only messages,
-      // events, and context that arrived after the sent snapshot.
-      if (generationEpoch !== recapGenerationEpoch || recapPaused) {
-        discardMessageSnapshot(snapshotMaxId);
-        discardContextSnapshot(snapshotMaxContextId);
-        discardEventSnapshot(snapshotMaxEventId);
-        firstRecapSent = true;
-        recapInProgress = false;
-        markActiveStateDirty();
-        try { await persistActiveState({ force: true }); } catch (_) {}
-        if (currentStreamId && recapSummaryBody) {
-          try {
-            await saveStreamRecap({
-              streamId: currentStreamId,
-              channelName,
-              startedAt: streamSessionStartedAt || null,
-              text: recapSummaryBody
-            });
-          } catch (historyErr) {
-            console.error('[Recap] Twitch accepted recap during operator stop, but history storage failed:', historyErr?.message || historyErr);
-          }
-        }
-        console.warn('[Recap] Twitch accepted the recap while an operator pause/stop/clear was taking effect. Sent snapshot was removed to prevent duplicate replay; selected paused/stopped state was preserved and post-recap learning was skipped.');
-        return;
-      }
-
-      // The public recap is complete as soon as Twitch accepts it. Do not keep
-      // recapInProgress=true while session memory / viewer / lore learning runs,
-      // otherwise the admin UI misleadingly shows GENERATING, the next-recap
-      // countdown sits at 0m 0s, and the completed snapshot remains in the
-      // displayed current-window count. Post-recap learning uses the local
-      // snapshots above, so it is safe to roll the live window forward now.
-      discardMessageSnapshot(snapshotMaxId);
-      discardContextSnapshot(snapshotMaxContextId);
-      discardEventSnapshot(snapshotMaxEventId);
-      firstRecapSent = true;
-      recapInProgress = false;
-      nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
-      scheduleRecapAt(nextRecapAt);
-      markActiveStateDirty();
-      try {
-        await persistActiveState({ force: true });
-      } catch (stateErr) {
-        console.error('[Recap Persistence] Public recap succeeded, but active-state persistence failed:', stateErr?.message || stateErr);
-      }
-      console.log(`[Recap] Public recap cycle complete. Next automatic recap remains on the anchored hourly cadence at ${new Date(nextRecapAt).toISOString()}.`);
-
-      if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
-        console.log('[Recap] Post-recap processing skipped because the recap system was stopped.');
-        return;
-      }
-
-      if (currentStreamId && recapSummaryBody) {
-        try {
-          await saveStreamRecap({
-            streamId: currentStreamId,
-            channelName,
-            startedAt: streamSessionStartedAt || null,
-            text: recapSummaryBody
-          });
-          console.log('[Recap] Stored this hourly recap in MongoDB for same-stream continuity context.');
-        } catch (historyErr) {
-          console.error('[Recap] Recap sent successfully, but MongoDB history storage failed:', historyErr.message || historyErr);
-        }
-      }
-
-      if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
-        console.log('[Recap] Post-recap learning stopped by moderator.');
-        return;
-      }
-
+      await serializeLearning(async () => {
+      operationContext.throwIfCancelled();
       if (currentStreamId) {
         const sessionMemoryConfig = readSessionMemoryConfig();
         let viewerProfileSettings = { automaticLearningEnabled: false };
@@ -1329,16 +1471,16 @@ function createRecapManager({
                 config: sessionMemoryConfig,
                 channelName
               });
-              if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+              if (!taskCurrent(task) || collectionPaused) {
                 console.log('[Recap] Session-memory write skipped because the recap system was stopped.');
                 return;
               }
               if (memoryBlock) {
                 await saveSessionMemoryBlock({
-                  streamId: currentStreamId,
+                  streamId: generationStreamId,
                   channelName,
-                  startedAt: streamSessionStartedAt || null,
-                  block: memoryBlock
+                  startedAt: generationStartedAt || null,
+                  block: memoryBlock, windowId: generationWindowId
                 });
                 console.log(`[Session Memory] Stored hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
               }
@@ -1347,7 +1489,7 @@ function createRecapManager({
             }
           }
 
-          if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+          if (!taskCurrent(task) || collectionPaused) {
             console.log('[Recap] Remaining post-recap learning stopped by moderator.');
             return;
           }
@@ -1356,7 +1498,7 @@ function createRecapManager({
             try {
               const existingProfiles = await getViewerLearningContext(channelName, permanentLearningRecords);
               const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: permanentLearningRecords, existingProfiles });
-              if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+              if (!taskCurrent(task) || collectionPaused) {
                 console.log('[Recap] Viewer-profile write skipped because the recap system was stopped.');
                 return;
               }
@@ -1375,7 +1517,7 @@ function createRecapManager({
             }
           }
 
-          if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+          if (!taskCurrent(task) || collectionPaused) {
             console.log('[Recap] Remaining post-recap learning stopped by moderator.');
             return;
           }
@@ -1385,7 +1527,7 @@ function createRecapManager({
               chatLogs: permanentLearningRecords,
               existingObservations: streamLoreRecord?.learnedObservations || []
             });
-            if (generationEpoch !== recapGenerationEpoch || collectionPaused) {
+            if (!taskCurrent(task) || collectionPaused) {
               console.log('[Recap] Stream-lore write skipped because the recap system was stopped.');
               return;
             }
@@ -1401,35 +1543,25 @@ function createRecapManager({
         }
       }
 
+      });
       console.log('[Recap] Post-recap memory/profile/lore processing complete.');
     } catch (err) {
-      if (generationEpoch !== recapGenerationEpoch || err?.cancelled === true) {
+      if (err?.reviewRequired && currentStreamId === generationStreamId && windowId === generationWindowId) {
+        enterRecovery(err.message, err.deliveryKey);
+        try { await persistActiveState({ force: true }); } catch (_) {}
+        return;
+      }
+      if (!taskCurrent(task) || err?.cancelled === true) {
         // An operator-owned pause/stop/clear transition owns the state now.
         // Do not schedule a five-minute retry or resurrect an older window.
-        recapInProgress = false;
         console.log('[Recap] Automatic recap operation cancelled by moderator; no retry scheduled.');
         return;
       }
 
-      if (recapSent) {
-        // Never retry a recap that Twitch already received. Any unexpected
-        // failure after send belongs to background post-processing only.
-        console.error('[Recap] Post-send processing failed. Public recap remains successful:', err);
-        discardMessageSnapshot(snapshotMaxId);
-        discardContextSnapshot(snapshotMaxContextId);
-        discardEventSnapshot(snapshotMaxEventId);
-        firstRecapSent = true;
-        recapInProgress = false;
-        if (!nextRecapAt || nextRecapAt <= Date.now()) {
-          nextRecapAt = nextAnchoredRecapAt(streamSessionStartedAt, Date.now());
-          scheduleRecapAt(nextRecapAt);
-        }
-        markActiveStateDirty();
-        try {
-          await persistActiveState({ force: true });
-        } catch (stateErr) {
-          console.error('[Recap Persistence] Could not persist state after post-send failure:', stateErr?.message || stateErr);
-        }
+      if (recapSent || err?.persistenceFailure) {
+        enterRecovery(recapSent ? 'Recap was sent, but saving its completed state failed. Automatic recaps paused; check MongoDB and restart after recovery.' : 'MongoDB did not save the recap state. Automatic recaps paused to avoid unsafe delivery.');
+        try { await persistActiveState({ force: true }); } catch (_) {}
+        console.error('[Recap] Safe recovery pause:', err?.message || err);
         return;
       }
 
@@ -1441,10 +1573,13 @@ function createRecapManager({
         discardContextSnapshot(snapshotMaxContextId);
         discardEventSnapshot(snapshotMaxEventId);
         firstRecapSent = true;
+        windowId = randomUUID(); windowCreatedAt = Date.now(); rebuildWindowIndex();
 
         if (streamLive) {
           try {
-            await client.say(channelName, "The hourly recap was blocked due to sensitive terms found in chat. I'll try again in 60 minutes. Y'all may have gone a little too hard for the robot. LUL");
+            await delivery.deliver({ key: `recap-blocked:${generationStreamId}:${generationWindowId}`, kind: 'recap_notice',
+              payload: { message: "The hourly recap was blocked due to sensitive terms found in chat. I'll try again in 60 minutes. Y'all may have gone a little too hard for the robot. LUL" },
+              send: (payload) => client.say(channelName, payload.message) });
           } catch (sendErr) {
             console.error('[Recap] Failed to send blocked-recap notice:', sendErr);
           }
@@ -1503,6 +1638,11 @@ function createRecapManager({
   function getStatus() {
     return {
       streamStateInitialized,
+      recoveryReason, recoveryDeliveryKey, lastPersistenceError, capacityReached,
+      recoveryRequired: Boolean(recoveryReason || recoveryDeliveryKey || pendingEnd),
+      windowBytes, windowId, windowCreatedAt, startupGraceUntil: !recapPaused && startupGraceUntil > Date.now() ? startupGraceUntil : null,
+      learningInProgress: [...tasks].some((task) => task.phase === 'learning'),
+      previewInProgress: [...tasks].some((task) => task.phase === 'preview'),
       streamLive,
       currentStreamId: currentStreamId || null,
       currentStreamTitle: currentStreamTitle || null,
@@ -1600,51 +1740,67 @@ function createRecapManager({
   }
 
   async function start() {
-    if (!channelName) {
-      console.error('[Recap] Cannot start automatic recaps: TWITCH_CHANNEL is missing.');
-      return;
+    if (started) return startPromise;
+    if (!channelName) throw new Error('TWITCH_CHANNEL is missing.');
+    managerStopping = false;
+    started = true;
+    startPromise = (async () => {
+      await loadStreamLifecycleMemory();
+      try { await validateStoredToken(); }
+      catch (err) { console.warn('[Recap] Initial token check failed; polling will retry after authorization:', err.message || err); }
+      if (managerStopping) return;
+      streamPollTimer = operationContext.detached(() => setInterval(() => { void checkStreamStatus(); }, STREAM_STATUS_POLL_INTERVAL));
+      activeStateCheckpointTimer = operationContext.detached(() => setInterval(() => {
+        if (!managerStopping && operationContext.isActive()) void persistActiveState().catch(() => {});
+      }, ACTIVE_STATE_CHECKPOINT_INTERVAL));
+      tokenValidationTimer = operationContext.detached(() => setInterval(() => {
+        if (!managerStopping) void validateStoredToken().catch((err) => console.warn('[Recap] Token validation:', err.message));
+      }, TOKEN_VALIDATION_INTERVAL));
+      await checkStreamStatus();
+      console.log('[Recap] Detection enabled; three offline polls required. Restored recaps have a 60-second startup grace period.');
+    })();
+    try { await startPromise; } catch (err) { started = false; throw err; }
+  }
+
+  function quiesce() {
+    managerStopping = true; lifecycleRevision += 1;
+    clearRecapTimer();
+    clearInterval(streamPollTimer); clearInterval(tokenValidationTimer); clearInterval(activeStateCheckpointTimer);
+    streamPollTimer = null; tokenValidationTimer = null; activeStateCheckpointTimer = null;
+    cancelTasks();
+    recapInProgress = false;
+    started = false;
+  }
+  async function shutdown({ persist = true } = {}) {
+    quiesce();
+    if (persist && currentStreamId && streamLive) {
+      markActiveStateDirty();
+      await persistActiveState({ force: true });
+      await stateWriter.flush();
     }
-
-    try {
-      await validateStoredToken();
-    } catch (err) {
-      console.error('[OAuth Bot] Initial recap stream-status bot token validation failed:', err.message || err);
-      return;
-    }
-
-    await loadStreamLifecycleMemory();
-    await checkStreamStatus();
-
-    streamPollTimer = setInterval(checkStreamStatus, STREAM_STATUS_POLL_INTERVAL);
-    if (!activeStateCheckpointTimer) {
-      activeStateCheckpointTimer = setInterval(() => { void persistActiveState(); }, ACTIVE_STATE_CHECKPOINT_INTERVAL);
-    }
-
-    tokenValidationTimer = setInterval(() => {
-      validateStoredToken().catch((err) => {
-        console.error('[OAuth Bot] Recap stream-status bot token validation failed:', err.message || err);
-      });
-    }, TOKEN_VALIDATION_INTERVAL);
-
-    console.log('[Recap] Automatic stream detection enabled.');
-    console.log('[Recap] Twitch stream status/title/category will be checked every 30 seconds.');
-    console.log('[Recap] Automatic recap cadence: every 60 minutes.');
-    console.log('[Recap Persistence] Active recap window checkpoints every 30 seconds while changed.');
+  }
+  async function durableControl(fn) {
+    return serializeControl(async () => {
+      await operationContext.assertOperation();
+      return fn();
+    });
   }
 
   return {
-    start,
+    start, shutdown, quiesce, checkStreamStatus, runPreview,
+    flush: () => persistActiveState({ force: true }),
+    resolveDeliveryReview: (...args) => durableControl(() => resolveDeliveryReview(...args)),
     recordChatMessage,
     recordBotContextMessage,
     recordModeratorAnnouncement,
     recordTwitchEvent,
     handleRecapCommand,
-    stopRecap,
-    pauseGeneration,
-    startRecap,
-    stopRecapSystem,
-    clearCurrentWindow,
-    abortAndClearRecap,
+    stopRecap: (options) => durableControl(() => pauseGeneration(options)),
+    pauseGeneration: (options) => durableControl(() => pauseGeneration(options)),
+    startRecap: (options) => durableControl(() => startRecap(options)),
+    stopRecapSystem: (options) => durableControl(() => stopRecapSystem(options)),
+    clearCurrentWindow: (options) => durableControl(() => clearCurrentWindow(options)),
+    abortAndClearRecap: (options) => durableControl(() => abortAndClearRecap(options)),
     getCurrentWindowLogs,
     getCurrentWindowContexts,
     getCurrentWindowEvents,

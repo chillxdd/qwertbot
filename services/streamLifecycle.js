@@ -1,3 +1,5 @@
+const { WRITE_OPTIONS } = require('./reliability/store');
+const context = require('./reliability/context');
 const StreamLifecycleState = require('../models/StreamLifecycleState');
 
 function normalizeChannelName(channelName) {
@@ -12,15 +14,24 @@ function toDateOrNull(value) {
 
 async function getStreamLifecycleState(channelName) {
   const normalizedChannel = normalizeChannelName(channelName);
-  if (!normalizedChannel || StreamLifecycleState.db.readyState !== 1) return null;
-  return StreamLifecycleState.findOne({ channelName: normalizedChannel }).lean();
+  if (!normalizedChannel) throw new Error('A channel is required for lifecycle state.');
+  if (StreamLifecycleState.db.readyState !== 1) throw new Error('MongoDB is not connected; lifecycle state is not durable.');
+  const fence = context.fence();
+  const row = await StreamLifecycleState.findOneAndUpdate({ channelName: normalizedChannel,
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: fence } }]
+  }, { $set: { writerFence: fence } }, { ...WRITE_OPTIONS, new: true }).lean();
+  if (!row && await StreamLifecycleState.exists({ channelName: normalizedChannel })) {
+    throw new Error('A newer instance owns the stream lifecycle state.');
+  }
+  return row;
 }
 
 async function saveStreamLifecycleState(channelName, patch = {}) {
   const normalizedChannel = normalizeChannelName(channelName);
-  if (!normalizedChannel || StreamLifecycleState.db.readyState !== 1) return null;
+  if (!normalizedChannel) throw new Error('A channel is required for lifecycle state.');
+  if (StreamLifecycleState.db.readyState !== 1) throw new Error('MongoDB is not connected; lifecycle state is not durable.');
 
-  const update = {};
+  const update = { writerFence: context.fence() };
   if (Object.prototype.hasOwnProperty.call(patch, 'lastStreamStartedAt')) {
     update.lastStreamStartedAt = toDateOrNull(patch.lastStreamStartedAt);
   }
@@ -39,9 +50,11 @@ async function saveStreamLifecycleState(channelName, patch = {}) {
   }
 
   return StreamLifecycleState.findOneAndUpdate(
-    { channelName: normalizedChannel },
+    { channelName: normalizedChannel, $or: [
+      { writerFence: { $exists: false } }, { writerFence: { $lte: update.writerFence } }
+    ] },
     { $set: update },
-    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+    { ...WRITE_OPTIONS, upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
   ).lean();
 }
 

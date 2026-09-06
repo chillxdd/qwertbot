@@ -38,6 +38,7 @@ function registerDashboardRoutes(app, options) {
     botScopes,
     broadcasterScopes,
     getRecapManager,
+    getRuntimeStatus = () => ({}),
     getBotPersonalityManager,
     getDatabaseConnected,
     getBotConnected,
@@ -83,7 +84,7 @@ function registerDashboardRoutes(app, options) {
     });
   });
 
-  app.get('/health', (req, res) => res.status(200).send('OK'));
+  app.get('/health', (req, res) => res.status(getRuntimeStatus().databaseReady ? 200 : 503).send(getRuntimeStatus().databaseReady ? 'OK' : 'Database not ready'));
 
   app.get('/status', async (req, res) => {
     const recapManager = getRecapManager();
@@ -127,6 +128,7 @@ function registerDashboardRoutes(app, options) {
 
     res.json({
       success: true,
+      runtime: getRuntimeStatus(),
       qwert: {
         live: recapStatus.streamLive,
         statusKnown: recapStatus.streamStateInitialized,
@@ -138,6 +140,15 @@ function registerDashboardRoutes(app, options) {
         uptimeMs: recapStatus.streamUptimeMs
       },
       bot: {
+        recoveryRequired: recapStatus.recoveryRequired,
+        recoveryReason: recapStatus.recoveryReason,
+        recoveryDeliveryKey: recapStatus.recoveryDeliveryKey,
+        capacityReached: recapStatus.capacityReached,
+        lastPersistenceError: recapStatus.lastPersistenceError,
+        windowBytes: recapStatus.windowBytes,
+        startupGraceUntil: recapStatus.startupGraceUntil,
+        learningInProgress: recapStatus.learningInProgress,
+        previewInProgress: recapStatus.previewInProgress,
         online: getBotConnected(),
         loggingMessages: recapStatus.loggingMessages,
         recapPaused: recapStatus.recapPaused,

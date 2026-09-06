@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const timerConfigSchema = new mongoose.Schema({
+  schedulerFence: { type: Number, default: 0 },
   channelName: {
     type: String,
     required: true,

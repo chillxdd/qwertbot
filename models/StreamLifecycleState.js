@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const streamLifecycleStateSchema = new mongoose.Schema(
   {
     channelName: { type: String, required: true, unique: true, index: true },
+    writerFence: { type: Number, default: 0 },
     lastStreamStartedAt: { type: Date, default: null },
     lastStreamEndedAt: { type: Date, default: null },
     lastKnownStreamId: { type: String, default: '' },

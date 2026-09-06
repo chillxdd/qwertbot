@@ -1,3 +1,4 @@
+const operationContext = require('./reliability/context');
 const BotPersonalityConfig = require('../models/BotPersonalityConfig');
 const { normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getRelevantViewerProfiles, formatViewerProfilesForPrompt } = require('./viewerProfiles');
@@ -230,7 +231,8 @@ async function callGeminiWithRetries(prompt, retryConfig, onRetry) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 1000) break;
     try {
-      return await requestGeminiText(prompt, { label: 'tagged-question', priority: 'high', timeoutMs: Math.min(TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS, remainingMs), deadlineAt: deadline });
+      operationContext.throwIfCancelled();
+      return await requestGeminiText(prompt, { label: 'tagged-question', priority: 'high', timeoutMs: Math.min(TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS, remainingMs), deadlineAt: deadline, totalDeadlineAt: deadline });
     } catch (err) {
       lastError = err;
       if (!retry.enabled || !isRetryableGeminiError(err)) break;
@@ -678,6 +680,8 @@ function createBotPersonalityManager({
     const question = parseTaggedQuestion(rawMessage);
     if (!question) return { matched: false };
 
+    operationContext.throwIfCancelled();
+    if (taggedQuestionsInFlight > 0) return { matched: true, responded: false, reason: 'busy' };
     taggedQuestionsInFlight += 1;
     try {
       const viewerIdentity = buildViewerIdentity(displayName, tags);
@@ -764,6 +768,7 @@ function createBotPersonalityManager({
     }
     if (failureGuardUntil) failureGuards.delete(failureGuardKey);
 
+    if (!bypassCooldown) lastPublicResponseAt = Date.now(); // Reserve cooldown at admission, not after send.
     const securityCheck = detectPromptInjection(question);
     if (securityCheck.block) {
       console.warn(`[Tagged Questions] Blocked likely prompt-injection attempt from ${displayName || 'viewer'} (${securityCheck.reasons.join(', ') || 'pattern match'}).`);

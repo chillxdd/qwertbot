@@ -1,3 +1,4 @@
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const {
   getStoredBroadcasterAuth,
   getValidBroadcasterAccessToken,

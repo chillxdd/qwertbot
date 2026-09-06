@@ -93,6 +93,11 @@ const chatTimerSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  schedulerFence: { type: Number, default: 0 },
+  recoveryRequired: { type: Boolean, default: false },
+  recoveryReason: { type: String, default: '' },
+  deliveryKey: { type: String, default: '' },
+  lastCompletedOccurrence: { type: String, default: '' },
   scheduleStreamId: { type: String, default: '' },
   lastFiredAt: { type: Date, default: null },
   nextDueAt: { type: Date, default: null },

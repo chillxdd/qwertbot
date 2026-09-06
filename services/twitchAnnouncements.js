@@ -1,3 +1,7 @@
+const context = require('./reliability/context');
+const delivery = require('./reliability/delivery');
+const { httpDeliveryError } = require('./reliability/twitchDelivery');
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const { getStoredAuth } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
 const { getAppAccessToken } = require('./twitchChat');
@@ -19,7 +23,7 @@ function normalizeAnnouncementColor(value) {
   return ANNOUNCEMENT_COLORS.has(color) ? color : 'primary';
 }
 
-async function sendChatAnnouncement(message, { color = 'primary' } = {}) {
+async function performAnnouncement(message, { color = 'primary' } = {}) {
   const text = String(message || '').trim();
   if (!text) throw new Error('Cannot send an empty Twitch announcement.');
   if (text.length > 500) throw new Error(`Twitch announcement is ${text.length} characters; maximum is 500.`);
@@ -72,10 +76,20 @@ async function sendChatAnnouncement(message, { color = 'primary' } = {}) {
   if (!response.ok) {
     let detail = '';
     try { detail = (await response.json())?.message || ''; } catch (_) {}
-    throw new Error(`Twitch announcement failed with HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
+    throw httpDeliveryError('Twitch announcement', response, detail);
   }
 
   return { method: 'announcement_app_api', color: normalizeAnnouncementColor(color) };
+}
+
+async function sendChatAnnouncement(message, options = {}) {
+  const key = context.nextDeliveryKey('announcement');
+  if (key) return (await delivery.deliver({ key, kind: 'event-announcement',
+    payload: { message, options }, send: (p) => sendChatAnnouncement(p.message, p.options) })).result;
+  // Errors before the POST cannot have sent an announcement. Transport errors
+  // already carry UNKNOWN and must keep it.
+  try { return await performAnnouncement(message, options); }
+  catch (err) { if (!err.deliveryState) err.deliveryState = 'NOT_SENT'; throw err; }
 }
 
 module.exports = {

@@ -1,3 +1,8 @@
+const { createHash } = require('node:crypto');
+const context = require('./reliability/context');
+const delivery = require('./reliability/delivery');
+const { createSerialExecutor } = require('./reliability/serialWriter');
+const { WRITE_OPTIONS } = require('./reliability/store');
 const PersistentPinConfig = require('../models/PersistentPinConfig');
 
 const MAX_PERSISTENT_PIN_MESSAGE_LENGTH = 500;
@@ -8,7 +13,7 @@ const OWN_RESPONSE_TTL_MS = 15000;
 const MONITOR_ERROR_LOG_INTERVAL_MS = 2 * 60 * 1000;
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return context.sleep(ms);
 }
 
 function normalizeMessage(value) {
@@ -52,7 +57,12 @@ function createPersistentPinManager({
     activeMessageId: '',
     lastPinnedAt: null
   };
+  const serializeControls = createSerialExecutor();
+  let configChanging = false;
   let operationBusy = false;
+  let stopping = false;
+  let activeController = null;
+  const fenceFilter = () => ({ $or: [{ schedulerFence: { $exists: false } }, { schedulerFence: { $lte: context.fence() } }] });
   let monitorTimer = null;
   let monitorBusy = false;
   let monitorStreamId = '';
@@ -81,6 +91,9 @@ function createPersistentPinManager({
 
   function toClient() {
     return {
+      recoveryRequired: config.recoveryRequired === true,
+      recoveryReason: config.recoveryReason || '', deliveryKey: config.deliveryKey || '',
+      skippedForStream: Boolean(config.skipStreamId && config.skipStreamId === config.activeStreamId),
       enabled: config.enabled === true,
       message: String(config.message || ''),
       startupHoldSeconds: normalizeHoldSeconds(config.startupHoldSeconds),
@@ -104,6 +117,10 @@ function createPersistentPinManager({
   }
 
   async function initialize() {
+    stopping = false;
+    await context.assertOperation();
+    await PersistentPinConfig.updateOne({ channelName: normalizedChannel, ...fenceFilter() },
+      { $set: { schedulerFence: context.fence() } }, WRITE_OPTIONS);
     const stored = await PersistentPinConfig.findOne({ channelName: normalizedChannel }).lean();
     if (stored) {
       config = {
@@ -122,7 +139,7 @@ function createPersistentPinManager({
             startupHoldSeconds: DEFAULT_PERSISTENT_PIN_HOLD_SECONDS
           }
         },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+        { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true }
       ).lean();
       config = {
         ...config,
@@ -135,12 +152,11 @@ function createPersistentPinManager({
   }
 
   async function persistRuntime(patch = {}) {
+    await context.assertOperation();
+    const result = await PersistentPinConfig.updateOne({ channelName: normalizedChannel, ...fenceFilter() },
+      { $set: { ...patch, schedulerFence: context.fence() } }, WRITE_OPTIONS);
+    if (result.matchedCount !== 1) throw context.cancelledError('Persistent pin settings changed on another deployment.');
     config = { ...config, ...patch };
-    await PersistentPinConfig.updateOne(
-      { channelName: normalizedChannel },
-      { $set: patch, $setOnInsert: { channelName: normalizedChannel } },
-      { upsert: true }
-    );
   }
 
   async function persistEnabled(enabled) {
@@ -149,6 +165,10 @@ function createPersistentPinManager({
   }
 
   async function saveConfig(input = {}) {
+    await context.assertOperation();
+    stopMonitor();
+    activeController?.abort();
+    while (operationBusy) await sleep(50);
     const rawMessage = String(input.message || '').trim();
     if (Array.from(rawMessage).length > MAX_PERSISTENT_PIN_MESSAGE_LENGTH) {
       throw new Error(`Persistent Stream Pin message can contain at most ${MAX_PERSISTENT_PIN_MESSAGE_LENGTH} characters.`);
@@ -162,21 +182,29 @@ function createPersistentPinManager({
     const previousMessageId = String(config.activeMessageId || '').trim();
     const messageChanged = next.message !== String(config.message || '');
     const update = { ...next };
-    if (messageChanged) update.activeMessageId = '';
+    if (messageChanged) {
+      if (config.recoveryRequired) throw new Error('Resolve the pending pin delivery before replacing its text.');
+      update.activeMessageId = ''; update.postGeneration = 0; update.skipStreamId = '';
+    }
+    update.schedulerFence = context.fence();
 
+    configChanging = true;
+    try {
     const saved = await PersistentPinConfig.findOneAndUpdate(
-      { channelName: normalizedChannel },
+      { channelName: normalizedChannel, ...fenceFilter() },
       {
         $set: update,
         $setOnInsert: { channelName: normalizedChannel }
       },
-      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+      { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     ).lean();
     config = {
       ...config,
       ...saved,
       startupHoldSeconds: normalizeHoldSeconds(saved?.startupHoldSeconds)
     };
+
+    } finally { configChanging = false; }
 
     if (!config.enabled) {
       stopMonitor();
@@ -229,24 +257,39 @@ function createPersistentPinManager({
   }
 
   async function postFreshConfiguredMessage(streamId = '') {
+    await context.assertOperation();
     if (typeof sendMessageViaApi !== 'function') throw new Error('Twitch Chat API sender is unavailable.');
     if (!String(config.message || '').trim()) throw new Error('Persistent Stream Pin message is not configured.');
-    noteOwnResponse(config.message);
-    let result;
+    if (config.recoveryRequired) throw new Error('Persistent pin delivery needs operator review.');
+    const stream = String(streamId || config.activeStreamId || 'offline');
+    const hash = createHash('sha256').update(config.message).digest('hex').slice(0, 24);
+    const key = `pin:${normalizedChannel}:${stream}:${hash}:${Number(config.postGeneration) || 0}`;
+    await persistRuntime({ deliveryKey: key });
+    let receipt;
     try {
-      result = await sendMessageViaApi(config.message);
+      receipt = await delivery.deliver({ key, kind: 'persistent-pin', payload: { message: config.message, streamId: stream },
+        send: async (saved) => { noteOwnResponse(saved.message); return sendMessageViaApi(saved.message); } });
     } catch (err) {
-      consumeOwnResponse(config.message);
-      throw err;
+      if (err.reviewRequired || err.deliveryState === 'UNKNOWN') {
+        const patch = { recoveryRequired: true, recoveryReason: String(err.message).slice(0, 600), deliveryKey: key };
+        config = { ...config, ...patch };
+        await persistRuntime(patch).catch(() => {});
+        stopMonitor();
+      }
+      consumeOwnResponse(config.message); throw err;
     }
-    const messageId = String(result?.message_id || '').trim();
-    if (!messageId) throw new Error('Twitch sent the persistent-pin message without returning a message ID.');
-
-    await persistRuntime({
-      activeStreamId: String(streamId || config.activeStreamId || ''),
-      activeMessageId: messageId
-    });
+    const messageId = String(receipt.result?.message_id || '').trim();
+    if (!messageId) throw delivery.unknownError(key, new Error('Persistent pin has no usable message ID.'));
+    await persistRuntime({ activeStreamId: stream, activeMessageId: messageId, deliveryKey: '',
+      recoveryRequired: false, recoveryReason: '' });
     return messageId;
+  }
+
+  async function allowReplacementAfterMissingMessage(err) {
+    // A 404 is conclusive. Timeouts, permission failures and 5xx must never
+    // trigger a fresh chat message as a fallback.
+    if (Number(err?.status) !== 404) throw err;
+    await persistRuntime({ activeMessageId: '', postGeneration: (Number(config.postGeneration) || 0) + 1 });
   }
 
   async function removeCurrentPinIfDifferent(targetMessageId = '') {
@@ -266,11 +309,20 @@ function createPersistentPinManager({
   }
 
   async function runExclusive(task) {
+    if (stopping || configChanging || !context.isActive()) throw context.cancelledError();
     while (operationBusy) await sleep(100);
+    if (stopping || configChanging || !context.isActive()) throw context.cancelledError();
     operationBusy = true;
+    const controller = new AbortController(); activeController = controller;
+    const parentSignal = context.current().signal;
+    const abortFromParent = () => controller.abort();
+    if (parentSignal?.aborted) controller.abort();
+    else parentSignal?.addEventListener('abort', abortFromParent, { once: true });
     try {
-      return await task();
+      return await context.runOperation(task, { signal: controller.signal });
     } finally {
+      parentSignal?.removeEventListener('abort', abortFromParent);
+      if (activeController === controller) activeController = null;
       operationBusy = false;
     }
   }
@@ -298,15 +350,15 @@ function createPersistentPinManager({
 
   function startMonitor(streamId = '') {
     monitorStreamId = String(streamId || monitorStreamId || config.activeStreamId || '').trim();
-    if (monitorTimer || !config.enabled || !String(config.message || '').trim()) return;
-    monitorTimer = setInterval(() => {
-      void monitorTick();
-    }, PERSISTENT_PIN_MONITOR_INTERVAL_MS);
+    if (stopping || !context.isActive() || config.recoveryRequired || (config.skipStreamId && config.skipStreamId === monitorStreamId) || monitorTimer || !config.enabled || !String(config.message || '').trim()) return;
+    monitorTimer = context.detached(() => setInterval(() => {
+      void monitorTick().catch((err) => console.warn('[Persistent Pin] Monitor failed:', err.message));
+    }, PERSISTENT_PIN_MONITOR_INTERVAL_MS));
     console.log(`[Persistent Pin] Persistence monitor active (checks every ${Math.round(PERSISTENT_PIN_MONITOR_INTERVAL_MS / 1000)}s).`);
   }
 
   async function restoreIfUnpinned({ source = 'monitor', streamId = '' } = {}) {
-    if (!config.enabled || !String(config.message || '').trim()) return { handled: false, reason: 'disabled' };
+    if (stopping || config.recoveryRequired || (config.skipStreamId && config.skipStreamId === streamId) || !config.enabled || !String(config.message || '').trim()) return { handled: false, reason: 'disabled_or_review' };
     if (typeof getPinnedChatMessage !== 'function') return { handled: false, reason: 'pin_api_unavailable' };
 
     return runExclusive(async () => {
@@ -334,6 +386,7 @@ function createPersistentPinManager({
           console.log(`[Persistent Pin] Restored persistent pin automatically (${source}).`);
           return { handled: true, messageId, reposted: false };
         } catch (err) {
+          await allowReplacementAfterMissingMessage(err);
           console.log(`[Persistent Pin] Saved message ID could not be restored; posting a fresh copy: ${err?.message || err}`);
         }
       }
@@ -346,7 +399,7 @@ function createPersistentPinManager({
   }
 
   async function monitorTick() {
-    if (monitorBusy || operationBusy || !monitorTimer || !config.enabled) return;
+    if (stopping || !context.isActive() || config.recoveryRequired || monitorBusy || operationBusy || !monitorTimer || !config.enabled) return;
     monitorBusy = true;
     try {
       const status = streamStatus();
@@ -373,6 +426,9 @@ function createPersistentPinManager({
     }
 
     const streamId = String(event?.id || event?.stream_id || '').trim();
+    const live = streamStatus();
+    if (live.streamId && streamId && live.streamId !== streamId) return { handled: false, reason: 'stale_stream' };
+    if (config.recoveryRequired || (config.skipStreamId && config.skipStreamId === streamId)) return { handled: false, reason: 'delivery_review_or_skipped' };
     if (streamId && streamId === String(config.activeStreamId || '') && config.activeMessageId) {
       startMonitor(streamId);
       return { handled: false, reason: 'already_handled' };
@@ -386,7 +442,7 @@ function createPersistentPinManager({
           // Persistent Stream Pin intentionally ignores global Automation Spacing.
           // It is the first stream-start automation and owns the priority gate until
           // its own post-pin hold expires.
-          await persistRuntime({ activeStreamId: streamId, activeMessageId: '' });
+          await persistRuntime({ activeStreamId: streamId, activeMessageId: '', ...(config.activeStreamId !== streamId ? { postGeneration: 0, skipStreamId: '' } : {}) });
           const messageId = await postFreshConfiguredMessage(streamId);
           posted = true;
           await removeCurrentPinIfDifferent(messageId);
@@ -396,7 +452,7 @@ function createPersistentPinManager({
           return { handled: true, messageId, streamId };
         } catch (err) {
           console.error('[Persistent Pin] Stream-start pin failed:', err?.message || err);
-          return { handled: false, reason: 'error', error: err?.message || String(err || '') };
+          throw err;
         }
       });
 
@@ -413,14 +469,15 @@ function createPersistentPinManager({
   }
 
   async function handleStreamOffline() {
+    activeController?.abort();
     stopMonitor();
     if (!config.activeStreamId && !config.activeMessageId) return { handled: false };
     try {
-      await persistRuntime({ activeStreamId: '', activeMessageId: '' });
+      if (!config.recoveryRequired) await persistRuntime({ activeStreamId: '', activeMessageId: '', postGeneration: 0, skipStreamId: '' });
       return { handled: true };
     } catch (err) {
       console.warn('[Persistent Pin] Could not clear per-stream runtime state:', err?.message || err);
-      return { handled: false, reason: 'error' };
+      throw err;
     }
   }
 
@@ -475,6 +532,7 @@ function createPersistentPinManager({
               console.log('[Persistent Pin] !repin restored the configured stream message and enabled persistence.');
               return { handled: true, messageId: targetMessageId, reposted: false };
             } catch (err) {
+              await allowReplacementAfterMissingMessage(err);
               console.log(`[Persistent Pin] Saved message ID could not be re-pinned; posting a fresh copy: ${err?.message || err}`);
             }
           }
@@ -499,6 +557,8 @@ function createPersistentPinManager({
   async function unpin() {
     // !unpin is always available to broadcaster/mods. Disable persistence first so
     // the monitor cannot race the command and immediately put the pin back.
+    stopMonitor(); activeController?.abort();
+    while (operationBusy) await sleep(50);
     if (config.enabled) await persistEnabled(false);
     else stopMonitor();
 
@@ -521,15 +581,30 @@ function createPersistentPinManager({
     });
   }
 
+  function quiesce() { stopping = true; activeController?.abort(); stopMonitor(); }
+  async function resolveReview(outcome, expectedDeliveryKey = config.deliveryKey) {
+    if (config.deliveryKey !== expectedDeliveryKey) throw new Error('This persistent pin changed. Refresh before reviewing it.');
+    if (!config.deliveryKey) throw new Error('No persistent pin delivery is awaiting review.');
+    const reviewedStreamId = config.activeStreamId;
+    const record = await delivery.resolve(expectedDeliveryKey, outcome);
+    if (!record) throw new Error('Delivery was already resolved; refresh the page.');
+    if (config.deliveryKey !== expectedDeliveryKey || config.activeStreamId !== reviewedStreamId) throw new Error('The old pin receipt was reviewed, but the stream changed. Refresh its status.');
+    await persistRuntime({ recoveryRequired: false, recoveryReason: '', deliveryKey: '',
+      ...(outcome === 'sent' ? { skipStreamId: config.activeStreamId || 'offline', activeMessageId: '' } : {}) });
+    if (outcome === 'not_sent') await syncLiveState();
+    return toClient();
+  }
+
   return {
+    quiesce, resolveReview: (...args) => serializeControls(() => resolveReview(...args)),
     initialize,
     getConfig: toClient,
-    saveConfig,
+    saveConfig: (...args) => serializeControls(() => saveConfig(...args)),
     handleStreamOnline,
     handleStreamOffline,
     syncLiveState,
     repin,
-    unpin,
+    unpin: (...args) => serializeControls(() => unpin(...args)),
     consumeOwnResponse,
     _monitorTick: monitorTick
   };

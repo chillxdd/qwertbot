@@ -1,3 +1,7 @@
+const context = require('../services/reliability/context');
+const { createInbox } = require('../services/reliability/inbox');
+const { createSerialExecutor } = require('../services/reliability/serialWriter');
+const { collection } = require('../services/reliability/store');
 const { noteEventReceived, verifyEventSubRequest } = require('../services/twitchEventSub');
 const { normalizeIdentity, numberOrNull } = require('../services/sourceRecords');
 
@@ -135,7 +139,7 @@ function createRedemptionRecapFilter({
     );
   }
 
-  return { note, reset };
+  return { note, reset, snapshot: () => [...bursts.entries()], restore: (value) => { bursts.clear(); for (const [key, state] of (value || [])) bursts.set(key, state); } };
 }
 
 const SUBSCRIPTION_EVENT_TYPES = new Set([
@@ -228,7 +232,7 @@ function createSubscriptionRecapFilter({
     );
   }
 
-  return { note, reset };
+  return { note, reset, snapshot: () => ({ entries, lastAt, announced }), restore: (value = {}) => { entries = value.entries || []; lastAt = value.lastAt || 0; announced = !!value.announced; } };
 }
 
 function goalRecapDecision(type, event = {}) {
@@ -377,116 +381,96 @@ function formatEventSubForRecap(type, event) {
   }
 }
 
-function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager, getPersistentPinManager }) {
-  const recentMessageIds = new Map();
+function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManager, getPersistentPinManager, channelName = process.env.TWITCH_CHANNEL || '' }) {
+  const namespace = String(channelName).toLowerCase();
   const redemptionRecapFilter = createRedemptionRecapFilter();
   const subscriptionRecapFilter = createSubscriptionRecapFilter();
-
-  function cleanupRecentIds() {
-    const cutoff = Date.now() - 10 * 60 * 1000;
-    for (const [id, seenAt] of recentMessageIds.entries()) {
-      if (seenAt < cutoff) recentMessageIds.delete(id);
-    }
-  }
-
-  app.post('/eventsub/twitch', (req, res) => {
-    try {
-      if (!verifyEventSubRequest(req)) {
-        return res.status(403).send('Invalid EventSub signature.');
+  const prepareSerial = createSerialExecutor();
+  let restoredFilters = false;
+  const inbox = createInbox({ namespace, processJob: async (job, step) => {
+    const { type, event, timestamp } = job.payload;
+    const recapManager = getRecapManager();
+    const reactionManager = getEventSubReactionManager?.();
+    if (!recapManager) throw new Error('Recap/lifecycle manager is still initializing.');
+    if (!recapManager.getStatus().streamStateInitialized) await recapManager.checkStreamStatus();
+    if (!recapManager.getStatus().streamStateInitialized) throw new Error('Twitch stream state is not known yet.');
+    const currentStartedAt = Number(recapManager.getStatus().twitchStreamStartedAt || 0);
+    if (currentStartedAt && timestamp < currentStartedAt) return; // Old stream, never reset a new one.
+    const plan = await prepareSerial(async () => {
+      if (!restoredFilters) {
+        // Rebuild only aggregation state, never replay reactions. Each durable
+        // plan represents exactly one accepted event.
+        const recent = await collection().find({ kind: 'event', namespace,
+          createdAt: { $gte: new Date(Date.now() - 5 * 60000) }, 'steps.plan.done': true
+        }).sort({ createdAt: 1 }).limit(10000).toArray();
+        const last = recent[recent.length - 1]?.steps?.plan?.value;
+        if (last) { redemptionRecapFilter.restore(last.redemptions); subscriptionRecapFilter.restore(last.subscriptions); }
+        restoredFilters = true;
       }
+      await step('lifecycle', async () => {
+        if (type === 'stream.online' || type === 'stream.offline') {
+          await recapManager.noteStreamLifecycleEvent({ type, event, timestamp });
+        }
+      });
+      const planned = await step('plan', async () => {
+        if (type === 'stream.online' || type === 'stream.offline') {
+          redemptionRecapFilter.reset(); subscriptionRecapFilter.reset();
+        }
+        const text = formatEventSubForRecap(type, event);
+        let recapEvent = null;
+        if (REDEMPTION_EVENT_TYPES.has(type)) recapEvent = redemptionRecapFilter.note(type, event, timestamp);
+        else if (SUBSCRIPTION_EVENT_TYPES.has(type)) recapEvent = subscriptionRecapFilter.note(type, event, timestamp);
+        else if (text && shouldRecordStandaloneRecapEvent(type, event)) recapEvent = buildStructuredRecapEvent(type, event, text, {
+          amount: type === 'channel.cheer' ? Number(event?.bits || 0) : null,
+          quantity: type === 'channel.raid' ? Number(event?.viewers || 0) : null,
+          anonymous: event?.is_anonymous === true,
+          metadata: { isAchieved: type === 'channel.goal.end' ? event?.is_achieved === true : undefined,
+            title: cleanInline(event?.title || event?.description || '', 180), status: cleanInline(event?.status || '', 40) }
+        });
+        return { recapEvent, redemptions: redemptionRecapFilter.snapshot(), subscriptions: subscriptionRecapFilter.snapshot(),
+          reactions: reactionManager?.planEvent?.(type, event) || [] };
+      });
+      await step('recap_record', async () => {
+        if (planned.recapEvent?.text) {
+          recapManager.recordTwitchEvent({ ...planned.recapEvent, sourceEventId: job.messageId, timestamp });
+          await recapManager.flush();
+        }
+      });
+      return planned;
+    }).catch((err) => { restoredFilters = false; throw err; });
+    const pinManager = getPersistentPinManager?.();
+    await step('pin', async () => {
+      if (type === 'stream.online') return pinManager?.handleStreamOnline?.({ event, timestamp });
+      if (type === 'stream.offline') return pinManager?.handleStreamOffline?.({ event, timestamp });
+    });
+    await step('reactions', () => context.withDeliveryScope(`event:${namespace}:${job.messageId}`, () =>
+      reactionManager?.handleEvent(type, event, { plan: plan.reactions, durableStep: step })));
+    console.log(`[EventSub Inbox] Completed ${type} (${job.messageId}).`);
+  } });
 
+  app.post('/eventsub/twitch', async (req, res) => {
+    try {
+      if (!verifyEventSubRequest(req)) return res.status(403).send('Invalid EventSub signature.');
       const messageType = req.get('Twitch-Eventsub-Message-Type') || '';
       const messageId = req.get('Twitch-Eventsub-Message-Id') || '';
-
-      if (messageType === 'webhook_callback_verification') {
-        return res.status(200).type('text/plain').send(String(req.body?.challenge || ''));
-      }
-
+      if (messageType === 'webhook_callback_verification') return res.status(200).type('text/plain').send(String(req.body?.challenge || ''));
       if (messageType === 'revocation') {
         console.warn('[EventSub] Subscription revoked:', req.body?.subscription?.type, req.body?.subscription?.status);
         return res.sendStatus(204);
       }
-
       if (messageType !== 'notification') return res.sendStatus(204);
-
-      cleanupRecentIds();
-      if (messageId && recentMessageIds.has(messageId)) return res.sendStatus(204);
-      if (messageId) recentMessageIds.set(messageId, Date.now());
-
+      const timestamp = Date.parse(req.get('Twitch-Eventsub-Message-Timestamp') || '');
+      await inbox.accept(messageId, { type: req.body?.subscription?.type || '', event: req.body?.event || {},
+        timestamp: Number.isFinite(timestamp) ? timestamp : Date.now() });
       noteEventReceived();
-      const type = req.body?.subscription?.type || '';
-      const event = req.body?.event || {};
-      const text = formatEventSubForRecap(type, event);
-      const recapManager = getRecapManager();
-      const reactionManager = getEventSubReactionManager?.();
-      const messageTimestamp = Date.parse(req.get('Twitch-Eventsub-Message-Timestamp') || '');
-      const lifecycleTimestamp = Number.isNaN(messageTimestamp) ? Date.now() : messageTimestamp;
-
-      if (type === 'stream.online' || type === 'stream.offline') {
-        redemptionRecapFilter.reset();
-        subscriptionRecapFilter.reset();
-      }
-
-      if ((type === 'stream.online' || type === 'stream.offline') && recapManager?.noteStreamLifecycleEvent) {
-        void recapManager.noteStreamLifecycleEvent({ type, event, timestamp: lifecycleTimestamp }).catch((lifecycleErr) => {
-          console.error('[Stream Lifecycle] EventSub lifecycle handling failed:', lifecycleErr?.message || lifecycleErr);
-        });
-      }
-
-      let recapEvent = null;
-      if (REDEMPTION_EVENT_TYPES.has(type)) {
-        recapEvent = redemptionRecapFilter.note(type, event, lifecycleTimestamp);
-      } else if (SUBSCRIPTION_EVENT_TYPES.has(type)) {
-        recapEvent = subscriptionRecapFilter.note(type, event, lifecycleTimestamp);
-      } else if (text && shouldRecordStandaloneRecapEvent(type, event)) {
-        recapEvent = buildStructuredRecapEvent(type, event, text, {
-          amount: type === 'channel.cheer' ? Number(event?.bits || 0) : null,
-          quantity: type === 'channel.raid' ? Number(event?.viewers || 0) : null,
-          anonymous: event?.is_anonymous === true,
-          metadata: {
-            isAchieved: type === 'channel.goal.end' ? event?.is_achieved === true : undefined,
-            title: cleanInline(event?.title || event?.description || '', 180),
-            status: cleanInline(event?.status || '', 40)
-          }
-        });
-      }
-
-      if (recapEvent?.text && recapManager) {
-        recapManager.recordTwitchEvent({
-          ...recapEvent,
-          sourceEventId: messageId,
-          timestamp: lifecycleTimestamp
-        });
-      }
-
-      const pinManager = getPersistentPinManager?.();
-      const runStreamAutomations = async () => {
-        if (type === 'stream.online' && pinManager?.handleStreamOnline) {
-          // Persistent Stream Pin is the highest-priority stream-start automation.
-          // It intentionally ignores global Automation Spacing and does not resolve
-          // until its own configured post-pin hold clears, so stream.online reactions
-          // always come after the configured pinned message.
-          await pinManager.handleStreamOnline({ event, timestamp: lifecycleTimestamp });
-        } else if (type === 'stream.offline' && pinManager?.handleStreamOffline) {
-          await pinManager.handleStreamOffline({ event, timestamp: lifecycleTimestamp });
-        }
-
-        if (reactionManager) {
-          await reactionManager.handleEvent(type, event);
-        }
-      };
-
-      void runStreamAutomations().catch((automationErr) => {
-        console.error('[EventSub Automations] Event handling failed:', automationErr?.message || automationErr);
-      });
-
-      console.log(`[EventSub] ${type}: ${text || 'event received'}`);
+      // The event is durable now. No slow Gemini/Twitch work runs on this request.
       return res.sendStatus(204);
     } catch (err) {
-      console.error('[EventSub] Webhook processing failed:', err.message || err);
-      return res.sendStatus(500);
+      console.error('[EventSub] Event was NOT acknowledged because persistence failed:', err.message || err);
+      return res.sendStatus(503);
     }
   });
+  return inbox;
 }
 
 module.exports = {

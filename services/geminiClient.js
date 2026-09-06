@@ -1,3 +1,7 @@
+const operationContext = require('./reliability/context');
+const { fetchWithTimeout } = require('./httpClient');
+const { createQueuePolicy } = require('./reliability/queuePolicy');
+const chooseQueuedJob = createQueuePolicy();
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim() || 'gemini-3.5-flash-lite';
 const HARD_MAX_REQUESTS_PER_MINUTE = 15;
@@ -21,6 +25,8 @@ let activeJob = null;
 let lastRequestStartedAt = 0;
 let requestStartTimes = [];
 let globalBackoffUntil = 0;
+let sharedRateGate = null;
+function configureSharedRateGate(gate) { sharedRateGate = gate; }
 
 function clampNumber(value, min, max, fallback) {
   const parsed = Number(value);
@@ -83,7 +89,7 @@ function normalizePriority(value) {
 }
 
 function nextJob() {
-  return queues.high.shift() || queues.normal.shift() || queues.low.shift() || null;
+  return chooseQueuedJob(queues);
 }
 
 function rejectJobsThatCannotStartBy(earliestStartAt) {
@@ -125,6 +131,7 @@ function parseRetryAfterMs(response, data) {
 }
 
 function isRetryableGeminiError(err) {
+  if (err?.cancelled || err?.retryable === false) return false;
   if (err?.timedOut === true && err?.retryable === false) return false;
   if (err?.retryable === true) return true;
   const status = Number(err?.status || 0);
@@ -154,7 +161,7 @@ function extractGeminiText(data) {
   return String(text || '').trim();
 }
 
-function noteTemporaryFailure(err) {
+async function noteTemporaryFailure(err) {
   const status = Number(err?.status || 0);
   if (!isRetryableGeminiError(err)) return;
 
@@ -164,7 +171,10 @@ function noteTemporaryFailure(err) {
   else fallbackMs = 2000;
 
   const delayMs = Math.max(fallbackMs, Number(err?.retryAfterMs || 0));
-  if (delayMs > 0) globalBackoffUntil = Math.max(globalBackoffUntil, Date.now() + delayMs);
+  if (delayMs > 0) {
+    globalBackoffUntil = Math.max(globalBackoffUntil, Date.now() + delayMs);
+    if (sharedRateGate) await sharedRateGate.backoff(delayMs);
+  }
 }
 
 function buildGeminiHttpError(response, data) {
@@ -173,7 +183,6 @@ function buildGeminiHttpError(response, data) {
   err.retryable = RETRYABLE_STATUSES.has(response.status);
   err.retryAfterMs = parseRetryAfterMs(response, data);
   err.geminiData = data;
-  noteTemporaryFailure(err);
   return err;
 }
 
@@ -181,7 +190,7 @@ function streamEventFailure(event) {
   const interaction = event?.interaction && typeof event.interaction === 'object' ? event.interaction : null;
   const status = String(interaction?.status || event?.status || '').trim().toLowerCase();
   const eventType = String(event?.event_type || '').trim().toLowerCase();
-  const failed = eventType === 'interaction.failed' || ['failed', 'cancelled', 'budget_exceeded'].includes(status);
+  const failed = eventType === 'error' || eventType === 'interaction.failed' || ['failed', 'cancelled', 'budget_exceeded'].includes(status);
   if (!failed) return null;
   const message = interaction?.error?.message || event?.error?.message || `Gemini interaction ended with status ${status || eventType || 'failed'}.`;
   const err = new Error(message);
@@ -211,7 +220,9 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
     timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
   };
   armTimeout('waiting for response');
+  const watchdog = setTimeout(() => { timeoutPhase = 'maximum stream duration (10 minutes)'; controller.abort(); }, 600000);
   let response;
+  let reader;
 
   try {
     response = await fetch(GEMINI_ENDPOINT, {
@@ -243,12 +254,13 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
       throw err;
     }
 
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let outputText = '';
     let finalInteraction = null;
     let firstEventAt = 0;
+    let completed = false;
 
     const processBlock = (block) => {
       const dataLines = String(block || '')
@@ -257,7 +269,8 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
         .map((line) => line.slice(5).trimStart());
       if (!dataLines.length) return;
       const payload = dataLines.join('\n').trim();
-      if (!payload || payload === '[DONE]') return;
+      if (!payload) return;
+      if (payload === '[DONE]') { completed = true; return; }
 
       let event;
       try {
@@ -272,6 +285,7 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
         if (openMs >= 5000) console.info(`[Gemini] ${label} stream opened in ${(openMs / 1000).toFixed(1)}s.`);
       }
 
+      if (['interaction.completed', 'interaction.complete'].includes(event?.event_type)) completed = true;
       const failure = streamEventFailure(event);
       if (failure) throw failure;
 
@@ -297,6 +311,7 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
       if (done) break;
       armTimeout(firstEventAt ? 'waiting for next stream event' : 'waiting for first stream event');
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > 2000000 || outputText.length > 2000000) throw new Error('Gemini stream exceeded the response-size safety limit.');
 
       while (true) {
         const match = buffer.match(/\r?\n\r?\n/);
@@ -305,10 +320,12 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
         buffer = buffer.slice(match.index + match[0].length);
         processBlock(block);
       }
+      if (completed) break;
     }
 
     buffer += decoder.decode();
     if (buffer.trim()) processBlock(buffer);
+    if (!completed) { const err = new Error('Gemini stream ended before its completion event; partial text was discarded.'); err.retryable = true; throw err; }
 
     const data = finalInteraction && typeof finalInteraction === 'object'
       ? { ...finalInteraction }
@@ -344,93 +361,101 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
       wrapped.idleMs = idleMs;
       wrapped.timeoutPhase = timeoutPhase;
       console.warn(`[Gemini] ${label} streaming request timed out after ${(idleMs / 1000).toFixed(1)}s of inactivity while ${timeoutPhase} (total ${(wrapped.elapsedMs / 1000).toFixed(1)}s)${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
-      noteTemporaryFailure(wrapped);
+      await noteTemporaryFailure(wrapped);
       throw wrapped;
     }
-    noteTemporaryFailure(err);
+    await noteTemporaryFailure(err);
     throw err;
   } finally {
     if (timeout) clearTimeout(timeout);
+    clearTimeout(watchdog);
+    if (reader) { try { await reader.cancel(); } catch (_) {} try { reader.releaseLock(); } catch (_) {} }
     if (cancelSignal) cancelSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 
 async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false, cancelSignal = null } = {}) {
-  if (stream === true) {
-    return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal });
-  }
-
+  operationContext.throwIfCancelled();
+  if (stream === true) return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal });
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
-
-  const controller = new AbortController();
-  let externallyCancelled = Boolean(cancelSignal?.aborted);
-  const onExternalAbort = () => { externallyCancelled = true; controller.abort(); };
-  if (cancelSignal && !cancelSignal.aborted) cancelSignal.addEventListener('abort', onExternalAbort, { once: true });
-  if (externallyCancelled) controller.abort();
-  const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
   const startedAt = Date.now();
-  const timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
-  let response;
   try {
-    response = await fetch(GEMINI_ENDPOINT, {
+    const response = await fetchWithTimeout(GEMINI_ENDPOINT, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey
-      },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({ model: GEMINI_MODEL, input: prompt }),
-      signal: controller.signal
+      timeoutMs, signal: cancelSignal
     });
+    let data;
+    try { data = await response.json(); }
+    catch (cause) {
+      const err = new Error(`Gemini returned invalid JSON. HTTP ${response.status}`, { cause });
+      err.status = response.status;
+      err.retryable = response.status >= 500 || response.ok;
+      throw err;
+    }
+    if (!response.ok) throw buildGeminiHttpError(response, data);
+    operationContext.throwIfCancelled();
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= 10000) console.info(`[Gemini] ${label} completed in ${(elapsedMs / 1000).toFixed(1)}s.`);
+    return data;
   } catch (err) {
-    if (externallyCancelled) {
-      const wrapped = new Error('Gemini request cancelled by operator.');
-      wrapped.cancelled = true;
-      wrapped.retryable = false;
-      wrapped.elapsedMs = Date.now() - startedAt;
-      console.info(`[Gemini] ${label} cancelled by operator after ${(wrapped.elapsedMs / 1000).toFixed(1)}s.`);
-      throw wrapped;
-    }
-    const timedOut = controller.signal.aborted;
-    const wrapped = new Error(timedOut ? 'Gemini request timed out.' : (err?.message || 'Gemini request failed.'));
-    wrapped.timedOut = timedOut;
-    wrapped.retryable = timedOut ? retryOnTimeout !== false : true;
-    wrapped.elapsedMs = Date.now() - startedAt;
-    if (timedOut) {
-      console.warn(`[Gemini] ${label} timed out after ${(wrapped.elapsedMs / 1000).toFixed(1)}s${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
-    }
-    noteTemporaryFailure(wrapped);
-    throw wrapped;
-  } finally {
-    clearTimeout(timeout);
-    if (cancelSignal) cancelSignal.removeEventListener('abort', onExternalAbort);
-  }
-
-  let data;
-  try {
-    data = await response.json();
-  } catch (_) {
-    const err = new Error(`Gemini returned invalid JSON. HTTP ${response.status}`);
-    err.status = response.status;
-    err.retryable = response.status >= 500;
-    err.retryAfterMs = parseRetryAfterMs(response, null);
-    noteTemporaryFailure(err);
+    if (cancelSignal?.aborted || err?.cancelled) throw operationContext.cancelledError('Gemini request cancelled.');
+    if (err.timedOut) {
+      err.retryable = retryOnTimeout !== false;
+      console.warn(`[Gemini] ${label} timed out after ${((Date.now() - startedAt) / 1000).toFixed(1)}s including the response body${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
+    } else if (err.retryable == null || err.deliveryState) err.retryable = true;
+    await noteTemporaryFailure(err);
     throw err;
   }
-
-  if (!response.ok) throw buildGeminiHttpError(response, data);
-
-  const elapsedMs = Date.now() - startedAt;
-  if (elapsedMs >= 10000) {
-    console.info(`[Gemini] ${label} completed in ${(elapsedMs / 1000).toFixed(1)}s.`);
-  }
-  return data;
 }
 
 function enqueueGeminiRequest(prompt, options = {}) {
+  operationContext.throwIfCancelled();
   const priority = normalizePriority(options.priority);
+  const context = operationContext.current();
   return new Promise((resolve, reject) => {
-    queues[priority].push({ prompt, options, resolve, reject, cancelController: new AbortController() });
+    if (queues.high.length + queues.normal.length + queues.low.length >= 128) {
+      const err = new Error('Gemini queue is full; refusing more work until it drains.');
+      err.retryable = false;
+      return reject(err);
+    }
+    const cancelController = new AbortController();
+    let deadlineTimer = null;
+    const signals = [...new Set([options.cancelSignal, ...operationContext.signals()].filter(Boolean))];
+    const cleanup = () => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      signals.forEach((signal) => signal.removeEventListener('abort', cancel));
+    };
+    const job = { prompt, options, context, enqueuedAt: Date.now(), cancelController,
+      resolve: (value) => { cleanup(); resolve(value); },
+      reject: (err) => { cleanup(); reject(err); }
+    };
+    function remove() {
+      const index = queues[priority].indexOf(job);
+      if (index >= 0) queues[priority].splice(index, 1);
+      return index >= 0;
+    }
+    function cancel() {
+      cancelController.abort();
+      if (remove()) job.reject(operationContext.cancelledError('Queued Gemini request cancelled.'));
+    }
+    if (signals.some((signal) => signal.aborted)) return job.reject(operationContext.cancelledError());
+    const deadlineAt = Number(options.deadlineAt || 0);
+    if (deadlineAt && deadlineAt <= Date.now()) {
+      const err = new Error('Gemini queue-start deadline expired.'); err.queueDeadline = true; err.retryable = false;
+      return job.reject(err);
+    }
+    queues[priority].push(job);
+    signals.forEach((signal) => signal.addEventListener('abort', cancel, { once: true }));
+    if (deadlineAt) deadlineTimer = setTimeout(() => {
+      if (remove()) {
+        const err = new Error('Gemini request expired while waiting in the shared queue.');
+        err.queueDeadline = true; err.retryable = false; job.reject(err);
+      }
+    }, Math.max(1, deadlineAt - Date.now()));
+    job.onStart = () => { if (deadlineTimer) clearTimeout(deadlineTimer); deadlineTimer = null; };
     processQueue().catch((err) => console.error('[Gemini Queue] Unexpected queue failure:', err?.message || err));
   });
 }
@@ -446,14 +471,14 @@ async function processQueue() {
       if (!queues.high.length && !queues.normal.length && !queues.low.length) break;
 
       let waitMs = Math.max(0, readyAt - Date.now());
-      if (waitMs > 0) await sleep(waitMs);
+      if (waitMs > 0) { await sleep(Math.min(1000, waitMs)); continue; }
 
       // Recalculate after waking so timer jitter, backoff changes, and the
       // rolling 60-second window can never produce a burst over 15 RPM.
       readyAt = getRateLimitReadyAt();
       waitMs = Math.max(0, readyAt - Date.now());
       if (waitMs > 0) {
-        await sleep(waitMs);
+        await sleep(Math.min(1000, waitMs));
         continue;
       }
 
@@ -462,14 +487,27 @@ async function processQueue() {
       const job = nextJob();
       if (!job) continue;
 
-      const startedAt = Date.now();
-      pruneRequestStartTimes(startedAt);
-      lastRequestStartedAt = startedAt;
-      requestStartTimes.push(startedAt);
-
       activeJob = job;
       try {
-        const data = await performGeminiRequest(job.prompt, { ...job.options, cancelSignal: job.cancelController.signal });
+        job.onStart?.();
+        const data = await operationContext.runOperation(async () => {
+          operationContext.throwIfCancelled();
+          await operationContext.assertOperation();
+          if (sharedRateGate) await sharedRateGate.reserve({ spacingMs: getGeminiRequestSpacingMs(),
+            deadlineAt: Math.min(...[job.options.deadlineAt, job.options.totalDeadlineAt].filter((v) => v > 0)) || 0,
+            signal: job.cancelController.signal });
+          if (job.cancelController.signal.aborted) throw operationContext.cancelledError();
+          if (job.options.deadlineAt && Date.now() >= job.options.deadlineAt) {
+            const err = new Error('Gemini queue-start deadline expired before dispatch.'); err.queueDeadline = true; err.retryable = false; throw err;
+          }
+          const startedAt = Date.now();
+          pruneRequestStartTimes(startedAt); lastRequestStartedAt = startedAt; requestStartTimes.push(startedAt);
+          const totalRemaining = job.options.totalDeadlineAt ? job.options.totalDeadlineAt - Date.now() : Infinity;
+          if (totalRemaining <= 0) throw operationContext.cancelledError('Gemini total retry deadline expired.');
+          return performGeminiRequest(job.prompt, { ...job.options,
+            timeoutMs: Math.min(Number(job.options.timeoutMs) || DEFAULT_TIMEOUT_MS, totalRemaining),
+            cancelSignal: job.cancelController.signal });
+        }, job.context);
         job.resolve(data);
       } catch (err) {
         job.reject(err);
@@ -518,6 +556,15 @@ function cancelGeminiRequestsByLabelPrefix(prefix) {
   return { activeCancelled, queuedCancelled };
 }
 
+function cancelAllGeminiRequests() {
+  for (const priority of ['high', 'normal', 'low']) {
+    for (const job of queues[priority].splice(0)) {
+      job.cancelController.abort(); job.reject(operationContext.cancelledError('Bot is stopping.'));
+    }
+  }
+  activeJob?.cancelController.abort();
+}
+
 async function requestGeminiData(prompt, options = {}) {
   return enqueueGeminiRequest(prompt, options);
 }
@@ -541,13 +588,14 @@ async function requestGeminiDataWithRetry(prompt, options = {}) {
   let lastError;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    operationContext.throwIfCancelled();
     if (attempt > 0) {
       const configuredDelay = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)] || 0;
       const delayMs = Math.max(configuredDelay, Number(lastError?.retryAfterMs || 0));
       if (typeof options.onRetry === 'function') {
         options.onRetry({ attempt, maxRetries, delayMs, error: lastError });
       }
-      if (delayMs > 0) await sleep(delayMs);
+      if (delayMs > 0) await operationContext.sleep(delayMs);
     }
 
     try {
@@ -573,6 +621,7 @@ async function requestGeminiTextWithRetry(prompt, options = {}) {
 }
 
 module.exports = {
+  configureSharedRateGate,
   GEMINI_MODEL,
   HARD_MAX_REQUESTS_PER_MINUTE,
   REQUEST_RATE_WINDOW_MS,
@@ -580,6 +629,7 @@ module.exports = {
   getGeminiRequestSpacingMs,
   getGeminiClientStatus,
   cancelGeminiRequestsByLabelPrefix,
+  cancelAllGeminiRequests,
   extractGeminiText,
   isRetryableGeminiError,
   requestGeminiData,

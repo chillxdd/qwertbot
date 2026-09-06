@@ -1,3 +1,4 @@
+const operationContext = require('./reliability/context');
 const StreamLore = require('../models/StreamLore');
 const { containsPromptInjectionLanguage } = require('./promptSecurity');
 const {
@@ -426,6 +427,7 @@ function resolveLoreObservationMatch(doc, raw, text) {
 }
 
 async function applyStreamLoreObservations(channelName, observations = []) {
+  operationContext.throwIfCancelled();
   const channel = normalizeChannelName(channelName);
   const stats = { applied: 0, skipped: 0, created: 0, reinforced: 0, refined: 0, revisionsProposed: 0, contradictions: 0 };
   if (!channel) return stats;
@@ -596,6 +598,7 @@ async function applyStreamLoreObservations(channelName, observations = []) {
     stats.applied++;
   }
 
+  operationContext.throwIfCancelled();
   if (stats.applied) await doc.save();
   return stats;
 }

@@ -1,3 +1,5 @@
+import { deriveRecapPresentation } from './recapState.js';
+import { initReliabilitySection } from './sections/reliability.js';
 import { $, esc, postJson } from './shared.js';
 import { initMessagingSection } from './sections/messaging.js';
 import { initLoreSection } from './sections/lore.js';
@@ -52,12 +54,17 @@ const automation = initAutomationSection({ $, postJson });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
 void messaging;
+const reliability = initReliabilitySection({ $, postJson, isLoggedIn: () => loggedIn, onResolved: () => status() });
+let statusLoading = false;
+let statusPending = false;
 
 
 
 async function status() {
+  if (statusLoading) { statusPending = true; return; }
+  statusLoading = true;
   try {
-    const d = await (await fetch('/status', { cache: 'no-store' })).json();
+    const d = await (await fetch('/status', { cache: 'no-store', signal: AbortSignal.timeout(10000) })).json();
     $('qStatus').textContent = d.qwert.statusKnown ? (d.qwert.live ? 'LIVE' : 'OFFLINE') : 'CHECKING';
     $('qStatus').className = `value ${d.qwert.live ? 'good' : d.qwert.statusKnown ? 'bad' : 'warn'}`;
     $('qDetail').innerHTML = `<a target="_blank" rel="noopener noreferrer" href="${esc(d.qwert.twitchUrl)}">Watch on Twitch</a><br><a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/@generalqwert/streams">Watch on YouTube</a>`;
@@ -68,22 +75,13 @@ async function status() {
     // Keep Bot Status identical in mod and read-only views. Recap details live in AI Recap.
     $('bDetail').textContent = '';
 
-    const recapStopped = Boolean(d.bot.recapSystemStopped);
-    const recapState = !d.qwert.live
-      ? 'OFFLINE'
-      : recapStopped
-        ? 'STOPPED'
-        : d.bot.recapInProgress
-          ? 'GENERATING'
-          : d.bot.recapPaused
-            ? 'PAUSED'
-            : 'RUNNING';
-    $('recapState').textContent = recapState;
-    $('recapState').className = `value ${!d.qwert.live || recapStopped || d.bot.recapPaused ? 'warn' : 'good'}`;
-    const collectionState = !d.qwert.live ? 'IDLE' : d.bot.collectionPaused ? 'PAUSED' : 'ACTIVE';
-    $('recapLogging').textContent = collectionState;
-    $('recapLogging').className = `value ${collectionState === 'ACTIVE' ? 'good' : 'warn'}`;
-    $('recapNext').textContent = !d.qwert.live ? '—' : d.bot.recapPaused ? 'PAUSED' : d.bot.nextRecapAt ? countdown(d.bot.nextRecapAt - Date.now()) : '—';
+    const recapUi = deriveRecapPresentation(d);
+    $('recapState').textContent = recapUi.state;
+    $('recapState').className = `value ${recapUi.good ? 'good' : 'warn'}`;
+    $('recapLogging').textContent = recapUi.collection;
+    $('recapLogging').className = `value ${recapUi.collection === 'ACTIVE' ? 'good' : 'warn'}`;
+    $('recapNext').textContent = recapUi.next;
+    $('recapReliabilityNotice').textContent = recapUi.notice;
     $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${d.bot.twitchEventsInWindow || 0} event`;
 
     $('dbStatusLabel').textContent = 'Database Status';
@@ -111,15 +109,23 @@ async function status() {
       : '';
 
     if (loggedIn) {
-      $('pauseBtn').disabled = !d.qwert.live || (d.bot.recapPaused && !d.bot.collectionPaused && !d.bot.recapInProgress);
-      $('resumeBtn').disabled = !d.qwert.live || (!d.bot.recapPaused && !d.bot.collectionPaused);
-      $('stopRecapSystemBtn').disabled = !d.qwert.live || Boolean(d.bot.recapSystemStopped);
-      $('clearRecapWindowBtn').disabled = !d.qwert.live || ((d.bot.messagesInWindow || 0) === 0 && (d.bot.twitchEventsInWindow || 0) === 0 && !d.bot.recapInProgress);
+      $('pauseBtn').disabled = recapUi.disabled.pause;
+      $('resumeBtn').disabled = recapUi.disabled.resume;
+      $('stopRecapSystemBtn').disabled = recapUi.disabled.stop;
+      $('clearRecapWindowBtn').disabled = recapUi.disabled.clear;
+      $('storedBtn').disabled = Boolean(recapUi.disabled.preview);
+      void reliability.refresh();
       oauth.updateStatus(d);
     }
   } catch (_) {
     const botDetailEl = $('bDetail');
     if (botDetailEl) botDetailEl.textContent = '';
+    $('recapState').textContent = 'STATUS UNAVAILABLE';
+    $('recapReliabilityNotice').textContent = 'Cannot confirm the current bot state. Refresh before using controls.';
+    for (const id of ['pauseBtn', 'resumeBtn', 'stopRecapSystemBtn', 'clearRecapWindowBtn', 'storedBtn']) $(id).disabled = true;
+  } finally {
+    statusLoading = false;
+    if (statusPending) { statusPending = false; void status(); }
   }
 }
 

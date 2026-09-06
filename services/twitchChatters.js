@@ -1,3 +1,4 @@
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const { getStoredAuth, getValidAccessToken, refreshStoredToken } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
 

@@ -1,3 +1,4 @@
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const { getValidAccessToken, refreshStoredToken } = require('./twitchAuth');
 
 const REQUIRED_CLIPS_SCOPE = 'clips:edit';

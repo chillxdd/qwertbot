@@ -1,3 +1,6 @@
+const { withDistributedLock } = require('./reliability/distributedLock');
+const { WRITE_OPTIONS } = require('./reliability/store');
+const { fetchWithTimeout: fetch } = require('./httpClient');
 const TwitchAuth = require('../models/TwitchAuth');
 
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
@@ -53,6 +56,7 @@ async function saveAuth({
       }
     },
     {
+      ...WRITE_OPTIONS,
       upsert: true,
       new: true,
       setDefaultsOnInsert: true
@@ -118,7 +122,7 @@ async function syncStoredIdentity(auth, validation) {
   if (needsUserId) update.twitchUserId = validatedUserId;
   if (needsLogin) update.username = validatedLogin;
 
-  await TwitchAuth.updateOne({ provider: 'twitch' }, { $set: update });
+  await TwitchAuth.updateOne({ provider: 'twitch', accessToken: auth.accessToken }, { $set: update }, WRITE_OPTIONS);
 
   if (needsLogin) {
     console.log(`[OAuth Bot] Twitch bot login updated in MongoDB to ${validatedLogin}.`);
@@ -132,7 +136,7 @@ async function refreshStoredToken() {
   // cannot race and accidentally overwrite MongoDB with stale credentials.
   if (refreshInFlight) return refreshInFlight;
 
-  refreshInFlight = (async () => {
+  refreshInFlight = withDistributedLock('oauth:twitch', async (lease) => {
     const auth = await getStoredAuth();
 
     if (!auth?.refreshToken) {
@@ -174,20 +178,25 @@ async function refreshStoredToken() {
     }
 
     const newRefreshToken = data.refresh_token || auth.refreshToken;
-    const validation = await validateAccessToken(data.access_token);
-
-    const saved = await saveAuth({
-      accessToken: data.access_token,
-      refreshToken: newRefreshToken,
-      expiresIn: data.expires_in,
-      scopes: validation.scopes || data.scope || auth.scopes || [],
-      twitchUserId: validation.user_id || auth.twitchUserId || '',
-      username: validation.login || auth.username || ''
-    });
+    // Commit the rotated pair BEFORE an optional validation request. Losing a
+    // validation reply must not throw away the only usable refresh token.
+    await lease.assertOwned();
+    const saved = await TwitchAuth.findOneAndUpdate(
+      { provider: 'twitch', refreshToken: auth.refreshToken, accessToken: auth.accessToken },
+      { $set: { accessToken: data.access_token, refreshToken: newRefreshToken,
+        expiresAt: new Date(Date.now() + Math.max(0, Number(data.expires_in) || 0) * 1000),
+        scopes: Array.isArray(data.scope) ? data.scope : (auth.scopes || []) } },
+      { ...WRITE_OPTIONS, new: true }
+    ).lean();
+    if (!saved) {
+      const current = await getStoredAuth();
+      if (current?.accessToken) return current;
+      throw new Error('Authorization changed while refreshing; please authorize again.');
+    }
 
     console.log('[OAuth Bot] Twitch access token refreshed and saved to MongoDB.');
     return saved;
-  })();
+  });
 
   try {
     return await refreshInFlight;

@@ -32,6 +32,12 @@ const persistentPinConfigSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  schedulerFence: { type: Number, default: 0 },
+  postGeneration: { type: Number, default: 0 },
+  deliveryKey: { type: String, default: '' },
+  recoveryRequired: { type: Boolean, default: false },
+  recoveryReason: { type: String, default: '' },
+  skipStreamId: { type: String, default: '' },
   lastPinnedAt: {
     type: Date,
     default: null

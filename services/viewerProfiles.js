@@ -1,3 +1,4 @@
+const operationContext = require('./reliability/context');
 const ViewerProfile = require('../models/ViewerProfile');
 const ViewerProfileSettings = require('../models/ViewerProfileSettings');
 const { containsPromptInjectionLanguage } = require('./promptSecurity');
@@ -1005,6 +1006,7 @@ function normalizeRevisionReason(value) {
 }
 
 async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates = [] }) {
+  operationContext.throwIfCancelled();
   const settings = await getViewerProfileSettings(channelName);
   if (!settings.automaticLearningEnabled) return { applied: 0, skipped: 0, created: 0, reinforced: 0, refined: 0, revisionsProposed: 0, contradictions: 0 };
   const channel = normalizeChannelName(channelName);
@@ -1015,6 +1017,7 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
   const relationPriority = { new: 0, support: 1, refine: 2, contradict: 3 };
 
   for (const rawUpdate of Array.isArray(updates) ? updates : []) {
+    operationContext.throwIfCancelled();
     const participant = participantForUpdate(rawUpdate, participantIndex);
     if (!participant) { stats.skipped++; continue; }
     const username = participant.username;
@@ -1170,6 +1173,7 @@ async function applyViewerProfileUpdates({ channelName, chatLogs = [], updates =
     profile.displayName = participant.displayName || normalizeDisplayName(rawUpdate?.displayName) || profile.displayName || username;
     if (participant.identity.userId) profile.twitchUserId = participant.identity.userId;
     profile.lastSeenAt = new Date();
+    operationContext.throwIfCancelled();
     await profile.save();
     stats.applied++;
   }

@@ -1,3 +1,5 @@
+const { WRITE_OPTIONS } = require('./reliability/store');
+const operationContext = require('./reliability/context');
 const StreamRecapSession = require('../models/StreamRecapSession');
 
 function normalizeStreamId(streamId) {
@@ -24,27 +26,28 @@ async function getRecentStreamRecaps({ streamId, limit = 5 }) {
     .filter((entry) => entry.text);
 }
 
-async function saveStreamRecap({ streamId, channelName, startedAt, text }) {
+function liveFencedFilter(streamId) {
+  return { streamId, endedAt: null, $or: [
+    { writerFence: { $exists: false } }, { writerFence: { $lte: operationContext.fence() } }
+  ] };
+}
+
+async function saveStreamRecap({ streamId, channelName, startedAt, text, windowId = '' }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   const normalizedChannelName = normalizeChannelName(channelName);
   const recapText = String(text || '').trim();
   if (!normalizedStreamId || !normalizedChannelName || !recapText) return null;
-
-  const existing = await StreamRecapSession.findOne({ streamId: normalizedStreamId }).select({ recaps: 1 }).lean();
-  const sequence = Array.isArray(existing?.recaps) ? existing.recaps.length + 1 : 1;
-
-  return StreamRecapSession.findOneAndUpdate(
-    { streamId: normalizedStreamId },
-    {
-      $setOnInsert: {
-        channelName: normalizedChannelName,
-        streamId: normalizedStreamId,
-        startedAt: startedAt ? new Date(startedAt) : null
-      },
-      $push: { recaps: { sequence, text: recapText, createdAt: new Date() } }
-    },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+  const counter = await StreamRecapSession.findOneAndUpdate(
+    liveFencedFilter(normalizedStreamId),
+    { $inc: { recapSequence: 1 }, $set: { writerFence: operationContext.fence() }, $setOnInsert: { channelName: normalizedChannelName,
+      streamId: normalizedStreamId, startedAt: startedAt ? new Date(startedAt) : null } },
+    { ...WRITE_OPTIONS, upsert: true, new: true, setDefaultsOnInsert: true }
   ).lean();
+  return StreamRecapSession.updateOne({ ...liveFencedFilter(normalizedStreamId),
+    ...(windowId ? { 'recaps.windowId': { $ne: windowId } } : {}) }, {
+    $push: { recaps: { $each: [{ windowId, sequence: counter.recapSequence,
+      text: recapText.slice(0, 2000), createdAt: new Date() }], $slice: -96 } }
+  }, WRITE_OPTIONS);
 }
 
 
@@ -55,16 +58,22 @@ async function getSessionMemoryBlocks({ streamId }) {
   return Array.isArray(session?.sessionMemoryBlocks) ? session.sessionMemoryBlocks : [];
 }
 
-async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block }) {
+async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block, windowId = '' }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   const normalizedChannelName = normalizeChannelName(channelName);
   if (!normalizedStreamId || !normalizedChannelName || !block?.detailedSummary) return null;
 
-  const existing = await StreamRecapSession.findOne({ streamId: normalizedStreamId }).select({ sessionMemoryBlocks: 1 }).lean();
-  const sequence = Array.isArray(existing?.sessionMemoryBlocks) ? existing.sessionMemoryBlocks.length + 1 : 1;
+  operationContext.throwIfCancelled();
+  const counter = await StreamRecapSession.findOneAndUpdate(
+    liveFencedFilter(normalizedStreamId),
+    { $inc: { memorySequence: 1 }, $set: { writerFence: operationContext.fence() }, $setOnInsert: { channelName: normalizedChannelName,
+      streamId: normalizedStreamId, startedAt: startedAt ? new Date(startedAt) : null } },
+    { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true }
+  ).lean();
+  const sequence = counter.memorySequence;
 
   const memoryBlock = {
-    sequence,
+    windowId, sequence,
     startedAtMs: block.startedAtMs || null,
     endedAtMs: Number(block.endedAtMs || Date.now()),
     detailedSummary: String(block.detailedSummary || '').trim(),
@@ -90,50 +99,63 @@ async function saveSessionMemoryBlock({ streamId, channelName, startedAt, block 
     createdAt: new Date()
   };
 
-  return StreamRecapSession.findOneAndUpdate(
-    { streamId: normalizedStreamId },
-    {
-      $setOnInsert: {
-        channelName: normalizedChannelName,
-        streamId: normalizedStreamId,
-        startedAt: startedAt ? new Date(startedAt) : null
-      },
-      $push: { sessionMemoryBlocks: memoryBlock }
-    },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
-  ).lean();
+  operationContext.throwIfCancelled();
+  if (Buffer.byteLength(JSON.stringify(memoryBlock)) > 128 * 1024) {
+    throw new Error('Session-memory block exceeded its 128 KiB storage safety limit.');
+  }
+  return StreamRecapSession.updateOne({ ...liveFencedFilter(normalizedStreamId),
+    ...(windowId ? { 'sessionMemoryBlocks.windowId': { $ne: windowId } } : {}) }, {
+    $push: { sessionMemoryBlocks: { $each: [memoryBlock], $slice: -48 } }
+  }, WRITE_OPTIONS);
+
 }
 
 async function clearSessionMemory({ streamId }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   if (!normalizedStreamId) return null;
-  return StreamRecapSession.updateOne({ streamId: normalizedStreamId }, { $set: { sessionMemoryBlocks: [] } });
+  operationContext.throwIfCancelled();
+  return StreamRecapSession.updateOne(liveFencedFilter(normalizedStreamId), { $set: { sessionMemoryBlocks: [] } }, WRITE_OPTIONS);
 }
 
-async function getActiveRecapState({ streamId }) {
+async function getActiveRecapState({ streamId, writerFence = operationContext.fence() }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   if (!normalizedStreamId) return null;
-  const session = await StreamRecapSession.findOne({ streamId: normalizedStreamId }).select({ activeState: 1, startedAt: 1 }).lean();
+  // Fence out the previous instance BEFORE returning the snapshot we will restore.
+  const session = await StreamRecapSession.findOneAndUpdate({ streamId: normalizedStreamId,
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
+    $set: { writerFence, endedAt: null }, $unset: { purgeAt: 1 }
+  }, { ...WRITE_OPTIONS, new: true }).lean();
+  if (!session && await StreamRecapSession.exists({ streamId: normalizedStreamId })) {
+    throw new Error('A newer instance owns this recap state.');
+  }
   return session?.activeState || null;
 }
 
-async function saveActiveRecapState({ streamId, channelName, startedAt, state }) {
+async function saveActiveRecapState({ streamId, channelName, startedAt, state, writerFence = operationContext.fence() }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   const normalizedChannelName = normalizeChannelName(channelName);
-  if (!normalizedStreamId || !normalizedChannelName || !state) return null;
+  if (!normalizedStreamId || !normalizedChannelName || !state) throw new Error('Invalid active recap checkpoint.');
+  try {
+    return await StreamRecapSession.findOneAndUpdate({ streamId: normalizedStreamId, endedAt: null,
+      $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
+      $setOnInsert: { channelName: normalizedChannelName, streamId: normalizedStreamId,
+        startedAt: startedAt ? new Date(startedAt) : null },
+      $set: { writerFence, activeState: { ...state, savedAt: new Date() } }
+    }, { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true }).lean();
+  } catch (err) {
+    if (err.code === 11000) throw new Error('Stale recap checkpoint rejected: a newer instance/session owns the state.');
+    throw err;
+  }
+}
 
-  return StreamRecapSession.findOneAndUpdate(
-    { streamId: normalizedStreamId },
-    {
-      $setOnInsert: {
-        channelName: normalizedChannelName,
-        streamId: normalizedStreamId,
-        startedAt: startedAt ? new Date(startedAt) : null
-      },
-      $set: { activeState: { ...state, savedAt: new Date() } }
-    },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
-  ).lean();
+async function clearStreamRecapsForStream({ streamId, channelName, writerFence = operationContext.fence() }) {
+  if (!streamId || !channelName) return null;
+  // Keep a short-lived tombstone so a late old-session write cannot recreate it.
+  return StreamRecapSession.updateOne({ streamId: normalizeStreamId(streamId), channelName: normalizeChannelName(channelName),
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
+    $set: { writerFence, endedAt: new Date(), purgeAt: new Date(Date.now() + 7 * 86400000),
+      activeState: null, recaps: [], sessionMemoryBlocks: [] }
+  }, WRITE_OPTIONS);
 }
 
 async function clearActiveRecapState({ streamId }) {
@@ -157,5 +179,6 @@ module.exports = {
   getActiveRecapState,
   saveActiveRecapState,
   clearActiveRecapState,
-  clearStreamRecapsByChannel
+  clearStreamRecapsByChannel,
+  clearStreamRecapsForStream
 };

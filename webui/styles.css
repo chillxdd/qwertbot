@@ -680,3 +680,6 @@ button.success{background:#16834a}
 #customCommandPublicDescription{height:78px;min-height:78px;max-height:78px;resize:none;overflow-y:auto}
 /* Viewer profile cleanup stays out of the way until explicitly opened. */
 .viewer-profile-cleanup-shell{margin-top:24px;padding-top:14px;border-top:1px solid #2a2a30}.viewer-profile-cleanup-shell>.advanced-toggle{margin:0}.viewer-profile-cleanup-shell .advanced-settings-body{margin-top:10px}.viewer-profile-cleanup-panel{margin-top:0}
+
+.reliability-review-item { margin-top: 14px; padding: 14px; border: 1px solid #654638; border-radius: 8px; }
+.reliability-review-item p { overflow-wrap: anywhere; margin: 8px 0; }

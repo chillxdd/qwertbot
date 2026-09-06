@@ -1,3 +1,8 @@
+const { randomUUID } = require('node:crypto');
+const context = require('./reliability/context');
+const delivery = require('./reliability/delivery');
+const { WRITE_OPTIONS } = require('./reliability/store');
+const { createSerialExecutor } = require('./reliability/serialWriter');
 const ChatTimer = require('../models/ChatTimer');
 const TimerConfig = require('../models/TimerConfig');
 
@@ -251,6 +256,11 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   let lastSeenStreamId = '';
   let activityDirty = false;
   const ownResponses = [];
+  const serialize = createSerialExecutor();
+  let stopping = false;
+  let queuedTick = false;
+  const fenceFilter = () => ({ $or: [{ schedulerFence: { $exists: false } }, { schedulerFence: { $lte: context.fence() } }] });
+  const occurrenceKey = (timer) => `timer:${normalizedChannel}:${timer._id}:${timer.scheduleStreamId}:${dateMs(timer.nextDueAt)}`;
 
 
   function eventReactionHoldActive() {
@@ -278,7 +288,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
         ? await tryReserveAutomationSlot('timer')
         : { allowed: true, status: { active: false } };
     } catch (_) {
-      return { allowed: true, status: { active: false } };
+      return { allowed: false, status: { active: false } };
     }
   }
 
@@ -317,7 +327,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       const created = await TimerConfig.findOneAndUpdate(
         { channelName: normalizedChannel },
         { $setOnInsert: { channelName: normalizedChannel, ...normalizeSettings({}) } },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+        { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true }
       ).lean();
       settings = { ...settings, ...created };
     } else {
@@ -333,8 +343,11 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     return Math.max(now, notBefore, normalFirstDue);
   }
 
-  async function persistSchedulePatch(timerId, patch) {
-    await ChatTimer.updateOne({ _id: timerId, channelName: normalizedChannel }, { $set: patch });
+  async function persistSchedulePatch(timerId, patch, extra = {}) {
+    await context.assertOperation();
+    const result = await ChatTimer.updateOne({ _id: timerId, channelName: normalizedChannel, ...fenceFilter(), ...extra },
+      { $set: { ...patch, schedulerFence: context.fence() } }, WRITE_OPTIONS);
+    if (result.matchedCount !== 1) throw context.cancelledError('Timer changed or belongs to a newer deployment.');
   }
 
   async function ensureScheduleForCurrentStream(timer, status, now = Date.now()) {
@@ -351,13 +364,21 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       retryCount: 0,
       nextRetryAt: null
     };
-    Object.assign(timer, patch);
     await persistSchedulePatch(timer._id, patch);
+    Object.assign(timer, patch);
     return timer;
   }
 
   async function refreshCache() {
-    cache = await ChatTimer.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
+    const previous = new Map(cache.map((timer) => [String(timer._id), timer]));
+    const fresh = await ChatTimer.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
+    for (const timer of fresh) {
+      const old = previous.get(String(timer._id));
+      if (old && old.scheduleStreamId === timer.scheduleStreamId && dateMs(old.nextDueAt) === dateMs(timer.nextDueAt)) {
+        timer.messagesSinceLastFire = Math.max(wholeNumber(timer.messagesSinceLastFire), wholeNumber(old.messagesSinceLastFire));
+      }
+    }
+    cache = fresh;
     const status = streamStatus();
     if (status.live && status.streamId) {
       for (const timer of cache) await ensureScheduleForCurrentStream(timer, status);
@@ -378,7 +399,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const startDelayRemainingMs = status.live && startNotBefore ? Math.max(0, startNotBefore - now) : 0;
 
     let waitingFor = '';
-    if (!status.live) waitingFor = 'Stream offline';
+    if (timer.recoveryRequired) waitingFor = 'Delivery needs review - no automatic resend';
+    else if (!status.live) waitingFor = 'Stream offline';
     else if (startDelayRemainingMs > 0) waitingFor = 'Stream-start delay';
     else if (dueAt > now) waitingFor = timer.nextRetryAt ? 'Retry delay' : 'Interval';
     else if (missingMessages > 0) waitingFor = `${missingMessages} more chat message${missingMessages === 1 ? '' : 's'}`;
@@ -387,6 +409,9 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
 
     return {
       id: String(timer._id),
+      recoveryRequired: timer.recoveryRequired === true,
+      recoveryReason: timer.recoveryReason || '',
+      deliveryKey: timer.deliveryKey || '',
       name: String(timer.name || 'Timer'),
       intervalSeconds: Number(timer.intervalSeconds || MIN_TIMER_INTERVAL_SECONDS),
       startDelaySeconds: timer.startDelaySeconds === null || timer.startDelaySeconds === undefined ? null : Number(timer.startDelaySeconds),
@@ -429,6 +454,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   function meetsEligibility(timer, status, now) {
+    if (timer.recoveryRequired) return false;
     const streamStartedAt = status.startedAt || now;
     const startNotBefore = streamStartedAt + effectiveStartDelay(timer, settings) * 1000;
     if (now < startNotBefore) return false;
@@ -438,32 +464,48 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     return true;
   }
 
-  async function updateSuccessfulFire(timer, selection, rendered, reason = 'scheduled') {
+  async function updateSuccessfulFire(timer, payload, key) {
+    await context.assertOperation();
     const now = new Date();
-    const nextDueAt = new Date(calculateNextDueAt(timer, now.getTime()));
-    const actionType = TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message';
-    const actionColor = TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary';
-    const historyEntry = { firedAt: now, responseIndex: selection.index, response: rendered, actionType, actionColor, reason };
-    const currentHistory = Array.isArray(timer.history) ? timer.history : [];
-    const nextHistory = [...currentHistory, historyEntry].slice(-HISTORY_LIMIT);
-    const patch = {
-      lastFiredAt: now,
-      nextDueAt,
-      nextRetryAt: null,
-      retryCount: 0,
-      timesFired: wholeNumber(timer.timesFired, 0) + 1,
-      lastResponse: rendered,
-      lastResponseIndex: selection.index,
-      messagesSinceLastFire: 0,
-      history: nextHistory
-    };
-    Object.assign(timer, patch);
-    await persistSchedulePatch(timer._id, patch);
-    activityDirty = false;
-    console.log(`[Timers] Sent ${timer.name} -> action ${selection.index + 1}/${timer.responses.length} (${selection.mode}); next eligibility ${nextDueAt.toISOString()}.`);
+    const nextDueAt = new Date(Math.max(Number(payload.nextDueAt), calculateNextDueAt(timer, now.getTime())));
+    const remainingMessages = Math.max(0, wholeNumber(timer.messagesSinceLastFire) - wholeNumber(payload.activityAtStart));
+    const historyEntry = { firedAt: now, responseIndex: payload.selection.index, response: payload.rendered,
+      actionType: payload.actionType, actionColor: payload.actionColor, reason: payload.reason };
+    const patch = { lastFiredAt: now, nextDueAt, nextRetryAt: null, retryCount: 0,
+      lastResponse: payload.rendered, lastResponseIndex: payload.selection.index,
+      messagesSinceLastFire: remainingMessages, lastCompletedOccurrence: key,
+      deliveryKey: '', recoveryRequired: false, recoveryReason: '', schedulerFence: context.fence() };
+    const result = await ChatTimer.updateOne({ _id: timer._id, channelName: normalizedChannel,
+      scheduleStreamId: payload.streamId, nextDueAt: new Date(payload.dueAt),
+      lastCompletedOccurrence: { $ne: key }, ...fenceFilter() }, {
+      $set: patch, $inc: { timesFired: 1 }, $push: { history: { $each: [historyEntry], $slice: -HISTORY_LIMIT } }
+    }, WRITE_OPTIONS);
+    if (result.matchedCount === 1) {
+      Object.assign(timer, patch, { timesFired: wholeNumber(timer.timesFired) + 1,
+        history: [...(timer.history || []), historyEntry].slice(-HISTORY_LIMIT) });
+    } else {
+      // A receipt already applied, a deleted timer, or an explicit edit must not
+      // be overwritten by an old in-flight occurrence.
+      await refreshCache();
+    }
+    console.log(`[Timers] Committed occurrence ${key}; no replay of its chat send.`);
   }
 
   async function scheduleFailure(timer, err) {
+    if (err?.cancelled || stopping || !context.isActive()) return;
+    if (err?.reviewRequired || err?.deliveryState === 'UNKNOWN') {
+      const patch = { recoveryRequired: true, recoveryReason: String(err.message).slice(0, 600),
+        deliveryKey: err.deliveryKey || occurrenceKey(timer), nextRetryAt: null };
+      Object.assign(timer, patch);
+      await persistSchedulePatch(timer._id, patch);
+      console.error(`[Timers] ${timer.name} paused for delivery review. No blind retry.`);
+      return;
+    }
+    if (err?.commitOnly) {
+      timer.nextRetryAt = new Date(Date.now() + 10000);
+      console.error(`[Timers] ${timer.name} was sent, but its schedule save failed. Retrying the save, not the send.`);
+      return;
+    }
     const currentRetryCount = wholeNumber(timer.retryCount, 0);
     const attemptAt = new Date();
     if (currentRetryCount < RETRY_DELAYS_MS.length) {
@@ -486,27 +528,47 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       nextRetryAt: null,
       nextDueAt
     };
-    Object.assign(timer, patch);
     await persistSchedulePatch(timer._id, patch);
+    Object.assign(timer, patch);
     console.error(`[Timers] ${timer.name} failed after ${RETRY_DELAYS_MS.length} retries; this occurrence was abandoned. Next regular occurrence is ${nextDueAt.toISOString()}:`, err?.message || err);
   }
 
   async function sendSelected(timer, { reason = 'scheduled', affectSchedule = true } = {}) {
+    if (timer.recoveryRequired) throw new Error('This timer needs delivery review before another send.');
+    await context.assertOperation();
+    const key = affectSchedule ? occurrenceKey(timer) : `timer-test:${normalizedChannel}:${timer._id}:${randomUUID()}`;
+    const existing = await delivery.get(key);
+    let payload = existing?.payload;
+    if (!existing) {
     const selection = chooseResponse(timer);
     if (!selection.template) throw new Error(`${timer.name} has no selectable action.`);
     const rendered = await renderTimerResponse(selection.template, getRandomChatters);
     if (!rendered) throw new Error(`${timer.name} rendered an empty action message.`);
     const actionType = TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message';
     const actionColor = TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary';
-    if (actionType === 'twitch_announcement') {
-      if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not configured for timers.');
-      await sendAnnouncement(rendered, { color: actionColor });
-    } else {
-      noteOwnResponse(rendered);
-      await sendMessage(normalizedChannel, rendered);
+    payload = { selection, rendered, actionType, actionColor, reason,
+      streamId: timer.scheduleStreamId, dueAt: dateMs(timer.nextDueAt),
+      nextDueAt: calculateNextDueAt(timer), activityAtStart: wholeNumber(timer.messagesSinceLastFire) };
     }
-    if (affectSchedule) await updateSuccessfulFire(timer, selection, rendered, reason);
-    return { rendered, responseIndex: selection.index, responseMode: selection.mode, actionType, actionColor };
+    const receipt = await delivery.deliver({ key, kind: 'timer', payload, send: async (saved) => {
+      const status = streamStatus();
+      if (stopping || (affectSchedule && (!status.live || status.streamId !== saved.streamId))) {
+        throw Object.assign(context.cancelledError('Timer stream changed before send.'), { deliveryState: 'NOT_SENT' });
+      }
+      if (saved.actionType === 'twitch_announcement') {
+        if (typeof sendAnnouncement !== 'function') throw Object.assign(new Error('Announcements are unavailable.'), { deliveryState: 'NOT_SENT' });
+        return sendAnnouncement(saved.rendered, { color: saved.actionColor });
+      }
+      noteOwnResponse(saved.rendered);
+      return sendMessage(normalizedChannel, saved.rendered);
+    } });
+    if (affectSchedule) {
+      try { await updateSuccessfulFire(timer, receipt.payload, key); }
+      catch (err) { err.commitOnly = true; throw err; }
+    }
+    const sent = receipt.payload;
+    return { rendered: sent.rendered, responseIndex: sent.selection.index, responseMode: sent.selection.mode,
+      actionType: sent.actionType, actionColor: sent.actionColor, replayed: receipt.replayed };
   }
 
   async function runScheduledTimer(timer) {
@@ -522,9 +584,10 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function tick() {
-    if (tickBusy) return;
+    if (tickBusy || stopping || !context.isActive()) return;
     tickBusy = true;
     try {
+      await context.assertOperation();
       const status = streamStatus();
       if (!status.live || !status.streamId) {
         lastSeenStreamId = '';
@@ -556,7 +619,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     }
   }
 
-  async function checkpointActivity() {
+  async function checkpointActivity({ force = false } = {}) {
+    if (!force && !context.isActive()) return;
     if (!activityDirty || !cache.length) return;
     activityDirty = false;
     try {
@@ -564,18 +628,20 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
         .filter((timer) => timer.enabled !== false)
         .map((timer) => ({
           updateOne: {
-            filter: { _id: timer._id, channelName: normalizedChannel },
+            filter: { _id: timer._id, channelName: normalizedChannel, scheduleStreamId: timer.scheduleStreamId, nextDueAt: timer.nextDueAt, ...fenceFilter() },
             update: { $set: { messagesSinceLastFire: wholeNumber(timer.messagesSinceLastFire, 0) } }
           }
         }));
-      if (operations.length) await ChatTimer.bulkWrite(operations, { ordered: false });
+      if (operations.length) await ChatTimer.bulkWrite(operations, { ...WRITE_OPTIONS, ordered: false });
     } catch (err) {
       activityDirty = true;
       console.error('[Timers] Could not checkpoint chat-activity counters:', err?.message || err);
+      if (force) throw err;
     }
   }
 
   function recordViewerActivity() {
+    if (stopping || !context.isActive()) return;
     const status = streamStatus();
     if (!status.live || !status.streamId) return;
     for (const timer of cache) {
@@ -586,10 +652,20 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function initialize() {
+    stopping = false;
+    await context.assertOperation();
+    await ChatTimer.updateMany({ channelName: normalizedChannel, ...fenceFilter() },
+      { $set: { schedulerFence: context.fence() } }, WRITE_OPTIONS);
+    await TimerConfig.updateOne({ channelName: normalizedChannel, ...fenceFilter() },
+      { $set: { schedulerFence: context.fence() } }, WRITE_OPTIONS);
     await loadSettings();
     await refreshCache();
-    if (!scheduler) scheduler = setInterval(() => { void tick(); }, SCHEDULER_TICK_MS);
-    if (!checkpointTimer) checkpointTimer = setInterval(() => { void checkpointActivity(); }, ACTIVITY_CHECKPOINT_MS);
+    if (!scheduler) scheduler = context.detached(() => setInterval(() => {
+      if (queuedTick || stopping) return;
+      queuedTick = true;
+      serialize(tick).catch((err) => console.error('[Timers] Tick failed:', err.message)).finally(() => { queuedTick = false; });
+    }, SCHEDULER_TICK_MS));
+    if (!checkpointTimer) checkpointTimer = context.detached(() => setInterval(() => { serialize(checkpointActivity).catch((err) => console.error('[Timers] Checkpoint failed:', err.message)); }, ACTIVITY_CHECKPOINT_MS));
     console.log(`[Timers] Loaded ${cache.length} timer(s) from MongoDB. Global start delay ${settings.globalStartDelaySeconds}s.`);
   }
 
@@ -607,19 +683,20 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function saveSettings(input = {}) {
+    await context.assertOperation();
     const normalized = normalizeSettings(input);
     const saved = await TimerConfig.findOneAndUpdate(
-      { channelName: normalizedChannel },
-      { $set: normalized, $setOnInsert: { channelName: normalizedChannel } },
-      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+      { channelName: normalizedChannel, ...fenceFilter() },
+      { $set: { ...normalized, schedulerFence: context.fence() }, $setOnInsert: { channelName: normalizedChannel } },
+      { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     ).lean();
     if (normalized.globalStartDelaySeconds > 0) {
       const adjusted = await ChatTimer.updateMany(
         {
           channelName: normalizedChannel,
-          startDelaySeconds: { $ne: null, $lt: normalized.globalStartDelaySeconds }
+          ...fenceFilter(), startDelaySeconds: { $ne: null, $lt: normalized.globalStartDelaySeconds }
         },
-        { $set: { startDelaySeconds: normalized.globalStartDelaySeconds } }
+        { $set: { startDelaySeconds: normalized.globalStartDelaySeconds, schedulerFence: context.fence() } }, WRITE_OPTIONS
       );
       if (adjusted?.modifiedCount) {
         console.log(`[Timers] Raised ${adjusted.modifiedCount} per-timer start-delay override(s) to match the new global minimum.`);
@@ -632,19 +709,20 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function saveTimer(input = {}) {
+    await context.assertOperation();
     await loadSettings();
     const normalized = normalizeInput(input, settings);
     const id = String(input.id || '').trim();
     let saved;
     if (id) {
       saved = await ChatTimer.findOneAndUpdate(
-        { _id: id, channelName: normalizedChannel },
-        { $set: normalized },
-        { new: true, runValidators: true }
+        { _id: id, channelName: normalizedChannel, ...fenceFilter() },
+        { $set: { ...normalized, schedulerFence: context.fence() } },
+        { ...WRITE_OPTIONS, new: true, runValidators: true }
       );
       if (!saved) throw new Error('Timer was not found.');
     } else {
-      saved = await ChatTimer.create({ channelName: normalizedChannel, ...normalized });
+      [saved] = await ChatTimer.create([{ channelName: normalizedChannel, schedulerFence: context.fence(), ...normalized }], WRITE_OPTIONS);
     }
 
     await refreshCache();
@@ -653,25 +731,27 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (cached && status.live && status.streamId) {
       const nextDueAt = new Date(scheduleForNewStream(cached, status));
       const patch = { scheduleStreamId: status.streamId, nextDueAt, retryCount: 0, nextRetryAt: null, messagesSinceLastFire: 0 };
-      Object.assign(cached, patch);
       await persistSchedulePatch(cached._id, patch);
+      Object.assign(cached, patch);
     }
     console.log(`[Timers] ${id ? 'Updated' : 'Created'} timer ${normalized.name}.`);
     return toClient(cached || saved.toObject());
   }
 
   async function deleteTimer(id) {
-    const deleted = await ChatTimer.findOneAndDelete({ _id: id, channelName: normalizedChannel });
+    await context.assertOperation();
+    const deleted = await ChatTimer.findOneAndDelete({ _id: id, channelName: normalizedChannel, ...fenceFilter() }, WRITE_OPTIONS);
     if (!deleted) throw new Error('Timer was not found.');
     await refreshCache();
     console.log(`[Timers] Deleted timer ${deleted.name}.`);
   }
 
   async function setEnabled(id, enabled) {
+    await context.assertOperation();
     const saved = await ChatTimer.findOneAndUpdate(
-      { _id: id, channelName: normalizedChannel },
-      { $set: { enabled: Boolean(enabled), retryCount: 0, nextRetryAt: null } },
-      { new: true, runValidators: true }
+      { _id: id, channelName: normalizedChannel, ...fenceFilter() },
+      { $set: { enabled: Boolean(enabled), retryCount: 0, nextRetryAt: null, schedulerFence: context.fence() } },
+      { ...WRITE_OPTIONS, new: true, runValidators: true }
     );
     if (!saved) throw new Error('Timer was not found.');
     await refreshCache();
@@ -680,8 +760,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (cached && cached.enabled !== false && status.live && status.streamId) {
       const nextDueAt = new Date(scheduleForNewStream(cached, status));
       const patch = { scheduleStreamId: status.streamId, nextDueAt, messagesSinceLastFire: 0 };
-      Object.assign(cached, patch);
       await persistSchedulePatch(cached._id, patch);
+      Object.assign(cached, patch);
     }
     console.log(`[Timers] ${saved.enabled ? 'Enabled' : 'Disabled'} timer ${saved.name}.`);
     return toClient(cached || saved.toObject());
@@ -703,6 +783,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function testTimer(id) {
+    await context.assertOperation();
     const timer = await findTimerOrThrow(id);
     const result = await sendSelected(timer, { reason: 'scheduled', affectSchedule: false });
     console.log(`[Timers] Test sent for ${timer.name}; schedule and history were not changed.`);
@@ -710,6 +791,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function fireNow(id) {
+    await context.assertOperation();
     const timer = await findTimerOrThrow(id);
     const status = streamStatus();
     if (!status.live || !status.streamId) throw new Error('Fire Now is only available while Qwert is live. Use Test for an offline send check.');
@@ -718,20 +800,43 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     return result;
   }
 
+  function quiesce() {
+    stopping = true;
+    if (scheduler) clearInterval(scheduler);
+    if (checkpointTimer) clearInterval(checkpointTimer);
+    scheduler = null; checkpointTimer = null;
+  }
+  async function resolveReview(id, outcome, expectedDeliveryKey) {
+    const timer = await findTimerOrThrow(id);
+    if (expectedDeliveryKey !== undefined && timer.deliveryKey !== expectedDeliveryKey) throw new Error('This timer occurrence changed. Refresh before reviewing it.');
+    if (!timer.deliveryKey) throw new Error('Timer has no pending delivery review.');
+    const record = await delivery.resolve(timer.deliveryKey, outcome);
+    if (!record) throw new Error('Delivery was already resolved or changed. Refresh the page.');
+    const key = timer.deliveryKey;
+    const patch = { recoveryRequired: false, recoveryReason: '', deliveryKey: '' };
+    await persistSchedulePatch(timer._id, patch); Object.assign(timer, patch);
+    if (outcome === 'sent') await updateSuccessfulFire(timer, record.payload, key);
+    else { timer.nextRetryAt = new Date(Date.now() + 60000); await persistSchedulePatch(timer._id, { nextRetryAt: timer.nextRetryAt }); }
+    return toClient(timer);
+  }
+
   return {
-    initialize,
-    listTimers,
-    getSettings,
-    saveSettings,
-    saveTimer,
-    deleteTimer,
-    setEnabled,
-    previewTimer,
-    testTimer,
-    fireNow,
+    quiesce,
+    shutdown: () => { quiesce(); return serialize(() => checkpointActivity({ force: true })); },
+    resolveReview: (...args) => serialize(() => resolveReview(...args)),
+    initialize: () => serialize(initialize),
+    listTimers: (...args) => serialize(() => listTimers(...args)),
+    getSettings: (...args) => serialize(() => getSettings(...args)),
+    saveSettings: (...args) => serialize(() => saveSettings(...args)),
+    saveTimer: (...args) => serialize(() => saveTimer(...args)),
+    deleteTimer: (...args) => serialize(() => deleteTimer(...args)),
+    setEnabled: (...args) => serialize(() => setEnabled(...args)),
+    previewTimer: (...args) => serialize(() => previewTimer(...args)),
+    testTimer: (...args) => serialize(() => testTimer(...args)),
+    fireNow: (...args) => serialize(() => fireNow(...args)),
     recordViewerActivity,
     consumeOwnResponse,
-    refreshCache
+    refreshCache: () => serialize(refreshCache)
   };
 }
 
