@@ -202,8 +202,12 @@ const chatClientProxy = {
       if (wantsTemporaryPin && pinSnapshotReady && result?.message_id) {
         // Receipt first. Ancillary pinning must not delay the durable recap
         // commit or make a successful chat send appear to have failed.
-        void startTemporaryChatPin({ messageId: result.message_id, previousPin, displaySeconds: 60 })
-          .catch((err) => console.warn('[Recap Pins] Chat was sent; temporary pinning failed:', err.message));
+        void startTemporaryChatPin({
+          messageId: result.message_id,
+          previousPin,
+          displaySeconds: 60,
+          onRestoreComplete: () => persistentPinManager?.reconcileNow?.('recap_end')
+        }).catch((err) => console.warn('[Recap Pins] Chat was sent; temporary pinning failed:', err.message));
       }
 
       return {

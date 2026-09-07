@@ -352,7 +352,7 @@ async function restorePreviousPin({ temporaryMessageId, previousPin }) {
   console.log('[Recap Pins] Previous pinned message restored after the hourly recap.');
 }
 
-async function startTemporaryChatPin({ messageId, previousPin = null, displaySeconds = 60 }) {
+async function startTemporaryChatPin({ messageId, previousPin = null, displaySeconds = 60, onRestoreComplete = null }) {
   const seconds = Math.max(30, Math.min(1800, Math.round(Number(displaySeconds) || 60)));
 
   // Give the temporary pin a small buffer so that when the restoration timer runs,
@@ -377,9 +377,13 @@ async function startTemporaryChatPin({ messageId, previousPin = null, displaySec
       .catch((err) => {
         console.warn(`[Recap Pins] Could not restore the previous pin: ${err?.message || err}`);
       })
-      .finally(() => {
+      .finally(async () => {
         if (activeTemporaryPinMessageId === temporaryMessageId) {
           activeTemporaryPinMessageId = null;
+        }
+        if (typeof onRestoreComplete === 'function') {
+          try { await onRestoreComplete(); }
+          catch (err) { console.warn(`[Recap Pins] Post-recap pin reconciliation failed: ${err?.message || err}`); }
         }
       });
   }, seconds * 1000));

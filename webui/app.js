@@ -82,7 +82,8 @@ async function status() {
     $('recapLogging').className = `value ${recapUi.collection === 'ACTIVE' ? 'good' : 'warn'}`;
     $('recapNext').textContent = recapUi.next;
     $('recapReliabilityNotice').textContent = recapUi.notice;
-    $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${d.bot.twitchEventsInWindow || 0} event`;
+    const recapEventCount = Number(d.bot.twitchEventsInWindow || 0);
+    $('recapWindow').textContent = `${d.bot.messagesInWindow || 0} msg / ${recapEventCount} recap event${recapEventCount === 1 ? '' : 's'}`;
 
     $('dbStatusLabel').textContent = 'Database Status';
     $('dbStatus').textContent = d.database.connected ? 'CONNECTED' : 'OFFLINE';

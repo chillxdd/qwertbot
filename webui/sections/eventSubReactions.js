@@ -4,9 +4,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
   let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300 };
   let automationSpacingSeconds = 0;
   const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
+  const maxPersistentPinMessages = Number(config.maxPersistentPinMessages || 10);
+  const defaultPersistentPinRotationSeconds = Number(config.defaultPersistentPinRotationSeconds || 180);
+  const minPersistentPinRotationSeconds = Number(config.minPersistentPinRotationSeconds || 30);
+  const maxPersistentPinRotationSeconds = Number(config.maxPersistentPinRotationSeconds || 1800);
   const defaultPersistentPinHoldSeconds = Number(config.defaultPersistentPinHoldSeconds ?? 10);
   const maxPersistentPinHoldSeconds = Number(config.maxPersistentPinHoldSeconds || 3600);
-  let persistentPin = { enabled: false, message: '', startupHoldSeconds: defaultPersistentPinHoldSeconds };
+  let persistentPin = { enabled: false, message: '', messages: [], rotationSeconds: defaultPersistentPinRotationSeconds, startupHoldSeconds: defaultPersistentPinHoldSeconds };
   let editingId = null;
   let page = 1;
   let loaded = false;
@@ -47,10 +51,22 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     el.classList.toggle('bad', bad);
   }
 
+  function persistentPinMessages() {
+    if (Array.isArray(persistentPin.messages) && persistentPin.messages.length) return persistentPin.messages.map((value) => String(value || '').trim()).filter(Boolean);
+    const legacy = String(persistentPin.message || '').trim();
+    return legacy ? [legacy] : [];
+  }
+
+  function parsePersistentPinMessages(value) {
+    return String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  }
+
   function applyPersistentPinToUi() {
     $('persistentPinEnabled').checked = persistentPin.enabled === true;
-    $('persistentPinMessageInput').value = String(persistentPin.message || '');
-    $('persistentPinMessageInput').maxLength = maxPersistentPinMessageLength;
+    $('persistentPinMessageInput').value = persistentPinMessages().join('\n');
+    $('persistentPinRotation').value = String(Number(persistentPin.rotationSeconds ?? defaultPersistentPinRotationSeconds));
+    $('persistentPinRotation').min = String(minPersistentPinRotationSeconds);
+    $('persistentPinRotation').max = String(maxPersistentPinRotationSeconds);
     $('persistentPinStartupHold').value = String(Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds));
     $('persistentPinStartupHold').max = String(maxPersistentPinHoldSeconds);
   }
@@ -73,27 +89,41 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
 
   async function savePersistentPinConfig(overrides = {}, { closeAfter = false } = {}) {
     const enabled = overrides.enabled ?? $('persistentPinEnabled').checked;
-    const message = overrides.message ?? String($('persistentPinMessageInput').value || '').trim();
+    const messages = overrides.messages ?? parsePersistentPinMessages($('persistentPinMessageInput').value);
+    const rotationSeconds = overrides.rotationSeconds ?? Number($('persistentPinRotation').value);
     const startupHoldSeconds = overrides.startupHoldSeconds ?? Number($('persistentPinStartupHold').value);
-    if (Array.from(message).length > maxPersistentPinMessageLength) {
-      const error = `Pinned message can contain at most ${maxPersistentPinMessageLength} characters.`;
+    if (messages.length > maxPersistentPinMessages) {
+      const error = `Persistent Stream Pin supports at most ${maxPersistentPinMessages} banner messages.`;
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     }
-    if (enabled && !message) {
-      const error = 'Enter a pinned message before enabling Persistent Stream Pin.';
+    const tooLong = messages.findIndex((message) => Array.from(message).length > maxPersistentPinMessageLength);
+    if (tooLong !== -1) {
+      const error = `Banner ${tooLong + 1} exceeds ${maxPersistentPinMessageLength} characters.`;
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+    if (enabled && !messages.length) {
+      const error = 'Enter at least one banner message before enabling Persistent Stream Pin.';
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+    if (!Number.isInteger(Number(rotationSeconds)) || Number(rotationSeconds) < minPersistentPinRotationSeconds || Number(rotationSeconds) > maxPersistentPinRotationSeconds) {
+      const error = `Banner Duration must be a whole number between ${minPersistentPinRotationSeconds} and ${maxPersistentPinRotationSeconds} seconds.`;
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     }
     if (!Number.isInteger(Number(startupHoldSeconds)) || Number(startupHoldSeconds) < 0 || Number(startupHoldSeconds) > maxPersistentPinHoldSeconds) {
-      const error = `Post-Pin Hold must be a whole number between 0 and ${maxPersistentPinHoldSeconds} seconds.`;
+      const error = `Post-Start Hold must be a whole number between 0 and ${maxPersistentPinHoldSeconds} seconds.`;
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     }
     const saveButton = $('savePersistentPinBtn');
     if (saveButton) saveButton.disabled = true;
     try {
-      const d = await postJson('/eventsub-reactions/persistent-pin', { enabled: Boolean(enabled), message, startupHoldSeconds: Number(startupHoldSeconds) });
+      const d = await postJson('/eventsub-reactions/persistent-pin', {
+        enabled: Boolean(enabled), messages, rotationSeconds: Number(rotationSeconds), startupHoldSeconds: Number(startupHoldSeconds)
+      });
       if (!d.success) throw new Error(d.error || 'Could not save Persistent Stream Pin.');
       persistentPin = { ...persistentPin, ...(d.persistentPin || {}) };
       if (closeAfter) closePersistentPinEditor();
@@ -253,7 +283,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const persistentPinCard = `<div class="custom-command-card event-reaction-card persistent-pin-reaction-card" data-system="persistent-pin">
       <div class="custom-command-card-main">
         <div class="custom-command-title-row"><strong class="custom-command-name">Persistent Stream Pin</strong><span class="custom-command-state ${persistentPin.enabled?'enabled':'disabled'}">${persistentPin.enabled?'Enabled':'Disabled'}</span></div>
-        <div class="detail">Stream Online · 1 action · bypasses global post-hold</div>
+        <div class="detail">Stream Online · ${persistentPinMessages().length || 0} banner${persistentPinMessages().length===1?'':'s'} · ${Number(persistentPin.rotationSeconds || defaultPersistentPinRotationSeconds)}s each · bypasses global post-hold</div>
       </div>
       <div class="custom-command-actions">
         <button class="secondary persistent-pin-edit" type="button">Edit</button>
@@ -291,7 +321,8 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       setMsg('');
       await savePersistentPinConfig({
         enabled: !persistentPin.enabled,
-        message: String(persistentPin.message || '').trim(),
+        messages: persistentPinMessages(),
+        rotationSeconds: Number(persistentPin.rotationSeconds ?? defaultPersistentPinRotationSeconds),
         startupHoldSeconds: Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds)
       });
     };

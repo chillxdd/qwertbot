@@ -565,13 +565,19 @@
             </div>
           </div>
           <div class="custom-editor-block persistent-pin-editor-grid">
-            <label>Pinned Message
-              <textarea id="persistentPinMessageInput" rows="3" maxlength="500" placeholder="Message to post and keep as the default stream pin"></textarea>
+            <label>Banner Messages <span class="detail">(one Twitch message per line)</span>
+              <textarea id="persistentPinMessageInput" rows="7" placeholder="Banner 1 message&#10;Banner 2 message&#10;Banner 3 message"></textarea>
             </label>
-            <label>Post-Pin Hold
-              <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
-            </label>
+            <div class="persistent-pin-duration-stack">
+              <label>Banner Duration
+                <div class="duration-field"><input id="persistentPinRotation" type="number" min="30" max="1800" step="1" value="180"><span class="duration-unit">seconds</span></div>
+              </label>
+              <label>Post-Start Hold
+                <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
+              </label>
+            </div>
           </div>
+          <div class="detail">Banners rotate in order. A recap may temporarily replace the active banner; its 60-second display time is deducted from that banner's remaining slot. Manual or other pins are never automatically replaced.</div>
           <div class="custom-editor-actions">
             <button id="savePersistentPinBtn" type="button">Save</button>
             <button id="cancelPersistentPinBtn" class="secondary" type="button">Cancel</button>

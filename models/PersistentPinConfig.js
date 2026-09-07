@@ -13,10 +13,22 @@ const persistentPinConfigSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Legacy single-message field retained for backwards compatibility. The first
+  // configured banner is mirrored here so older deployments can still read it.
   message: {
     type: String,
     default: '',
     maxlength: 500
+  },
+  messages: {
+    type: [String],
+    default: []
+  },
+  rotationSeconds: {
+    type: Number,
+    default: 180,
+    min: 30,
+    max: 1800
   },
   startupHoldSeconds: {
     type: Number,
@@ -31,6 +43,19 @@ const persistentPinConfigSchema = new mongoose.Schema({
   activeMessageId: {
     type: String,
     default: ''
+  },
+  activeMessageIds: {
+    type: [String],
+    default: []
+  },
+  activeBannerIndex: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  bannerEndsAt: {
+    type: Date,
+    default: null
   },
   schedulerFence: { type: Number, default: 0 },
   postGeneration: { type: Number, default: 0 },
