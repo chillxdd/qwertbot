@@ -30,10 +30,14 @@ Deprioritize:
 
 OVERALL PICTURE:
 - Summarize broad repeated topics once instead of listing every message.
+- Select the 2-3 strongest moments rather than trying to cover every supported topic. A fourth belongs only when it is genuinely as important or memorable.
 - Mention usernames only when genuinely notable or useful.
 - Balance concrete highlights with the overall picture.
 - Treat noteworthy EventSub activity as supporting context, not a checklist; do not enumerate routine supporter names.
+- In a chat-rich window, include at most one EventSub-only poll/prediction/result unless viewer chat directly makes multiple results important.
 - When space is limited, prefer a specific worthwhile chat detail over platform telemetry.
+- Avoid vague filler such as "viewers discussed X" or "viewers reacted to Y" when the source does not support what was specifically noteworthy about it.
+- Keep each sentence centered on one coherent topic; do not comma-chain unrelated facts into a laundry list.
 - Do not force unrelated topics into one story.
 
 SEXUAL / SUGGESTIVE CHAT:
@@ -65,7 +69,9 @@ const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap to use more of the avai
 - Do not use expansion to promote an isolated one-message joke/label into a recurring chat theme or a personal fact about Qwert or another viewer.
 - Broad phrases such as "chat joked/discussed/debated" require multiple directly supporting source messages; a single remark should remain explicitly one-viewer wording or be omitted.
 - Add only noteworthy details directly supported by current chat or verified Twitch events.
+- Keep the recap selective: 2-3 strong moments are better than a longer inventory of weak topics.
 - Treat EventSub activity as supporting context rather than a checklist; do not add routine support telemetry or enumerate supporters merely to increase length.
+- Do not add vague "viewers discussed/reacted to" clauses simply to grow the recap, and do not comma-chain unrelated facts.
 - Actively scan for specific notable conversations, jokes, flirty/suggestive exchanges, reactions, gameplay details, predictions, or recurring themes omitted from the current recap.
 - Prefer adding a genuinely different useful detail over merely rewording an existing one.
 - Every added detail should introduce a distinct topic, event, joke, reaction, conclusion, or fact not already represented.
