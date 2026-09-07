@@ -413,10 +413,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const globalPinDuration = Number(persistentPin.rotationSeconds || defaultPersistentPinRotationSeconds);
     const customDurationCount = pinBanners.filter((banner) => Number(banner.durationSeconds) > globalPinDuration).length;
     const customDurationLabel = customDurationCount ? ` · ${customDurationCount} extended duration${customDurationCount===1?'':'s'}` : '';
+    const durationSummary = activePinBanners.length === 1
+      ? 'pinned indefinitely'
+      : `${globalPinDuration}s global${customDurationLabel}`;
     const persistentPinCard = `<div class="custom-command-card event-reaction-card persistent-pin-reaction-card" data-system="persistent-pin">
       <div class="custom-command-card-main">
         <div class="custom-command-title-row"><strong class="custom-command-name">Rotating Pinned Banners</strong><span class="custom-command-state ${persistentPin.enabled?'enabled':'disabled'}">${persistentPin.enabled?'Enabled':'Disabled'}</span></div>
-        <div class="detail">Stream Online · ${activePinBanners.length}/${pinBanners.length} active banner${pinBanners.length===1?'':'s'} · ${globalPinDuration}s global${customDurationLabel} · bypasses global post-hold</div>
+        <div class="detail">Stream Online · ${activePinBanners.length}/${pinBanners.length} active banner${pinBanners.length===1?'':'s'} · ${durationSummary} · bypasses global post-hold</div>
       </div>
       <div class="custom-command-actions">
         <button class="secondary persistent-pin-edit" type="button">Edit</button>

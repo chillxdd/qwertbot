@@ -184,6 +184,10 @@ function createPersistentPinManager({
     return configuredBanners().filter((row) => row.enabled !== false);
   }
 
+  function hasSingleEnabledBanner() {
+    return enabledBanners().length === 1;
+  }
+
   function configuredMessageIds() {
     return normalizeMessageIds(config.activeMessageIds, configuredBanners().length);
   }
@@ -426,6 +430,9 @@ function createPersistentPinManager({
     const previousIds = new Set(previousIdsArray.filter(Boolean));
     const previousCurrentIndex = currentIndex();
     const previousCurrentDuration = effectiveDuration(previousCurrentIndex);
+    const previousEnabledCount = previousRows.filter((row) => row.enabled !== false).length;
+    const nextEnabledCount = nextRows.filter((row) => row.enabled !== false).length;
+    const singleBannerModeChanged = (previousEnabledCount === 1) !== (nextEnabledCount === 1);
     const messagesChanged = JSON.stringify(next.messages) !== JSON.stringify(previousRows.map((row) => row.message));
     const enabledChanged = JSON.stringify(next.bannerEnabled) !== JSON.stringify(previousRows.map((row) => row.enabled !== false));
     const bannerDurationsChanged = JSON.stringify(next.bannerDurations) !== JSON.stringify(previousRows.map((row) => row.durationSeconds || 0));
@@ -448,7 +455,7 @@ function createPersistentPinManager({
       const nextGlobal = next.rotationSeconds;
       const nextBanner = nextRows[update.activeBannerIndex] || null;
       const nextCurrentDuration = nextBanner?.durationSeconds > nextGlobal ? nextBanner.durationSeconds : nextGlobal;
-      if (update.activeBannerIndex !== previousCurrentIndex || nextCurrentDuration !== previousCurrentDuration) update.bannerEndsAt = null;
+      if (singleBannerModeChanged || update.activeBannerIndex !== previousCurrentIndex || nextCurrentDuration !== previousCurrentDuration) update.bannerEndsAt = null;
     }
     update.schedulerFence = context.fence();
 
@@ -589,22 +596,28 @@ function createPersistentPinManager({
       reposted = ensured.reposted;
     }
 
+    // With exactly one enabled banner there is nothing to rotate to. Pin it
+    // without duration_seconds so Twitch keeps it pinned indefinitely. Duration
+    // settings remain saved for whenever a second banner is enabled later.
+    const indefinite = hasSingleEnabledBanner();
     const requestedDuration = durationSeconds === undefined || durationSeconds === null || durationSeconds === '' ? effectiveDuration(bannerIndex) : Number(durationSeconds);
-    const seconds = Math.max(MIN_RESTORE_SECONDS, Math.min(MAX_PERSISTENT_PIN_ROTATION_SECONDS, Math.round(requestedDuration || effectiveDuration(bannerIndex))));
+    const seconds = indefinite
+      ? null
+      : Math.max(MIN_RESTORE_SECONDS, Math.min(MAX_PERSISTENT_PIN_ROTATION_SECONDS, Math.round(requestedDuration || effectiveDuration(bannerIndex))));
     try {
-      await pinChatMessage(messageId, { durationSeconds: seconds });
+      await pinChatMessage(messageId, indefinite ? {} : { durationSeconds: seconds });
     } catch (err) {
       await allowReplacementAfterMissingMessage(err, bannerIndex);
       if (!allowPost) throw err;
       const ensured = await ensureBannerMessageId(bannerIndex, streamId);
       messageId = ensured.messageId;
       reposted = true;
-      await pinChatMessage(messageId, { durationSeconds: seconds });
+      await pinChatMessage(messageId, indefinite ? {} : { durationSeconds: seconds });
     }
 
     ids = configuredMessageIds();
     ids[bannerIndex] = messageId;
-    const endsAt = new Date(Date.now() + seconds * 1000);
+    const endsAt = indefinite ? null : new Date(Date.now() + seconds * 1000);
     displacedByMessageId = '';
     await persistRuntime({
       activeBannerIndex: bannerIndex,
@@ -614,7 +627,7 @@ function createPersistentPinManager({
       lastPinnedAt: new Date()
     });
     scheduleRotationTimer();
-    return { handled: true, messageId, bannerIndex, reposted, durationSeconds: seconds };
+    return { handled: true, messageId, bannerIndex, reposted, durationSeconds: seconds, indefinite };
   }
 
   async function runExclusive(task) {
@@ -720,6 +733,20 @@ function createPersistentPinManager({
     }
 
     displacedByMessageId = '';
+
+    // A single enabled banner is a true persistent pin, not a one-item
+    // rotation. Ignore all configured durations until 2+ banners are enabled.
+    if (enabledRows.length === 1) {
+      const twitchHasTimedExpiry = Boolean(current?.ends_at && Number.isFinite(Date.parse(current.ends_at)));
+      if (currentId && currentId === targetMessageId && !config.bannerEndsAt && !twitchHasTimedExpiry && source !== 'settings_update') {
+        stopRotationTimer();
+        return { handled: false, reason: 'already_pinned_indefinitely', messageId: currentId, bannerIndex: index };
+      }
+      const result = await pinBanner(index, null, { streamId });
+      console.log(`[Persistent Pin] Pinned sole active banner ${index + 1}/${banners.length} indefinitely (${source}).`);
+      return result;
+    }
+
     const endsAtMs = config.bannerEndsAt ? Date.parse(config.bannerEndsAt) : NaN;
     const slotStarted = Number.isFinite(endsAtMs);
     const remainingSeconds = slotStarted ? Math.floor((endsAtMs - Date.now()) / 1000) : null;
