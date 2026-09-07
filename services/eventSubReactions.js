@@ -68,6 +68,25 @@ function predictionWinner(event = {}) {
   return String(outcome?.title || '').trim();
 }
 
+function pollWinner(event = {}) {
+  const choices = (Array.isArray(event.choices) ? event.choices : [])
+    .map((choice) => ({
+      title: String(choice?.title || '').trim(),
+      votes: Math.max(0, Number(choice?.votes || 0))
+    }))
+    .filter((choice) => choice.title);
+  if (!choices.length) return '';
+  const maxVotes = Math.max(...choices.map((choice) => choice.votes));
+  if (maxVotes <= 0) return '';
+  return choices.filter((choice) => choice.votes === maxVotes).map((choice) => choice.title).join(' / ');
+}
+
+function eventWinner(type, event = {}) {
+  if (type === 'channel.poll.end') return pollWinner(event);
+  if (type === 'channel.prediction.end') return predictionWinner(event);
+  return '';
+}
+
 function eventTitle(type, event = {}) {
   if (type === 'channel.channel_points_custom_reward_redemption.add') return String(event.reward?.title || '').trim();
   if (type === 'channel.channel_points_automatic_reward_redemption.add') return String(event.reward?.type || '').replace(/_/g, ' ').trim();
@@ -187,7 +206,7 @@ function renderEventTemplate(template, type, event = {}) {
     choices: choices || outcomes,
     votes: sumNumeric(event.choices, 'votes'),
     points: sumNumeric(event.outcomes, 'channel_points'),
-    winner: predictionWinner(event),
+    winner: eventWinner(type, event),
     reward: String(event.reward?.title || event.reward?.type || '').replace(/_/g, ' ').trim(),
     input: String(event.user_input || event.message?.text || '').trim(),
     current: Number(event.current_amount || 0),
