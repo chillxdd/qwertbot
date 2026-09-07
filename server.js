@@ -13,9 +13,8 @@ const { initializeStore, collection } = require('./services/reliability/store');
 const { createRuntime } = require('./services/reliability/runtime');
 const { createRateGate } = require('./services/reliability/rateGate');
 const { canFallbackToIrc, deliveryError } = require('./services/reliability/twitchDelivery');
-const { configureSharedRateGate, cancelAllGeminiRequests } = require('./services/geminiClient');
+const { configureSharedRateGate, cancelAllGeminiRequests, getGeminiClientStatus, HARD_MAX_REQUESTS_PER_MINUTE } = require('./services/geminiClient');
 const { stopTemporaryPinTimer } = require('./services/twitchChat');
-const { getGeminiClientStatus } = require('./services/geminiClient');
 const { createModSessionManager } = require('./middleware/modSession');
 const { createTwitchMessageHandler } = require('./services/twitchMessageHandler');
 const { createCustomCommandManager } = require('./services/customCommands');
@@ -785,7 +784,7 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
   fatal: (err) => { console.error('[Runtime] Stopping unsafe instance:', err.message); void requestShutdown('runtime ownership failure', 1, false); }
 });
 context.configureRuntime(runtime);
-configureSharedRateGate(createRateGate({ key: process.env.GEMINI_API_KEY || 'unconfigured' }));
+configureSharedRateGate(createRateGate({ key: process.env.GEMINI_API_KEY || 'unconfigured', limit: HARD_MAX_REQUESTS_PER_MINUTE }));
 
 // Recovery actions require an authenticated operator and an explicit outcome.
 app.get('/reliability/status', requireModSession, async (req, res) => {
@@ -882,7 +881,7 @@ process.on('uncaughtException', (err) => { console.error('[Process] Uncaught exc
 
 server = app.listen(PORT, () => {
   console.log(`[Startup] Web server on ${PORT}; waiting for the Mongo-backed bot lease.`);
-  console.log(`[Startup] Gemini model: ${getGeminiClientStatus().model}; global 15-RPM pacing enabled.`);
+  console.log(`[Startup] Gemini model: ${getGeminiClientStatus().model}; global ${HARD_MAX_REQUESTS_PER_MINUTE}-RPM pacing enabled (${getGeminiClientStatus().requestSpacingMs}ms minimum request spacing).`);
   console.log('[Startup] Reliability build: durable sends, inbox, graceful shutdown, recap-control split.');
 });
 runtime.start();

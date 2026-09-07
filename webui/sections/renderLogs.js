@@ -83,12 +83,27 @@ export function initRenderLogsSection({ $, postJson }) {
     const queued = Number(gemini.queued || 0);
     const geminiState = queued >= 10 ? 'bad' : queued >= 4 ? 'warn' : 'good';
     const rpmUsed = Number(gemini.requestsStartedLastMinute || 0);
-    const rpmCap = Number(gemini.hardMaxRequestsPerMinute || 15);
+    const rpmCap = Number(gemini.hardMaxRequestsPerMinute || 12);
     setDiagnostic(
       'diagGemini',
       `${queued} queued${gemini.processing ? ' · active' : ''}`,
-      `${rpmUsed}/${rpmCap} RPM · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.model || 'Gemini'}`,
+      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · ${gemini.model || 'Gemini'}`,
       geminiState
+    );
+
+    const recentGemini = Array.isArray(gemini.recentRequests) ? gemini.recentRequests : [];
+    const requestSummary = recentGemini.length
+      ? recentGemini.map((entry) => {
+          const stamp = entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString() : '--:--:--';
+          const result = entry.outcome === 'active' ? 'ACTIVE' : entry.status || String(entry.outcome || '').toUpperCase();
+          return `${stamp} ${entry.label || 'gemini'} [${entry.priority || 'normal'}] ${result}`;
+        }).join(' · ')
+      : 'No Gemini HTTP requests started in the last 60 seconds.';
+    setDiagnostic(
+      'diagGeminiRequests',
+      recentGemini.length ? `${recentGemini.length} start${recentGemini.length === 1 ? '' : 's'}` : 'None',
+      requestSummary,
+      recentGemini.some((entry) => Number(entry.status) === 429) ? 'bad' : 'good'
     );
 
     const taggedInFlight = Number(tagged.inFlight || 0);

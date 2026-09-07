@@ -94,6 +94,23 @@ const sessionMemoryBlockSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }, { _id: false });
 
+const pendingLearningSchema = new mongoose.Schema({
+  streamId: { type: String, default: '' },
+  windowId: { type: String, default: '' },
+  dueAt: { type: Number, default: 0 },
+  generationStartedAt: { type: Number, default: 0 },
+  windowThroughAt: { type: Number, default: 0 },
+  recapSummaryBody: { type: String, default: '' },
+  streamLore: { type: String, default: '' },
+  messageSnapshot: { type: [recapMessageSchema], default: [] },
+  contextSnapshot: { type: [recapContextSchema], default: [] },
+  eventSnapshot: { type: [recapEventSchema], default: [] },
+  sessionMemoryDone: { type: Boolean, default: false },
+  viewerLearningDone: { type: Boolean, default: false },
+  streamLoreDone: { type: Boolean, default: false },
+  createdAt: { type: Number, default: 0 }
+}, { _id: false });
+
 const activeStateSchema = new mongoose.Schema({
   windowId: { type: String, default: '' },
   windowCreatedAt: { type: Number, default: 0 },
@@ -113,6 +130,7 @@ const activeStateSchema = new mongoose.Schema({
   recapPaused: { type: Boolean, default: false },
   collectionPaused: { type: Boolean, default: null },
   pausedRemainingMs: { type: Number, default: 0 },
+  pendingLearning: { type: pendingLearningSchema, default: null },
   savedAt: { type: Date, default: Date.now }
 }, { _id: false });
 

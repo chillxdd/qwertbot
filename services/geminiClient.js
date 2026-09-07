@@ -4,7 +4,7 @@ const { createQueuePolicy } = require('./reliability/queuePolicy');
 const chooseQueuedJob = createQueuePolicy();
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim() || 'gemini-3.5-flash-lite';
-const HARD_MAX_REQUESTS_PER_MINUTE = 15;
+const HARD_MAX_REQUESTS_PER_MINUTE = 12;
 const REQUEST_RATE_WINDOW_MS = 60 * 1000;
 const MIN_SAFE_REQUEST_START_SPACING_MS = Math.ceil(REQUEST_RATE_WINDOW_MS / HARD_MAX_REQUESTS_PER_MINUTE);
 const DEFAULT_REQUEST_SPACING_MS = MIN_SAFE_REQUEST_START_SPACING_MS;
@@ -13,6 +13,8 @@ const MAX_REQUEST_SPACING_MS = 30000;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_BACKGROUND_RETRIES = 1;
 const RETRYABLE_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const REQUEST_LEDGER_RETENTION_MS = 10 * 60 * 1000;
+const MAX_REQUEST_LEDGER_ENTRIES = 120;
 
 const queues = {
   high: [],
@@ -25,6 +27,8 @@ let activeJob = null;
 let lastRequestStartedAt = 0;
 let requestStartTimes = [];
 let globalBackoffUntil = 0;
+let requestLedger = [];
+let requestLedgerSequence = 0;
 let sharedRateGate = null;
 function configureSharedRateGate(gate) { sharedRateGate = gate; }
 
@@ -48,6 +52,39 @@ function pruneRequestStartTimes(now = Date.now()) {
   requestStartTimes = requestStartTimes.filter((timestamp) => timestamp > cutoff);
 }
 
+function pruneRequestLedger(now = Date.now()) {
+  const cutoff = now - REQUEST_LEDGER_RETENTION_MS;
+  requestLedger = requestLedger.filter((entry) => entry.startedAt > cutoff).slice(-MAX_REQUEST_LEDGER_ENTRIES);
+}
+
+function recordRequestStart(job, startedAt = Date.now()) {
+  pruneRequestLedger(startedAt);
+  const entry = {
+    id: ++requestLedgerSequence,
+    startedAt,
+    finishedAt: null,
+    durationMs: null,
+    label: String(job?.options?.label || 'gemini'),
+    priority: String(job?.priority || normalizePriority(job?.options?.priority)),
+    outcome: 'active',
+    status: null
+  };
+  requestLedger.push(entry);
+  if (requestLedger.length > MAX_REQUEST_LEDGER_ENTRIES) requestLedger = requestLedger.slice(-MAX_REQUEST_LEDGER_ENTRIES);
+  return entry.id;
+}
+
+function recordRequestFinish(id, err = null) {
+  const entry = requestLedger.find((item) => item.id === id);
+  if (!entry) return;
+  entry.finishedAt = Date.now();
+  entry.durationMs = Math.max(0, entry.finishedAt - entry.startedAt);
+  if (!err) { entry.outcome = 'ok'; entry.status = 200; return; }
+  const status = Number(err?.status || 0);
+  entry.status = status || null;
+  entry.outcome = err?.cancelled ? 'cancelled' : err?.timedOut ? 'timeout' : status ? `http_${status}` : 'error';
+}
+
 function getRateLimitReadyAt(now = Date.now()) {
   pruneRequestStartTimes(now);
   const spacingReadyAt = lastRequestStartedAt
@@ -62,6 +99,8 @@ function getRateLimitReadyAt(now = Date.now()) {
 function getGeminiClientStatus() {
   const now = Date.now();
   pruneRequestStartTimes(now);
+  pruneRequestLedger(now);
+  const recentCutoff = now - REQUEST_RATE_WINDOW_MS;
   return {
     model: GEMINI_MODEL,
     requestSpacingMs: getGeminiRequestSpacingMs(),
@@ -75,7 +114,10 @@ function getGeminiClientStatus() {
       normal: queues.normal.length,
       low: queues.low.length
     },
-    processing: Boolean(processing)
+    processing: Boolean(processing),
+    activeLabel: activeJob ? String(activeJob?.options?.label || 'gemini') : null,
+    activePriority: activeJob ? String(activeJob?.priority || normalizePriority(activeJob?.options?.priority)) : null,
+    recentRequests: requestLedger.filter((entry) => entry.startedAt > recentCutoff).map((entry) => ({ ...entry }))
   };
 }
 
@@ -428,7 +470,7 @@ function enqueueGeminiRequest(prompt, options = {}) {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       signals.forEach((signal) => signal.removeEventListener('abort', cancel));
     };
-    const job = { prompt, options, context, enqueuedAt: Date.now(), cancelController,
+    const job = { prompt, options, priority, context, enqueuedAt: Date.now(), cancelController,
       resolve: (value) => { cleanup(); resolve(value); },
       reject: (err) => { cleanup(); reject(err); }
     };
@@ -474,7 +516,7 @@ async function processQueue() {
       if (waitMs > 0) { await sleep(Math.min(1000, waitMs)); continue; }
 
       // Recalculate after waking so timer jitter, backoff changes, and the
-      // rolling 60-second window can never produce a burst over 15 RPM.
+      // rolling 60-second window can never produce a burst over 12 RPM.
       readyAt = getRateLimitReadyAt();
       waitMs = Math.max(0, readyAt - Date.now());
       if (waitMs > 0) {
@@ -500,13 +542,21 @@ async function processQueue() {
           if (job.options.deadlineAt && Date.now() >= job.options.deadlineAt) {
             const err = new Error('Gemini queue-start deadline expired before dispatch.'); err.queueDeadline = true; err.retryable = false; throw err;
           }
-          const startedAt = Date.now();
-          pruneRequestStartTimes(startedAt); lastRequestStartedAt = startedAt; requestStartTimes.push(startedAt);
           const totalRemaining = job.options.totalDeadlineAt ? job.options.totalDeadlineAt - Date.now() : Infinity;
           if (totalRemaining <= 0) throw operationContext.cancelledError('Gemini total retry deadline expired.');
-          return performGeminiRequest(job.prompt, { ...job.options,
-            timeoutMs: Math.min(Number(job.options.timeoutMs) || DEFAULT_TIMEOUT_MS, totalRemaining),
-            cancelSignal: job.cancelController.signal });
+          const startedAt = Date.now();
+          pruneRequestStartTimes(startedAt); lastRequestStartedAt = startedAt; requestStartTimes.push(startedAt);
+          const ledgerId = recordRequestStart(job, startedAt);
+          try {
+            const result = await performGeminiRequest(job.prompt, { ...job.options,
+              timeoutMs: Math.min(Number(job.options.timeoutMs) || DEFAULT_TIMEOUT_MS, totalRemaining),
+              cancelSignal: job.cancelController.signal });
+            recordRequestFinish(ledgerId);
+            return result;
+          } catch (err) {
+            recordRequestFinish(ledgerId, err);
+            throw err;
+          }
         }, job.context);
         job.resolve(data);
       } catch (err) {

@@ -38,6 +38,7 @@ const {
 const FIRST_RECAP_DELAY = 60 * 60 * 1000;
 const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
 const RECAP_FAILURE_RETRY_DELAY = 5 * 60 * 1000;
+const POST_RECAP_LEARNING_DELAY_MS = 75 * 1000;
 const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
@@ -165,7 +166,9 @@ function createRecapManager({
   let recapPaused = false;
   let collectionPaused = false;
   let pausedRemainingMs = 0;
+  let pendingLearning = null;
   let recapTimer = null;
+  let learningTimer = null;
   let streamPollTimer = null;
   let tokenValidationTimer = null;
   let activeStateCheckpointTimer = null;
@@ -446,6 +449,50 @@ function createRecapManager({
   }
 
 
+  function normalizePendingLearning(value) {
+    if (!value || typeof value !== 'object') return null;
+    const streamId = String(value.streamId || '').trim();
+    const learningWindowId = String(value.windowId || '').trim();
+    if (!streamId || !learningWindowId) return null;
+    return {
+      streamId,
+      windowId: learningWindowId,
+      dueAt: Math.max(0, Number(value.dueAt || 0)),
+      generationStartedAt: Math.max(0, Number(value.generationStartedAt || 0)),
+      windowThroughAt: Math.max(0, Number(value.windowThroughAt || 0)),
+      recapSummaryBody: String(value.recapSummaryBody || ''),
+      streamLore: String(value.streamLore || ''),
+      messageSnapshot: normalizeChatRecords(value.messageSnapshot || []).map((item) => toStoredChatRecord(item)),
+      contextSnapshot: Array.isArray(value.contextSnapshot) ? value.contextSnapshot : [],
+      eventSnapshot: normalizeEventRecords(value.eventSnapshot || []).map((item) => toStoredEventRecord(item)),
+      sessionMemoryDone: value.sessionMemoryDone === true,
+      viewerLearningDone: value.viewerLearningDone === true,
+      streamLoreDone: value.streamLoreDone === true,
+      createdAt: Math.max(0, Number(value.createdAt || 0)) || Date.now()
+    };
+  }
+
+  function createPendingLearningSnapshot({ streamId, learningWindowId, generationStartedAt,
+    windowThroughAt, recapSummaryBody, streamLore, messageSnapshot, contextSnapshot, eventSnapshot }) {
+    return normalizePendingLearning({
+      streamId,
+      windowId: learningWindowId,
+      dueAt: 0,
+      generationStartedAt,
+      windowThroughAt,
+      recapSummaryBody,
+      streamLore,
+      messageSnapshot,
+      contextSnapshot,
+      eventSnapshot,
+      sessionMemoryDone: false,
+      viewerLearningDone: false,
+      streamLoreDone: false,
+      createdAt: Date.now()
+    });
+  }
+
+
   function buildActiveState() {
     return {
       windowId, windowCreatedAt, capacityReached, recoveryReason, recoveryDeliveryKey,
@@ -461,7 +508,8 @@ function createRecapManager({
       nextRecapAt,
       recapPaused,
       collectionPaused,
-      pausedRemainingMs
+      pausedRemainingMs,
+      pendingLearning
     };
   }
 
@@ -545,6 +593,16 @@ function createRecapManager({
     await saveStreamRecap({ streamId: payload.streamId, channelName,
       startedAt: payload.startedAt, text: payload.summary, windowId: payload.windowId });
     if (payload.streamId !== currentStreamId) return;
+    if (pendingLearning?.streamId === payload.streamId && pendingLearning?.windowId === payload.windowId) {
+      if (collectionPaused) {
+        // Stop Recap System intentionally cancels post-recap learning even if a
+        // Twitch send was accepted while the stop transition was in flight.
+        pendingLearning = null;
+      } else if (!pendingLearning.dueAt) {
+        pendingLearning.dueAt = Date.now() + POST_RECAP_LEARNING_DELAY_MS;
+        console.log(`[Recap] Post-recap learning queued for ${Math.round(POST_RECAP_LEARNING_DELAY_MS / 1000)}s after delivery.`);
+      }
+    }
     discardMessageSnapshot(payload.snapshotMaxId);
     discardContextSnapshot(payload.snapshotMaxContextId);
     discardEventSnapshot(payload.snapshotMaxEventId);
@@ -559,6 +617,7 @@ function createRecapManager({
     markActiveStateDirty();
     await persistActiveState({ force: true });
     if (!recapPaused) scheduleRecapAt(nextRecapAt);
+    schedulePendingLearning();
   }
 
   async function recoverWindowDelivery() {
@@ -625,6 +684,7 @@ function createRecapManager({
         ? Boolean(saved.recapPaused)
         : Boolean(saved.collectionPaused);
       pausedRemainingMs = Math.max(0, Number(saved.pausedRemainingMs || 0));
+      pendingLearning = normalizePendingLearning(saved.pendingLearning);
       streamSessionStartedAt = Number(saved.streamSessionStartedAt || 0) || Date.now();
       twitchStreamStartedAt = Number(saved.twitchStreamStartedAt || 0) || twitchStreamStartedAt || Date.now();
       nextRecapAt = Number(saved.nextRecapAt || 0);
@@ -632,6 +692,7 @@ function createRecapManager({
       activeStateDirty = false;
       rebuildWindowIndex();
       await recoverWindowDelivery();
+      schedulePendingLearning();
       if (!streamContexts.length) {
         addStreamContext({ title: currentStreamTitle, category: currentStreamCategory, gameId: currentStreamGameId });
       }
@@ -673,6 +734,8 @@ function createRecapManager({
   async function startStreamSession(status, alreadyLiveAtStartup = false) {
     cancelTasks();
     clearRecapTimer();
+    clearLearningTimer();
+    pendingLearning = null;
     windowId = randomUUID(); windowCreatedAt = Date.now(); windowBytes = 0;
     capacityReached = false; recoveryReason = ''; recoveryDeliveryKey = '';
     chatIds.clear(); eventIds.clear();
@@ -757,6 +820,7 @@ function createRecapManager({
     currentStreamId = ''; currentStreamTitle = ''; currentStreamCategory = ''; currentStreamGameId = '';
     currentViewerCount = 0; recapMessages = []; streamContexts = []; twitchEvents = [];
     messageSequence = 0; contextSequence = 0; eventSequence = 0;
+    pendingLearning = null; clearLearningTimer();
     firstRecapSent = false; recapInProgress = false; recapPaused = false; collectionPaused = false;
     pausedRemainingMs = 0; streamSessionStartedAt = 0; twitchStreamStartedAt = 0; nextRecapAt = 0;
     activeStateDirty = false; chatIds.clear(); eventIds.clear(); windowBytes = 0;
@@ -769,7 +833,7 @@ function createRecapManager({
     const endedStreamId = currentStreamId || lastKnownPersistedStreamId;
     lastStreamEndedAt = resolvedEndedAt; lastStreamLifecycleEventType = 'offline';
     lastStreamLifecycleEventAt = resolvedEndedAt; lastEndedStreamId = endedStreamId;
-    cancelTasks(); recapGenerationEpoch += 1; clearRecapTimer();
+    cancelTasks(); recapGenerationEpoch += 1; clearRecapTimer(); clearLearningTimer(); pendingLearning = null;
     streamLive = false; recapInProgress = false; nextRecapAt = 0;
     pendingEnd ||= { streamId: endedStreamId, endedAt: resolvedEndedAt };
     try { await finishPendingEnd(); }
@@ -942,6 +1006,8 @@ function createRecapManager({
     const cancelResult = cancelRecapGeminiWork({ includeLearning: true });
 
     clearRecapTimer();
+    clearLearningTimer();
+    pendingLearning = null;
     recapInProgress = false;
     recapPaused = true;
     collectionPaused = true;
@@ -973,6 +1039,16 @@ function createRecapManager({
     const clearedMessages = recapMessages.length;
     const clearedEvents = twitchEvents.length;
     const wasGenerating = recapInProgress;
+    const clearedWindowId = windowId;
+
+    // A pending snapshot with no dueAt belongs to a recap that has not been
+    // confirmed delivered yet. Clearing that source window must clear its
+    // learning handoff too; already-delivered delayed learning has a dueAt and
+    // is intentionally independent of the new current window.
+    if (pendingLearning?.windowId === clearedWindowId && !pendingLearning.dueAt) {
+      pendingLearning = null;
+      clearLearningTimer();
+    }
 
     // A cleared window must never still be sent by an older generation.
     // Cancelling only hourly-recap work leaves already-sent post-processing
@@ -1272,6 +1348,196 @@ function createRecapManager({
     return task;
   }
   function taskCurrent(task) { return !managerStopping && streamLive && currentStreamId === task.streamId && !task.controller.signal.aborted; }
+
+  function clearLearningTimer() {
+    if (learningTimer) {
+      clearTimeout(learningTimer);
+      learningTimer = null;
+    }
+  }
+
+  function schedulePendingLearning() {
+    clearLearningTimer();
+    const job = pendingLearning;
+    if (!job || !job.dueAt || managerStopping || !streamLive || collectionPaused || currentStreamId !== job.streamId) return;
+    const expectedWindowId = job.windowId;
+    const delay = Math.max(0, Number(job.dueAt) - Date.now());
+    learningTimer = operationContext.detached(() => setTimeout(() => {
+      learningTimer = null;
+      if (!pendingLearning || pendingLearning.windowId !== expectedWindowId) return;
+      launchPendingLearning().catch((err) => console.error('[Recap] Delayed post-recap learning scheduler failed:', err?.message || err));
+    }, delay));
+  }
+
+  async function checkpointLearningStage(job, field) {
+    if (!pendingLearning || pendingLearning.windowId !== job.windowId || pendingLearning.streamId !== job.streamId) return false;
+    pendingLearning[field] = true;
+    markActiveStateDirty();
+    await persistActiveState({ force: true });
+    return true;
+  }
+
+  async function performPendingLearning(job, task) {
+    operationContext.throwIfCancelled();
+    if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+
+    await serializeLearning(async () => {
+      operationContext.throwIfCancelled();
+      if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+
+      const chatRecords = normalizeChatRecords(job.messageSnapshot || []);
+      const sessionMemoryChatRecords = chatRecords.filter((item) => item.kind !== 'bot_context');
+      const permanentLearningChatRecords = sessionMemoryChatRecords.filter((item) => !isSharedChatGuest(item));
+      const sharedChatGuestCount = sessionMemoryChatRecords.length - permanentLearningChatRecords.length;
+      const memoryChatRecords = sanitizeChatForGemini(sessionMemoryChatRecords).records;
+      const permanentLearningRecords = sanitizeChatForGemini(permanentLearningChatRecords).records;
+      const contextSnapshot = Array.isArray(job.contextSnapshot) ? job.contextSnapshot : [];
+      const eventSnapshot = normalizeEventRecords(job.eventSnapshot || []);
+      const generatedAtMs = Number(job.windowThroughAt || job.createdAt || Date.now());
+      const sourceTimes = [
+        ...(job.messageSnapshot || []).map((item) => Number(item?.timestamp || 0)),
+        ...contextSnapshot.map((item) => Number(item?.timestamp || 0)),
+        ...eventSnapshot.map((item) => Number(item?.timestamp || 0))
+      ].filter((value) => value > 0);
+      const windowStartedAtMs = sourceTimes.length
+        ? Math.min(...sourceTimes)
+        : Math.max(Number(job.generationStartedAt || 0), generatedAtMs - RECURRING_RECAP_DELAY);
+
+      if (sharedChatGuestCount > 0) {
+        console.log(`[Shared Chat] Kept ${sharedChatGuestCount} guest-origin message(s) in delayed session context and excluded them from permanent Viewer Profile and Stream Lore learning.`);
+      }
+
+      if (!job.sessionMemoryDone) {
+        const sessionMemoryConfig = readSessionMemoryConfig();
+        if (sessionMemoryConfig.enabled) {
+          try {
+            const memoryBlock = await generateSessionMemoryBlock({
+              chatLogs: memoryChatRecords,
+              streamContexts: contextSnapshot,
+              twitchEvents: eventSnapshot,
+              streamLore: String(job.streamLore || ''),
+              publicRecap: String(job.recapSummaryBody || ''),
+              streamTiming: { windowStartedAtMs, generatedAtMs },
+              config: sessionMemoryConfig,
+              channelName
+            });
+            if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+            if (memoryBlock) {
+              await saveSessionMemoryBlock({
+                streamId: job.streamId,
+                channelName,
+                startedAt: job.generationStartedAt || null,
+                block: memoryBlock,
+                windowId: job.windowId
+              });
+              console.log(`[Session Memory] Stored delayed hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
+            }
+          } catch (memoryErr) {
+            if (memoryErr?.cancelled || !taskCurrent(task)) throw memoryErr;
+            console.error('[Session Memory] Delayed hourly memory generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
+          }
+        }
+        if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+        await checkpointLearningStage(job, 'sessionMemoryDone');
+      }
+
+      if (!job.viewerLearningDone) {
+        let viewerProfileSettings = { automaticLearningEnabled: false };
+        try {
+          viewerProfileSettings = await getViewerProfileSettings(channelName);
+        } catch (settingsErr) {
+          console.error('[Viewer Profiles] Could not load viewer-profile settings for delayed hourly learning:', settingsErr?.message || settingsErr);
+        }
+        if (viewerProfileSettings.automaticLearningEnabled) {
+          try {
+            const existingProfiles = await getViewerLearningContext(channelName, permanentLearningRecords);
+            const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: permanentLearningRecords, existingProfiles });
+            if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+            if (viewerUpdates.length) {
+              const profileResult = await applyViewerProfileUpdates({
+                channelName,
+                chatLogs: permanentLearningRecords,
+                updates: viewerUpdates
+              });
+              console.log(`[Viewer Profiles] Delayed hourly learning processed ${viewerUpdates.length} viewer update(s): ${profileResult.created} new pending, ${profileResult.reinforced} reinforced, ${profileResult.refined} pending auto-refined, ${profileResult.revisionsProposed} approved revision proposal(s), ${profileResult.contradictions} contradiction update(s), ${profileResult.skipped} skipped.`);
+            } else {
+              console.log('[Viewer Profiles] Delayed hourly learning found no durable viewer observations or updates.');
+            }
+          } catch (viewerErr) {
+            if (viewerErr?.cancelled || !taskCurrent(task)) throw viewerErr;
+            console.error('[Viewer Profiles] Delayed hourly learning failed. Session memory and public recap remain successful:', viewerErr?.message || viewerErr);
+          }
+        }
+        if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+        await checkpointLearningStage(job, 'viewerLearningDone');
+      }
+
+      if (!job.streamLoreDone) {
+        let currentLoreRecord = null;
+        try {
+          currentLoreRecord = await getStreamLore(channelName);
+        } catch (loreLoadErr) {
+          console.error('[Stream Lore] Could not reload lore before delayed hourly learning; continuing with no existing observation context:', loreLoadErr?.message || loreLoadErr);
+        }
+        try {
+          const loreObservations = await generateStreamLoreObservations({
+            chatLogs: permanentLearningRecords,
+            existingObservations: currentLoreRecord?.learnedObservations || []
+          });
+          if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+          if (loreObservations.length) {
+            const loreResult = await applyStreamLoreObservations(channelName, loreObservations);
+            console.log(`[Stream Lore] Delayed hourly learning processed ${loreObservations.length} candidate(s): ${loreResult.created} new pending, ${loreResult.reinforced} reinforced, ${loreResult.refined} pending auto-refined, ${loreResult.revisionsProposed} approved revision proposal(s), ${loreResult.contradictions} contradiction update(s), ${loreResult.skipped} skipped.`);
+          } else {
+            console.log('[Stream Lore] Delayed hourly learning found no durable channel-lore candidates or updates.');
+          }
+        } catch (loreErr) {
+          if (loreErr?.cancelled || !taskCurrent(task)) throw loreErr;
+          console.error('[Stream Lore] Delayed hourly learning failed. Session memory and public recap remain successful:', loreErr?.message || loreErr);
+        }
+        if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+        await checkpointLearningStage(job, 'streamLoreDone');
+      }
+    });
+  }
+
+  async function launchPendingLearning() {
+    const job = pendingLearning;
+    if (!job || !job.dueAt || managerStopping || !streamLive || collectionPaused || currentStreamId !== job.streamId) return;
+    if (Number(job.dueAt) > Date.now()) { schedulePendingLearning(); return; }
+    if ([...tasks].some((task) => task.phase === 'learning' && task.learningWindowId === job.windowId)) return;
+
+    const task = createTask('learning');
+    task.learningWindowId = job.windowId;
+    console.log(`[Recap] Starting delayed post-recap learning for window ${job.windowId} after ${Math.round(POST_RECAP_LEARNING_DELAY_MS / 1000)}s quiet period.`);
+    task.promise = operationContext.runOperation(() => performPendingLearning(job, task), {
+      signal: task.controller.signal,
+      isCurrent: () => taskCurrent(task) && !collectionPaused && pendingLearning?.windowId === job.windowId
+    });
+
+    try {
+      await task.promise;
+      if (!taskCurrent(task) || collectionPaused || pendingLearning?.windowId !== job.windowId) return;
+      if (job.sessionMemoryDone && job.viewerLearningDone && job.streamLoreDone) {
+        pendingLearning = null;
+        markActiveStateDirty();
+        await persistActiveState({ force: true });
+        console.log('[Recap] Delayed post-recap memory/profile/lore processing complete.');
+      }
+    } catch (err) {
+      if (err?.cancelled || managerStopping || !streamLive || collectionPaused || pendingLearning?.windowId !== job.windowId) {
+        console.log('[Recap] Delayed post-recap learning paused/cancelled; durable checkpoint preserved.');
+        return;
+      }
+      console.error('[Recap] Delayed post-recap learning encountered an unexpected failure; retrying in 60 seconds:', err?.message || err);
+      pendingLearning.dueAt = Date.now() + 60000;
+      markActiveStateDirty();
+      try { await persistActiveState({ force: true }); } catch (_) {}
+    } finally {
+      tasks.delete(task);
+      if (!managerStopping && streamLive && !collectionPaused && pendingLearning?.windowId === job.windowId) schedulePendingLearning();
+    }
+  }
   async function runPreview(fn) {
     if (managerStopping || (recapPaused && collectionPaused)) throw new Error('Recap system is stopped. Select Pause Generation to enable preview testing without automatic sends.');
     if ([...tasks].some((task) => task.phase === 'preview')) throw new Error('A recap preview is already running.');
@@ -1416,7 +1682,27 @@ function createRecapManager({
         return;
       }
 
-      // Persist the window identity before attempting any external delivery.
+      // Persist an immutable learning snapshot BEFORE the external send. If
+      // Twitch accepts the recap and Render dies before commitSentWindow(), the
+      // sent-receipt recovery path can still delay/resume the matching learning
+      // work without retaining the already-completed recap window forever.
+      if (!pendingLearning || pendingLearning.windowId === generationWindowId) {
+        pendingLearning = createPendingLearningSnapshot({
+          streamId: generationStreamId,
+          learningWindowId: generationWindowId,
+          generationStartedAt,
+          windowThroughAt,
+          recapSummaryBody,
+          streamLore,
+          messageSnapshot,
+          contextSnapshot,
+          eventSnapshot
+        });
+      } else {
+        console.warn(`[Recap] A prior delayed-learning checkpoint (${pendingLearning.windowId}) is still pending; this recap will send normally but will not overwrite that durable learning snapshot.`);
+      }
+
+      // Persist the window identity and learning handoff before attempting any external delivery.
       await persistActiveState({ force: true });
       const delivered = await delivery.deliver({
         key: `recap:${channelName}:${generationStreamId}:${generationWindowId}`, kind: 'recap',
@@ -1428,123 +1714,10 @@ function createRecapManager({
       recapSent = true;
       console.log(`[Recap] ${delivered.replayed ? 'Recovered already-sent recap' : 'Sent recap'} (${twitchMessage.length}/500).`);
       await commitSentWindow(delivered.payload);
-      if (!taskCurrent(task) || collectionPaused || delivered.replayed) return;
-      task.phase = 'learning';
-
-      await serializeLearning(async () => {
-      operationContext.throwIfCancelled();
-      if (currentStreamId) {
-        const sessionMemoryConfig = readSessionMemoryConfig();
-        let viewerProfileSettings = { automaticLearningEnabled: false };
-        try {
-          viewerProfileSettings = await getViewerProfileSettings(channelName);
-        } catch (settingsErr) {
-          console.error('[Viewer Profiles] Could not load viewer-profile settings for hourly learning:', settingsErr?.message || settingsErr);
-        }
-        if (sessionMemoryConfig.enabled || viewerProfileSettings.automaticLearningEnabled || currentStreamId) {
-          const generatedAtMs = Date.now();
-          const sourceTimes = [
-            ...messageSnapshot.map((item) => Number(item?.timestamp || 0)),
-            ...contextSnapshot.map((item) => Number(item?.timestamp || 0)),
-            ...eventSnapshot.map((item) => Number(item?.timestamp || 0))
-          ].filter((value) => value > 0);
-          const windowStartedAtMs = sourceTimes.length ? Math.min(...sourceTimes) : Math.max(streamSessionStartedAt || 0, generatedAtMs - RECURRING_RECAP_DELAY);
-          // Bot answers can help the public recap understand surrounding viewer conversation,
-          // but they must not become self-learning evidence. Shared Chat guest messages remain
-          // useful TEMPORARY same-stream context, while permanent Qwert Viewer Profiles and
-          // Stream Lore only learn from messages originating in Qwert's own room.
-          const memoryChatRecords = sanitizeChatForGemini(sessionMemoryChatRecords).records;
-          const permanentLearningRecords = sanitizeChatForGemini(permanentLearningChatRecords).records;
-          if (sharedChatGuestCount > 0) {
-            console.log(`[Shared Chat] Kept ${sharedChatGuestCount} guest-origin message(s) in recap/session context and excluded them from permanent Viewer Profile and Stream Lore learning.`);
-          }
-
-          if (sessionMemoryConfig.enabled) {
-            try {
-              const memoryBlock = await generateSessionMemoryBlock({
-                chatLogs: memoryChatRecords,
-                streamContexts: contextSnapshot,
-                twitchEvents: eventSnapshot,
-                streamLore,
-                publicRecap: recapSummaryBody,
-                streamTiming: { windowStartedAtMs, generatedAtMs },
-                config: sessionMemoryConfig,
-                channelName
-              });
-              if (!taskCurrent(task) || collectionPaused) {
-                console.log('[Recap] Session-memory write skipped because the recap system was stopped.');
-                return;
-              }
-              if (memoryBlock) {
-                await saveSessionMemoryBlock({
-                  streamId: generationStreamId,
-                  channelName,
-                  startedAt: generationStartedAt || null,
-                  block: memoryBlock, windowId: generationWindowId
-                });
-                console.log(`[Session Memory] Stored hourly memory block (${memoryBlock.detailedSummary.length} detailed chars, ${memoryBlock.compactSummary.length} compact chars).`);
-              }
-            } catch (memoryErr) {
-              console.error('[Session Memory] Hourly memory generation/storage failed. Public recap remains successful:', memoryErr?.message || memoryErr);
-            }
-          }
-
-          if (!taskCurrent(task) || collectionPaused) {
-            console.log('[Recap] Remaining post-recap learning stopped by moderator.');
-            return;
-          }
-
-          if (viewerProfileSettings.automaticLearningEnabled) {
-            try {
-              const existingProfiles = await getViewerLearningContext(channelName, permanentLearningRecords);
-              const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: permanentLearningRecords, existingProfiles });
-              if (!taskCurrent(task) || collectionPaused) {
-                console.log('[Recap] Viewer-profile write skipped because the recap system was stopped.');
-                return;
-              }
-              if (viewerUpdates.length) {
-                const profileResult = await applyViewerProfileUpdates({
-                  channelName,
-                  chatLogs: permanentLearningRecords,
-                  updates: viewerUpdates
-                });
-                console.log(`[Viewer Profiles] Dedicated hourly learning processed ${viewerUpdates.length} viewer update(s): ${profileResult.created} new pending, ${profileResult.reinforced} reinforced, ${profileResult.refined} pending auto-refined, ${profileResult.revisionsProposed} approved revision proposal(s), ${profileResult.contradictions} contradiction update(s), ${profileResult.skipped} skipped.`);
-              } else {
-                console.log('[Viewer Profiles] Dedicated hourly learning found no durable viewer observations or updates.');
-              }
-            } catch (viewerErr) {
-              console.error('[Viewer Profiles] Dedicated hourly learning failed. Session memory and public recap remain successful:', viewerErr?.message || viewerErr);
-            }
-          }
-
-          if (!taskCurrent(task) || collectionPaused) {
-            console.log('[Recap] Remaining post-recap learning stopped by moderator.');
-            return;
-          }
-
-          try {
-            const loreObservations = await generateStreamLoreObservations({
-              chatLogs: permanentLearningRecords,
-              existingObservations: streamLoreRecord?.learnedObservations || []
-            });
-            if (!taskCurrent(task) || collectionPaused) {
-              console.log('[Recap] Stream-lore write skipped because the recap system was stopped.');
-              return;
-            }
-            if (loreObservations.length) {
-              const loreResult = await applyStreamLoreObservations(channelName, loreObservations);
-              console.log(`[Stream Lore] Dedicated hourly learning processed ${loreObservations.length} candidate(s): ${loreResult.created} new pending, ${loreResult.reinforced} reinforced, ${loreResult.refined} pending auto-refined, ${loreResult.revisionsProposed} approved revision proposal(s), ${loreResult.contradictions} contradiction update(s), ${loreResult.skipped} skipped.`);
-            } else {
-              console.log('[Stream Lore] Dedicated hourly learning found no durable channel-lore candidates or updates.');
-            }
-          } catch (loreErr) {
-            console.error('[Stream Lore] Dedicated hourly learning failed. Session memory and public recap remain successful:', loreErr?.message || loreErr);
-          }
-        }
-      }
-
-      });
-      console.log('[Recap] Post-recap memory/profile/lore processing complete.');
+      // Public recap delivery is now complete. The persisted learning snapshot
+      // is scheduled separately so low-priority session/profile/lore work begins
+      // only after the rolling-RPM quiet period and survives a restart.
+      return;
     } catch (err) {
       if (err?.reviewRequired && currentStreamId === generationStreamId && windowId === generationWindowId) {
         enterRecovery(err.message, err.deliveryKey);
@@ -1642,6 +1815,9 @@ function createRecapManager({
       recoveryRequired: Boolean(recoveryReason || recoveryDeliveryKey || pendingEnd),
       windowBytes, windowId, windowCreatedAt, startupGraceUntil: !recapPaused && startupGraceUntil > Date.now() ? startupGraceUntil : null,
       learningInProgress: [...tasks].some((task) => task.phase === 'learning'),
+      learningPending: Boolean(pendingLearning),
+      learningDueAt: Number(pendingLearning?.dueAt || 0) || null,
+      learningWindowId: pendingLearning?.windowId || null,
       previewInProgress: [...tasks].some((task) => task.phase === 'preview'),
       streamLive,
       currentStreamId: currentStreamId || null,
@@ -1765,6 +1941,7 @@ function createRecapManager({
   function quiesce() {
     managerStopping = true; lifecycleRevision += 1;
     clearRecapTimer();
+    clearLearningTimer();
     clearInterval(streamPollTimer); clearInterval(tokenValidationTimer); clearInterval(activeStateCheckpointTimer);
     streamPollTimer = null; tokenValidationTimer = null; activeStateCheckpointTimer = null;
     cancelTasks();
