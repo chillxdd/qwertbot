@@ -10,12 +10,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
   const maxPersistentPinRotationSeconds = Number(config.maxPersistentPinRotationSeconds || 1800);
   const defaultPersistentPinHoldSeconds = Number(config.defaultPersistentPinHoldSeconds ?? 10);
   const maxPersistentPinHoldSeconds = Number(config.maxPersistentPinHoldSeconds || 3600);
-  let persistentPin = { enabled: false, message: '', messages: [], rotationSeconds: defaultPersistentPinRotationSeconds, startupHoldSeconds: defaultPersistentPinHoldSeconds };
+  let persistentPin = { enabled: false, message: '', messages: [], banners: [], rotationSeconds: defaultPersistentPinRotationSeconds, startupHoldSeconds: defaultPersistentPinHoldSeconds };
   let editingId = null;
   let page = 1;
   let loaded = false;
   const editor = $('eventReactionEditor');
   const persistentPinEditor = $('persistentPinEditor');
+  const persistentPinBannerList = $('persistentPinBannerList');
   const variablesDialog = $('eventReactionVariablesDialog');
   const actionsEl = $('eventReactionActions');
   const PAGE_SIZE_STORAGE_KEY = 'qwertbot.eventSubReactions.pageSize';
@@ -51,24 +52,115 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     el.classList.toggle('bad', bad);
   }
 
-  function persistentPinMessages() {
-    if (Array.isArray(persistentPin.messages) && persistentPin.messages.length) return persistentPin.messages.map((value) => String(value || '').trim()).filter(Boolean);
-    const legacy = String(persistentPin.message || '').trim();
-    return legacy ? [legacy] : [];
+  function persistentPinBanners() {
+    if (Array.isArray(persistentPin.banners) && persistentPin.banners.length) {
+      return persistentPin.banners.map((banner) => ({
+        message: String(banner?.message || '').trim(),
+        enabled: banner?.enabled !== false,
+        durationSeconds: Number(banner?.durationSeconds) > 0 ? Number(banner.durationSeconds) : null
+      })).filter((banner) => banner.message);
+    }
+    const messages = Array.isArray(persistentPin.messages) && persistentPin.messages.length
+      ? persistentPin.messages
+      : (String(persistentPin.message || '').trim() ? [persistentPin.message] : []);
+    const enabled = Array.isArray(persistentPin.bannerEnabled) ? persistentPin.bannerEnabled : [];
+    const durations = Array.isArray(persistentPin.bannerDurations) ? persistentPin.bannerDurations : [];
+    return messages.map((message, index) => ({
+      message: String(message || '').trim(),
+      enabled: enabled[index] !== false,
+      durationSeconds: Number(durations[index]) > 0 ? Number(durations[index]) : null
+    })).filter((banner) => banner.message);
   }
 
-  function parsePersistentPinMessages(value) {
-    return String(value || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  function currentGlobalBannerDuration() {
+    const value = Number($('persistentPinRotation').value);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : defaultPersistentPinRotationSeconds;
+  }
+
+  function updatePersistentBannerRow(row, index) {
+    if (!row) return;
+    const enabledInput = row.querySelector('.persistent-banner-enabled');
+    const durationInput = row.querySelector('.persistent-banner-duration');
+    const title = row.querySelector('.persistent-banner-row-title');
+    const help = row.querySelector('.persistent-banner-duration-help');
+    const globalSeconds = currentGlobalBannerDuration();
+    const rawDuration = String(durationInput?.value || '').trim();
+    const duration = rawDuration ? Number(rawDuration) : 0;
+    title.textContent = `Banner ${index + 1}`;
+    row.classList.toggle('disabled', enabledInput?.checked === false);
+    if (durationInput) durationInput.placeholder = `Global (${globalSeconds}s)`;
+    if (help) {
+      if (Number.isFinite(duration) && duration > globalSeconds) help.textContent = `Extended: ${Math.round(duration)}s`;
+      else help.textContent = `Uses global ${globalSeconds}s`;
+    }
+  }
+
+  function updatePersistentBannerListState() {
+    const rows = [...persistentPinBannerList.querySelectorAll('.persistent-banner-row')];
+    rows.forEach((row, index) => updatePersistentBannerRow(row, index));
+    const active = rows.filter((row) => row.querySelector('.persistent-banner-enabled')?.checked !== false).length;
+    $('persistentPinBannerCount').textContent = `${active}/${rows.length} enabled · max ${maxPersistentPinMessages}`;
+    $('addPersistentPinBannerBtn').disabled = rows.length >= maxPersistentPinMessages;
+  }
+
+  function createPersistentBannerRow(banner = { message: '', enabled: true, durationSeconds: null }) {
+    const row = document.createElement('div');
+    row.className = 'persistent-banner-row';
+    row.innerHTML = `
+      <div class="persistent-banner-row-header">
+        <strong class="persistent-banner-row-title">Banner</strong>
+        <label class="inline-check"><input class="persistent-banner-enabled" type="checkbox"> Enabled</label>
+      </div>
+      <textarea class="persistent-banner-message" maxlength="${maxPersistentPinMessageLength}" placeholder="Pinned banner message..."></textarea>
+      <div class="persistent-banner-row-footer">
+        <label class="persistent-banner-duration-label">Banner Duration <span class="detail">(optional)</span>
+          <div class="duration-field"><input class="persistent-banner-duration" type="number" min="0" max="${maxPersistentPinRotationSeconds}" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
+        </label>
+        <span class="detail persistent-banner-duration-help"></span>
+        <button class="secondary persistent-banner-remove" type="button">Remove</button>
+      </div>`;
+
+    const messageInput = row.querySelector('.persistent-banner-message');
+    const enabledInput = row.querySelector('.persistent-banner-enabled');
+    const durationInput = row.querySelector('.persistent-banner-duration');
+    messageInput.value = String(banner?.message || '');
+    enabledInput.checked = banner?.enabled !== false;
+    durationInput.value = Number(banner?.durationSeconds) > 0 ? String(Math.round(Number(banner.durationSeconds))) : '';
+    enabledInput.addEventListener('change', updatePersistentBannerListState);
+    durationInput.addEventListener('input', updatePersistentBannerListState);
+    row.querySelector('.persistent-banner-remove').onclick = () => {
+      row.remove();
+      if (!persistentPinBannerList.children.length) addPersistentBanner({ message: '', enabled: true, durationSeconds: null });
+      updatePersistentBannerListState();
+    };
+    return row;
+  }
+
+  function addPersistentBanner(banner = { message: '', enabled: true, durationSeconds: null }) {
+    if (persistentPinBannerList.children.length >= maxPersistentPinMessages) return;
+    persistentPinBannerList.appendChild(createPersistentBannerRow(banner));
+    updatePersistentBannerListState();
+  }
+
+  function collectPersistentPinBanners() {
+    return [...persistentPinBannerList.querySelectorAll('.persistent-banner-row')].map((row) => ({
+      message: row.querySelector('.persistent-banner-message').value.trim(),
+      enabled: row.querySelector('.persistent-banner-enabled').checked,
+      durationSeconds: row.querySelector('.persistent-banner-duration').value.trim()
+    }));
   }
 
   function applyPersistentPinToUi() {
     $('persistentPinEnabled').checked = persistentPin.enabled === true;
-    $('persistentPinMessageInput').value = persistentPinMessages().join('\n');
     $('persistentPinRotation').value = String(Number(persistentPin.rotationSeconds ?? defaultPersistentPinRotationSeconds));
     $('persistentPinRotation').min = String(minPersistentPinRotationSeconds);
     $('persistentPinRotation').max = String(maxPersistentPinRotationSeconds);
     $('persistentPinStartupHold').value = String(Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds));
     $('persistentPinStartupHold').max = String(maxPersistentPinHoldSeconds);
+    persistentPinBannerList.replaceChildren();
+    const banners = persistentPinBanners();
+    (banners.length ? banners : [{ message: '', enabled: true, durationSeconds: null }]).forEach(addPersistentBanner);
+    updatePersistentBannerListState();
   }
 
   function openPersistentPinEditor() {
@@ -77,7 +169,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     persistentPinEditor.classList.add('open');
     if (typeof persistentPinEditor.showModal === 'function' && !persistentPinEditor.open) persistentPinEditor.showModal();
     else persistentPinEditor.setAttribute('open', '');
-    $('persistentPinMessageInput').focus();
+    persistentPinBannerList.querySelector('.persistent-banner-message')?.focus();
   }
 
   function closePersistentPinEditor() {
@@ -89,27 +181,20 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
 
   async function savePersistentPinConfig(overrides = {}, { closeAfter = false } = {}) {
     const enabled = overrides.enabled ?? $('persistentPinEnabled').checked;
-    const messages = overrides.messages ?? parsePersistentPinMessages($('persistentPinMessageInput').value);
     const rotationSeconds = overrides.rotationSeconds ?? Number($('persistentPinRotation').value);
     const startupHoldSeconds = overrides.startupHoldSeconds ?? Number($('persistentPinStartupHold').value);
-    if (messages.length > maxPersistentPinMessages) {
-      const error = `Persistent Stream Pin supports at most ${maxPersistentPinMessages} banner messages.`;
-      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
-      return false;
-    }
-    const tooLong = messages.findIndex((message) => Array.from(message).length > maxPersistentPinMessageLength);
-    if (tooLong !== -1) {
-      const error = `Banner ${tooLong + 1} exceeds ${maxPersistentPinMessageLength} characters.`;
-      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
-      return false;
-    }
-    if (enabled && !messages.length) {
-      const error = 'Enter at least one banner message before enabling Persistent Stream Pin.';
+    const candidateBanners = overrides.banners ?? collectPersistentPinBanners();
+    const rawBanners = enabled
+      ? candidateBanners
+      : candidateBanners.filter((banner) => String(banner?.message || '').trim());
+
+    if (rawBanners.length > maxPersistentPinMessages) {
+      const error = `Rotating Pinned Banners supports at most ${maxPersistentPinMessages} banners.`;
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     }
     if (!Number.isInteger(Number(rotationSeconds)) || Number(rotationSeconds) < minPersistentPinRotationSeconds || Number(rotationSeconds) > maxPersistentPinRotationSeconds) {
-      const error = `Banner Duration must be a whole number between ${minPersistentPinRotationSeconds} and ${maxPersistentPinRotationSeconds} seconds.`;
+      const error = `Global Banner Duration must be a whole number between ${minPersistentPinRotationSeconds} and ${maxPersistentPinRotationSeconds} seconds.`;
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     }
@@ -118,19 +203,62 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     }
+
+    const globalSeconds = Number(rotationSeconds);
+    const banners = [];
+    for (let index = 0; index < rawBanners.length; index += 1) {
+      const banner = rawBanners[index] || {};
+      const message = String(banner.message || '').trim();
+      if (!message) {
+        const error = `Banner ${index + 1} needs a message, or remove that banner.`;
+        if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+        return false;
+      }
+      if (Array.from(message).length > maxPersistentPinMessageLength) {
+        const error = `Banner ${index + 1} exceeds ${maxPersistentPinMessageLength} characters.`;
+        if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+        return false;
+      }
+      const rawDuration = String(banner.durationSeconds ?? '').trim();
+      let durationSeconds = null;
+      if (rawDuration) {
+        const parsed = Number(rawDuration);
+        if (!Number.isInteger(parsed) || parsed < 0 || parsed > maxPersistentPinRotationSeconds) {
+          const error = `Banner ${index + 1} duration must be blank or a whole number from 0 to ${maxPersistentPinRotationSeconds} seconds.`;
+          if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+          return false;
+        }
+        // A per-banner value is only an extension. Anything at/below global is
+        // intentionally saved as "use global".
+        durationSeconds = parsed > globalSeconds ? parsed : null;
+      }
+      banners.push({ message, enabled: banner.enabled !== false, durationSeconds });
+    }
+
+    if (enabled && !banners.length) {
+      const error = 'Add at least one banner before enabling Rotating Pinned Banners.';
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+    if (enabled && !banners.some((banner) => banner.enabled !== false)) {
+      const error = 'Enable at least one banner before enabling Rotating Pinned Banners.';
+      if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+      return false;
+    }
+
     const saveButton = $('savePersistentPinBtn');
     if (saveButton) saveButton.disabled = true;
     try {
       const d = await postJson('/eventsub-reactions/persistent-pin', {
-        enabled: Boolean(enabled), messages, rotationSeconds: Number(rotationSeconds), startupHoldSeconds: Number(startupHoldSeconds)
+        enabled: Boolean(enabled), banners, rotationSeconds: Number(rotationSeconds), startupHoldSeconds: Number(startupHoldSeconds)
       });
-      if (!d.success) throw new Error(d.error || 'Could not save Persistent Stream Pin.');
+      if (!d.success) throw new Error(d.error || 'Could not save Rotating Pinned Banners.');
       persistentPin = { ...persistentPin, ...(d.persistentPin || {}) };
       if (closeAfter) closePersistentPinEditor();
       await load();
       return true;
     } catch (err) {
-      const error = err.message || 'Could not save Persistent Stream Pin.';
+      const error = err.message || 'Could not save Rotating Pinned Banners.';
       if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
       return false;
     } finally {
@@ -280,10 +408,15 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     page = Math.max(1, Math.min(page, pages));
     const visible = items.slice((page-1)*pageSize, page*pageSize);
 
+    const pinBanners = persistentPinBanners();
+    const activePinBanners = pinBanners.filter((banner) => banner.enabled !== false);
+    const globalPinDuration = Number(persistentPin.rotationSeconds || defaultPersistentPinRotationSeconds);
+    const customDurationCount = pinBanners.filter((banner) => Number(banner.durationSeconds) > globalPinDuration).length;
+    const customDurationLabel = customDurationCount ? ` · ${customDurationCount} extended duration${customDurationCount===1?'':'s'}` : '';
     const persistentPinCard = `<div class="custom-command-card event-reaction-card persistent-pin-reaction-card" data-system="persistent-pin">
       <div class="custom-command-card-main">
-        <div class="custom-command-title-row"><strong class="custom-command-name">Persistent Stream Pin</strong><span class="custom-command-state ${persistentPin.enabled?'enabled':'disabled'}">${persistentPin.enabled?'Enabled':'Disabled'}</span></div>
-        <div class="detail">Stream Online · ${persistentPinMessages().length || 0} banner${persistentPinMessages().length===1?'':'s'} · ${Number(persistentPin.rotationSeconds || defaultPersistentPinRotationSeconds)}s each · bypasses global post-hold</div>
+        <div class="custom-command-title-row"><strong class="custom-command-name">Rotating Pinned Banners</strong><span class="custom-command-state ${persistentPin.enabled?'enabled':'disabled'}">${persistentPin.enabled?'Enabled':'Disabled'}</span></div>
+        <div class="detail">Stream Online · ${activePinBanners.length}/${pinBanners.length} active banner${pinBanners.length===1?'':'s'} · ${globalPinDuration}s global${customDurationLabel} · bypasses global post-hold</div>
       </div>
       <div class="custom-command-actions">
         <button class="secondary persistent-pin-edit" type="button">Edit</button>
@@ -321,7 +454,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       setMsg('');
       await savePersistentPinConfig({
         enabled: !persistentPin.enabled,
-        messages: persistentPinMessages(),
+        banners: persistentPinBanners(),
         rotationSeconds: Number(persistentPin.rotationSeconds ?? defaultPersistentPinRotationSeconds),
         startupHoldSeconds: Number(persistentPin.startupHoldSeconds ?? defaultPersistentPinHoldSeconds)
       });
@@ -367,6 +500,11 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       setEditorMsg(error, Boolean(error));
     }
   });
+  $('addPersistentPinBannerBtn').onclick = () => {
+    addPersistentBanner({ message: '', enabled: true, durationSeconds: null });
+    persistentPinBannerList.lastElementChild?.querySelector('.persistent-banner-message')?.focus();
+  };
+  $('persistentPinRotation').addEventListener('input', updatePersistentBannerListState);
   $('savePersistentPinBtn').onclick = () => savePersistentPinConfig({}, { closeAfter: true });
   $('closePersistentPinEditorBtn').onclick = closePersistentPinEditor;
   $('cancelPersistentPinBtn').onclick = closePersistentPinEditor;

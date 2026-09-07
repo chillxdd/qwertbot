@@ -24,6 +24,17 @@ const persistentPinConfigSchema = new mongoose.Schema({
     type: [String],
     default: []
   },
+  // Per-banner controls are parallel to messages so existing message IDs stay
+  // aligned when a banner is temporarily disabled. Missing legacy values mean
+  // enabled + global duration.
+  bannerEnabled: {
+    type: [Boolean],
+    default: []
+  },
+  bannerDurations: {
+    type: [Number],
+    default: []
+  },
   rotationSeconds: {
     type: Number,
     default: 180,

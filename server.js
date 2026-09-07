@@ -820,7 +820,7 @@ app.get('/reliability/status', requireModSession, async (req, res) => {
     const isPin = pin.deliveryKey === row.key && pin.recoveryRequired;
     review.push({ target: isRecap ? 'recap' : timer ? 'timer' : isPin ? 'pin' : 'delivery',
       id: timer ? timer.id : row.key, deliveryKey: row.key, state: row.state,
-      title: isRecap ? 'Hourly recap' : timer ? `Timer: ${timer.name}` : isPin ? 'Persistent stream pin' : row.deliveryKind,
+      title: isRecap ? 'Hourly recap' : timer ? `Timer: ${timer.name}` : isPin ? 'Rotating pinned banner' : row.deliveryKind,
       detail: row.lastError || 'Twitch may have received this action before its acknowledgement was saved.',
       preview: String(row.payload?.message || row.payload?.rendered || '').slice(0, 500), createdAt: row.createdAt });
   }

@@ -102,13 +102,13 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
   app.post('/timers/persistent-pin', requireModSession, async (req, res) => {
     if (!getDatabaseConnected()) return unavailable(res);
     const manager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
-    if (!manager?.saveConfig) return res.status(503).json({ success: false, error: 'Persistent Stream Pin is unavailable.' });
+    if (!manager?.saveConfig) return res.status(503).json({ success: false, error: 'Rotating Pinned Banners are unavailable.' });
     try {
       const persistentPin = await manager.saveConfig(req.body || {});
       return res.json({ success: true, persistentPin });
     } catch (err) {
       console.error('[Persistent Pin] Could not save settings:', err.message || err);
-      return res.status(400).json({ success: false, error: err.message || 'Could not save Persistent Stream Pin settings.' });
+      return res.status(400).json({ success: false, error: err.message || 'Could not save Rotating Pinned Banners settings.' });
     }
   });
 

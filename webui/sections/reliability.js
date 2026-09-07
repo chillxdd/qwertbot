@@ -7,7 +7,7 @@ export function initReliabilitySection({ $, postJson, isLoggedIn, onResolved }) 
   async function resolve(item, outcome) {
     if (acting) return;
     const confirmation = outcome === 'sent'
-      ? 'CONFIRM ALREADY DELIVERED?\n\nCheck Twitch chat first. This marks the uncertain action as handled and prevents another copy from being sent. A reviewed persistent pin will be skipped for the rest of this stream when its message ID is unavailable.'
+      ? 'CONFIRM ALREADY DELIVERED?\n\nCheck Twitch chat first. This marks the uncertain action as handled and prevents another copy from being sent. A reviewed rotating pinned banner will be skipped for the rest of this stream when its message ID is unavailable.'
       : 'CONFIRM DEFINITELY NOT DELIVERED?\n\nOnly proceed after checking Twitch chat. This permits the unfinished action to be retried and could create a duplicate if Twitch actually received the first attempt.';
     if (!window.confirm(confirmation)) return;
     acting = true;

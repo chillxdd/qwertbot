@@ -640,17 +640,27 @@ button.success{background:#16834a}
 /* Structured manual lore cards */
 .manual-lore-guidance{margin:10px 0 14px}.manual-lore-list{display:flex;flex-direction:column;gap:10px;margin-top:10px}.manual-lore-card{background:#0e0e10;border:1px solid #2a2a30;border-radius:7px;padding:12px}.manual-lore-card.disabled{opacity:.55}.manual-lore-card-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.manual-lore-card-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;color:#fff}.manual-lore-badge{display:inline-flex;padding:3px 7px;border:1px solid #4a4a57;border-radius:999px;font-size:11px;font-weight:700}.manual-lore-card-text{margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}.manual-lore-card-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}.manual-lore-dialog{width:min(720px,calc(100vw - 36px));max-height:calc(100vh - 50px);overflow:auto}.manual-lore-dialog textarea{min-height:180px}
 
-/* Persistent pin compact textarea */
-#persistentPinMessageInput{min-height:88px;resize:vertical}
-
-/* Built-in Persistent Stream Pin editor */
-.persistent-pin-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:12px;align-items:start}
-.persistent-pin-editor-grid label{margin:0}
-.persistent-pin-editor-grid textarea{min-height:92px;margin:5px 0 0;resize:vertical}
-.persistent-pin-editor-grid .duration-field{margin-top:5px}
-.persistent-pin-duration-stack{display:flex;flex-direction:column;gap:14px}
+/* Built-in Rotating Pinned Banners editor */
+.persistent-banner-editor-dialog{width:min(860px,calc(100vw - 36px));max-height:calc(100vh - 48px);overflow:auto}
+.persistent-banner-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:14px;align-items:start}
+.persistent-banner-settings-grid label{margin:0}
+.persistent-banner-settings-grid .duration-field{margin-top:5px}
+.persistent-banner-list-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:18px 0 8px}
+.persistent-banner-list{display:flex;flex-direction:column;gap:10px}
+.persistent-banner-row{background:#0e0e10;border:1px solid #2a2a30;border-radius:7px;padding:12px}
+.persistent-banner-row.disabled{opacity:.65}
+.persistent-banner-row-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}
+.persistent-banner-row-title{font-weight:700;color:var(--nb-text,#f2f3f5)}
+.persistent-banner-row textarea{min-height:84px;margin:0;resize:vertical}
+.persistent-banner-row-footer{display:grid;grid-template-columns:minmax(180px,240px) minmax(0,1fr) auto;gap:12px;align-items:end;margin-top:9px}
+.persistent-banner-duration-label{margin:0}
+.persistent-banner-duration-label .duration-field{margin-top:5px}
+.persistent-banner-duration-help{align-self:center;line-height:1.4}
+.persistent-banner-remove{margin:0;white-space:nowrap}
+.persistent-banner-add-row{justify-content:flex-end;margin-top:10px}
+.persistent-banner-behavior-note{margin-top:14px;line-height:1.5}
 .event-reaction-card button:disabled{cursor:not-allowed}
-@media(max-width:700px){.persistent-pin-editor-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.persistent-banner-settings-grid{grid-template-columns:1fr}.persistent-banner-row-footer{grid-template-columns:1fr}.persistent-banner-remove{justify-self:start}.persistent-banner-list-heading{align-items:flex-start;flex-direction:column;gap:5px}}
 
 
 /* Standalone public commands directory */

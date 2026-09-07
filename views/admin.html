@@ -556,28 +556,34 @@
           <button id="addEventReactionBtn" type="button">Add EventSub Reaction</button>
         </div>
 
-        <dialog id="persistentPinEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog">
+        <dialog id="persistentPinEditor" class="custom-command-editor entity-editor-dialog event-reaction-dialog persistent-banner-editor-dialog">
           <div class="custom-editor-header">
-            <h3>Edit Persistent Stream Pin</h3>
+            <h3>Edit Rotating Pinned Banners</h3>
             <div class="custom-editor-header-actions">
               <label class="inline-check custom-enabled-check"><input id="persistentPinEnabled" type="checkbox"> Enabled</label>
               <button id="closePersistentPinEditorBtn" class="secondary" type="button">Close</button>
             </div>
           </div>
-          <div class="custom-editor-block persistent-pin-editor-grid">
-            <label>Banner Messages <span class="detail">(one Twitch message per line)</span>
-              <textarea id="persistentPinMessageInput" rows="7" placeholder="Banner 1 message&#10;Banner 2 message&#10;Banner 3 message"></textarea>
+          <div class="custom-editor-block persistent-banner-settings-grid">
+            <label>Global Banner Duration
+              <div class="duration-field"><input id="persistentPinRotation" type="number" min="30" max="1800" step="1" value="180"><span class="duration-unit">seconds</span></div>
             </label>
-            <div class="persistent-pin-duration-stack">
-              <label>Banner Duration
-                <div class="duration-field"><input id="persistentPinRotation" type="number" min="30" max="1800" step="1" value="180"><span class="duration-unit">seconds</span></div>
-              </label>
-              <label>Post-Start Hold
-                <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
-              </label>
-            </div>
+            <label>Post-Start Hold
+              <div class="duration-field"><input id="persistentPinStartupHold" type="number" min="0" max="3600" step="1" value="10"><span class="duration-unit">seconds</span></div>
+            </label>
           </div>
-          <div class="detail">Banners rotate in order. A recap may temporarily replace the active banner; its 60-second display time is deducted from that banner's remaining slot. Manual or other pins are never automatically replaced.</div>
+          <div class="persistent-banner-list-heading">
+            <div>
+              <strong>Banners</strong>
+              <div class="detail">Banners rotate from top to bottom. Disable an individual banner to skip it without deleting its text.</div>
+            </div>
+            <div id="persistentPinBannerCount" class="detail"></div>
+          </div>
+          <div id="persistentPinBannerList" class="persistent-banner-list"></div>
+          <div class="custom-response-bottom-actions persistent-banner-add-row">
+            <button id="addPersistentPinBannerBtn" class="secondary" type="button">Add Banner</button>
+          </div>
+          <div class="detail persistent-banner-behavior-note">A banner-specific duration is optional and can only extend that banner. Blank values, or values at/below the global duration, use the global duration. A recap may temporarily replace the active banner; recap display time is deducted from that banner's remaining slot. Manual or other pins are never automatically replaced by the rotation.</div>
           <div class="custom-editor-actions">
             <button id="savePersistentPinBtn" type="button">Save</button>
             <button id="cancelPersistentPinBtn" class="secondary" type="button">Cancel</button>
@@ -748,7 +754,7 @@
           <div class="native-command-card" data-native-command="repin" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!repin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Restores Persistent Stream Pin.</div>
+              <div class="detail">Enables Rotating Pinned Banners; restores one when the pin slot is free.</div>
             </div>
             <div class="custom-command-actions"></div>
           </div>
@@ -756,7 +762,7 @@
           <div class="native-command-card" data-native-command="unpin" data-user-level="moderator">
             <div class="native-command-main">
               <div class="native-command-title"><code>!unpin</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
-              <div class="detail">Removes and disables Persistent Stream Pin.</div>
+              <div class="detail">Disables Rotating Pinned Banners and removes its banner if currently pinned.</div>
             </div>
             <div class="custom-command-actions"></div>
           </div>

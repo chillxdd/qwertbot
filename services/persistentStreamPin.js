@@ -25,39 +25,74 @@ function normalizeMessage(value) {
   return Array.from(String(value || '').trim()).slice(0, MAX_PERSISTENT_PIN_MESSAGE_LENGTH).join('');
 }
 
-function normalizeMessages(input = {}) {
-  const raw = Array.isArray(input.messages)
-    ? input.messages
-    : (String(input.message || '').trim() ? [input.message] : []);
-  const messages = raw.map((value) => normalizeMessage(value)).filter(Boolean);
-  return messages.slice(0, MAX_PERSISTENT_PIN_MESSAGES);
-}
-
 function normalizeRotationSeconds(value, fallback = DEFAULT_PERSISTENT_PIN_ROTATION_SECONDS) {
   const raw = value === undefined || value === null || value === '' ? fallback : Number(value);
   const seconds = Math.round(raw);
   if (!Number.isFinite(seconds) || seconds < MIN_PERSISTENT_PIN_ROTATION_SECONDS || seconds > MAX_PERSISTENT_PIN_ROTATION_SECONDS) {
-    throw new Error(`Persistent Stream Pin banner duration must be between ${MIN_PERSISTENT_PIN_ROTATION_SECONDS} and ${MAX_PERSISTENT_PIN_ROTATION_SECONDS} seconds.`);
+    throw new Error(`Rotating Pinned Banners global duration must be between ${MIN_PERSISTENT_PIN_ROTATION_SECONDS} and ${MAX_PERSISTENT_PIN_ROTATION_SECONDS} seconds.`);
   }
   return seconds;
+}
+
+function normalizeBannerOverrideSeconds(value, globalSeconds) {
+  if (value === undefined || value === null || value === '') return 0;
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) throw new Error('Banner-specific duration must be a number or left blank.');
+  const seconds = Math.round(raw);
+  if (seconds < 0 || seconds > MAX_PERSISTENT_PIN_ROTATION_SECONDS) {
+    throw new Error(`Banner-specific duration must be blank or between 0 and ${MAX_PERSISTENT_PIN_ROTATION_SECONDS} seconds.`);
+  }
+  // An override only exists to make one banner stand out for longer. Values at
+  // or below the global duration intentionally collapse back to "use global".
+  return seconds > globalSeconds ? seconds : 0;
 }
 
 function normalizeHoldSeconds(value, fallback = DEFAULT_PERSISTENT_PIN_HOLD_SECONDS) {
   const raw = value === undefined || value === null || value === '' ? fallback : Number(value);
   const seconds = Math.round(raw);
   if (!Number.isFinite(seconds) || seconds < 0 || seconds > MAX_PERSISTENT_PIN_HOLD_SECONDS) {
-    throw new Error(`Persistent Stream Pin hold must be between 0 and ${MAX_PERSISTENT_PIN_HOLD_SECONDS} seconds.`);
+    throw new Error(`Rotating Pinned Banners hold must be between 0 and ${MAX_PERSISTENT_PIN_HOLD_SECONDS} seconds.`);
   }
   return seconds;
 }
 
+function normalizeBanners(input = {}, globalSeconds = normalizeRotationSeconds(input.rotationSeconds)) {
+  let rawRows;
+  if (Array.isArray(input.banners)) {
+    rawRows = input.banners;
+  } else {
+    const messages = Array.isArray(input.messages)
+      ? input.messages
+      : (String(input.message || '').trim() ? [input.message] : []);
+    const enabled = Array.isArray(input.bannerEnabled) ? input.bannerEnabled : [];
+    const durations = Array.isArray(input.bannerDurations) ? input.bannerDurations : [];
+    rawRows = messages.map((message, index) => ({
+      message,
+      enabled: enabled[index] !== false,
+      durationSeconds: durations[index] ?? 0
+    }));
+  }
+
+  return rawRows
+    .slice(0, MAX_PERSISTENT_PIN_MESSAGES)
+    .map((row) => ({
+      message: normalizeMessage(row?.message ?? row),
+      enabled: row?.enabled !== false,
+      durationSeconds: normalizeBannerOverrideSeconds(row?.durationSeconds ?? 0, globalSeconds)
+    }))
+    .filter((row) => row.message);
+}
+
 function normalizeConfig(input = {}) {
-  const messages = normalizeMessages(input);
+  const rotationSeconds = normalizeRotationSeconds(input.rotationSeconds);
+  const banners = normalizeBanners(input, rotationSeconds);
   return {
     enabled: input.enabled === true,
-    message: messages[0] || '',
-    messages,
-    rotationSeconds: normalizeRotationSeconds(input.rotationSeconds),
+    message: banners[0]?.message || '',
+    messages: banners.map((row) => row.message),
+    bannerEnabled: banners.map((row) => row.enabled !== false),
+    bannerDurations: banners.map((row) => row.durationSeconds || 0),
+    rotationSeconds,
     startupHoldSeconds: normalizeHoldSeconds(input.startupHoldSeconds)
   };
 }
@@ -72,6 +107,27 @@ function clampIndex(value, count) {
   if (!count) return 0;
   const number = Number.isInteger(Number(value)) ? Number(value) : 0;
   return ((number % count) + count) % count;
+}
+
+function resolveEnabledIndex(rows, value) {
+  if (!rows.length) return 0;
+  const start = clampIndex(value, rows.length);
+  if (rows[start]?.enabled !== false) return start;
+  for (let offset = 1; offset <= rows.length; offset += 1) {
+    const index = (start + offset) % rows.length;
+    if (rows[index]?.enabled !== false) return index;
+  }
+  return start;
+}
+
+function nextEnabledIndex(rows, value) {
+  if (!rows.length) return 0;
+  const start = clampIndex(value, rows.length);
+  for (let offset = 1; offset <= rows.length; offset += 1) {
+    const index = (start + offset) % rows.length;
+    if (rows[index]?.enabled !== false) return index;
+  }
+  return start;
 }
 
 function createPersistentPinManager({
@@ -90,6 +146,8 @@ function createPersistentPinManager({
     enabled: false,
     message: '',
     messages: [],
+    bannerEnabled: [],
+    bannerDurations: [],
     rotationSeconds: DEFAULT_PERSISTENT_PIN_ROTATION_SECONDS,
     startupHoldSeconds: DEFAULT_PERSISTENT_PIN_HOLD_SECONDS,
     activeStreamId: '',
@@ -113,17 +171,37 @@ function createPersistentPinManager({
   let lastMonitorErrorLogAt = 0;
   const ownResponses = [];
 
+  function configuredBanners() {
+    const globalSeconds = normalizeRotationSeconds(config.rotationSeconds);
+    return normalizeBanners(config, globalSeconds);
+  }
+
   function configuredMessages() {
-    const messages = normalizeMessages(config);
-    return messages.length ? messages : (String(config.message || '').trim() ? [normalizeMessage(config.message)] : []);
+    return configuredBanners().map((row) => row.message);
+  }
+
+  function enabledBanners() {
+    return configuredBanners().filter((row) => row.enabled !== false);
   }
 
   function configuredMessageIds() {
-    return normalizeMessageIds(config.activeMessageIds, configuredMessages().length);
+    return normalizeMessageIds(config.activeMessageIds, configuredBanners().length);
   }
 
   function currentIndex() {
-    return clampIndex(config.activeBannerIndex, configuredMessages().length);
+    const rows = configuredBanners();
+    return resolveEnabledIndex(rows, config.activeBannerIndex);
+  }
+
+  function nextIndex(index = currentIndex()) {
+    return nextEnabledIndex(configuredBanners(), index);
+  }
+
+  function effectiveDuration(index = currentIndex()) {
+    const rows = configuredBanners();
+    const banner = rows[clampIndex(index, rows.length)] || null;
+    const globalSeconds = normalizeRotationSeconds(config.rotationSeconds);
+    return banner?.durationSeconds > globalSeconds ? banner.durationSeconds : globalSeconds;
   }
 
   function currentMessageId() {
@@ -151,16 +229,25 @@ function createPersistentPinManager({
   }
 
   function toClient() {
-    const messages = configuredMessages();
+    const banners = configuredBanners();
+    const globalSeconds = normalizeRotationSeconds(config.rotationSeconds);
     return {
       recoveryRequired: config.recoveryRequired === true,
       recoveryReason: config.recoveryReason || '',
       deliveryKey: config.deliveryKey || '',
       skippedForStream: Boolean(config.skipStreamId && config.skipStreamId === config.activeStreamId),
       enabled: config.enabled === true,
-      message: messages[0] || '',
-      messages,
-      rotationSeconds: normalizeRotationSeconds(config.rotationSeconds),
+      message: banners[0]?.message || '',
+      messages: banners.map((row) => row.message),
+      bannerEnabled: banners.map((row) => row.enabled !== false),
+      bannerDurations: banners.map((row) => row.durationSeconds || 0),
+      banners: banners.map((row) => ({
+        message: row.message,
+        enabled: row.enabled !== false,
+        durationSeconds: row.durationSeconds > globalSeconds ? row.durationSeconds : null,
+        effectiveDurationSeconds: row.durationSeconds > globalSeconds ? row.durationSeconds : globalSeconds
+      })),
+      rotationSeconds: globalSeconds,
       startupHoldSeconds: normalizeHoldSeconds(config.startupHoldSeconds),
       activeStreamId: String(config.activeStreamId || ''),
       activeMessageId: String(config.activeMessageId || ''),
@@ -185,16 +272,14 @@ function createPersistentPinManager({
   }
 
   function normalizeStored(stored = {}) {
-    const messages = normalizeMessages(stored);
-    const index = clampIndex(stored.activeBannerIndex, messages.length);
-    const ids = normalizeMessageIds(stored.activeMessageIds, messages.length);
-    if (stored.activeMessageId && messages.length && !ids[index]) ids[index] = String(stored.activeMessageId || '').trim();
+    const normalized = normalizeConfig(stored);
+    const rows = normalizeBanners(normalized, normalized.rotationSeconds);
+    const index = resolveEnabledIndex(rows, stored.activeBannerIndex);
+    const ids = normalizeMessageIds(stored.activeMessageIds, rows.length);
+    if (stored.activeMessageId && rows.length && !ids[index]) ids[index] = String(stored.activeMessageId || '').trim();
     return {
       ...stored,
-      message: messages[0] || '',
-      messages,
-      rotationSeconds: normalizeRotationSeconds(stored.rotationSeconds),
-      startupHoldSeconds: normalizeHoldSeconds(stored.startupHoldSeconds),
+      ...normalized,
       activeMessageIds: ids,
       activeBannerIndex: index,
       activeMessageId: ids[index] || String(stored.activeMessageId || '').trim(),
@@ -210,11 +295,15 @@ function createPersistentPinManager({
     const stored = await PersistentPinConfig.findOne({ channelName: normalizedChannel }).lean();
     if (stored) {
       config = { ...config, ...normalizeStored(stored) };
-      const needsMigration = (!Array.isArray(stored.messages) || !stored.messages.length) && String(stored.message || '').trim();
+      const needsMigration = ((!Array.isArray(stored.messages) || !stored.messages.length) && String(stored.message || '').trim())
+        || !Array.isArray(stored.bannerEnabled) || stored.bannerEnabled.length !== config.messages.length
+        || !Array.isArray(stored.bannerDurations) || stored.bannerDurations.length !== config.messages.length;
       if (needsMigration) {
         await PersistentPinConfig.updateOne({ channelName: normalizedChannel, ...fenceFilter() }, {
           $set: {
             messages: config.messages,
+            bannerEnabled: config.bannerEnabled,
+            bannerDurations: config.bannerDurations,
             rotationSeconds: config.rotationSeconds,
             activeMessageIds: config.activeMessageIds,
             activeBannerIndex: config.activeBannerIndex,
@@ -231,6 +320,8 @@ function createPersistentPinManager({
             enabled: false,
             message: '',
             messages: [],
+            bannerEnabled: [],
+            bannerDurations: [],
             rotationSeconds: DEFAULT_PERSISTENT_PIN_ROTATION_SECONDS,
             startupHoldSeconds: DEFAULT_PERSISTENT_PIN_HOLD_SECONDS
           }
@@ -239,7 +330,7 @@ function createPersistentPinManager({
       ).lean();
       config = { ...config, ...normalizeStored(created || {}) };
     }
-    console.log(`[Persistent Pin] ${config.enabled ? 'Enabled' : 'Disabled'}; ${configuredMessages().length} banner(s), ${config.rotationSeconds}s each; post-pin automation hold ${config.startupHoldSeconds}s.`);
+    console.log(`[Persistent Pin] ${config.enabled ? 'Enabled' : 'Disabled'}; ${enabledBanners().length}/${configuredBanners().length} banner(s) active, ${config.rotationSeconds}s global duration; post-pin automation hold ${config.startupHoldSeconds}s.`);
     return toClient();
   }
 
@@ -247,7 +338,7 @@ function createPersistentPinManager({
     await context.assertOperation();
     const result = await PersistentPinConfig.updateOne({ channelName: normalizedChannel, ...fenceFilter() },
       { $set: { ...patch, schedulerFence: context.fence() } }, WRITE_OPTIONS);
-    if (result.matchedCount !== 1) throw context.cancelledError('Persistent pin settings changed on another deployment.');
+    if (result.matchedCount !== 1) throw context.cancelledError('Rotating pinned banner settings changed on another deployment.');
     config = { ...config, ...patch };
   }
 
@@ -263,7 +354,7 @@ function createPersistentPinManager({
 
   function scheduleRotationTimer() {
     stopRotationTimer();
-    if (stopping || !context.isActive() || !config.enabled || config.recoveryRequired || !configuredMessages().length || !config.bannerEndsAt) return;
+    if (stopping || !context.isActive() || !config.enabled || config.recoveryRequired || !enabledBanners().length || !config.bannerEndsAt) return;
     const endsAtMs = Date.parse(config.bannerEndsAt);
     if (!Number.isFinite(endsAtMs)) return;
     const delay = Math.max(100, endsAtMs - Date.now() + 50);
@@ -283,7 +374,7 @@ function createPersistentPinManager({
 
   function startMonitor(streamId = '') {
     monitorStreamId = String(streamId || monitorStreamId || config.activeStreamId || '').trim();
-    if (stopping || !context.isActive() || config.recoveryRequired || (config.skipStreamId && config.skipStreamId === monitorStreamId) || monitorTimer || !config.enabled || !configuredMessages().length) return;
+    if (stopping || !context.isActive() || config.recoveryRequired || (config.skipStreamId && config.skipStreamId === monitorStreamId) || monitorTimer || !config.enabled || !enabledBanners().length) return;
     monitorTimer = context.detached(() => setInterval(() => {
       void monitorTick().catch((err) => console.warn('[Persistent Pin] Monitor failed:', err.message));
     }, PERSISTENT_PIN_MONITOR_INTERVAL_MS));
@@ -297,41 +388,67 @@ function createPersistentPinManager({
     activeController?.abort();
     while (operationBusy) await sleep(50);
 
-    const rawMessages = Array.isArray(input.messages)
-      ? input.messages.map((value) => String(value || '').trim()).filter(Boolean)
-      : (String(input.message || '').trim() ? [String(input.message || '').trim()] : []);
-    if (rawMessages.length > MAX_PERSISTENT_PIN_MESSAGES) {
-      throw new Error(`Persistent Stream Pin can contain at most ${MAX_PERSISTENT_PIN_MESSAGES} banner messages.`);
-    }
-    for (const rawMessage of rawMessages) {
-      if (Array.from(rawMessage).length > MAX_PERSISTENT_PIN_MESSAGE_LENGTH) {
-        throw new Error(`Each Persistent Stream Pin banner can contain at most ${MAX_PERSISTENT_PIN_MESSAGE_LENGTH} characters.`);
-      }
-    }
+    const candidateRows = Array.isArray(input.banners)
+      ? input.banners
+      : (Array.isArray(input.messages)
+        ? input.messages.map((message, index) => ({
+          message,
+          enabled: Array.isArray(input.bannerEnabled) ? input.bannerEnabled[index] !== false : true,
+          durationSeconds: Array.isArray(input.bannerDurations) ? input.bannerDurations[index] : 0
+        }))
+        : (String(input.message || '').trim() ? [{ message: input.message, enabled: true, durationSeconds: 0 }] : []));
+    // When the whole feature is disabled, an empty editor row is just a UI
+    // placeholder and is not persisted as a banner.
+    const rawRows = input.enabled === true
+      ? candidateRows
+      : candidateRows.filter((row) => String(row?.message ?? row ?? '').trim());
 
-    const next = normalizeConfig({ ...input, messages: rawMessages });
-    if (next.enabled && !next.messages.length) {
-      throw new Error('At least one Persistent Stream Pin banner message is required when the feature is enabled.');
+    if (rawRows.length > MAX_PERSISTENT_PIN_MESSAGES) {
+      throw new Error(`Rotating Pinned Banners supports at most ${MAX_PERSISTENT_PIN_MESSAGES} banners.`);
+    }
+    rawRows.forEach((row, index) => {
+      const rawMessage = String(row?.message ?? row ?? '').trim();
+      if (!rawMessage) throw new Error(`Banner ${index + 1} needs a message, or remove that banner.`);
+      if (Array.from(rawMessage).length > MAX_PERSISTENT_PIN_MESSAGE_LENGTH) {
+        throw new Error(`Banner ${index + 1} exceeds ${MAX_PERSISTENT_PIN_MESSAGE_LENGTH} characters.`);
+      }
+    });
+
+    const next = normalizeConfig({ ...input, banners: rawRows });
+    const nextRows = normalizeBanners(next, next.rotationSeconds);
+    if (next.enabled && !nextRows.some((row) => row.enabled !== false)) {
+      throw new Error('Enable at least one banner before enabling Rotating Pinned Banners.');
     }
 
     const previousEnabled = config.enabled === true;
-    const previousIds = new Set(configuredMessageIds().filter(Boolean));
-    const messagesChanged = JSON.stringify(next.messages) !== JSON.stringify(configuredMessages());
-    const durationChanged = next.rotationSeconds !== normalizeRotationSeconds(config.rotationSeconds);
+    const previousRows = configuredBanners();
+    const previousIdsArray = configuredMessageIds();
+    const previousIds = new Set(previousIdsArray.filter(Boolean));
+    const previousCurrentIndex = currentIndex();
+    const previousCurrentDuration = effectiveDuration(previousCurrentIndex);
+    const messagesChanged = JSON.stringify(next.messages) !== JSON.stringify(previousRows.map((row) => row.message));
+    const enabledChanged = JSON.stringify(next.bannerEnabled) !== JSON.stringify(previousRows.map((row) => row.enabled !== false));
+    const bannerDurationsChanged = JSON.stringify(next.bannerDurations) !== JSON.stringify(previousRows.map((row) => row.durationSeconds || 0));
+    const globalDurationChanged = next.rotationSeconds !== normalizeRotationSeconds(config.rotationSeconds);
+    const settingsChanged = messagesChanged || enabledChanged || bannerDurationsChanged || globalDurationChanged;
+
     const update = { ...next };
     if (messagesChanged) {
-      if (config.recoveryRequired) throw new Error('Resolve the pending pin delivery before replacing its text.');
+      if (config.recoveryRequired) throw new Error('Resolve the pending pinned-banner delivery before replacing its text.');
       update.activeMessageId = '';
-      update.activeMessageIds = Array(next.messages.length).fill('');
-      update.activeBannerIndex = 0;
+      update.activeMessageIds = Array(nextRows.length).fill('');
+      update.activeBannerIndex = resolveEnabledIndex(nextRows, 0);
       update.bannerEndsAt = null;
       update.postGeneration = 0;
       update.skipStreamId = '';
     } else {
-      update.activeMessageIds = normalizeMessageIds(config.activeMessageIds, next.messages.length);
-      update.activeBannerIndex = clampIndex(config.activeBannerIndex, next.messages.length);
+      update.activeMessageIds = normalizeMessageIds(config.activeMessageIds, nextRows.length);
+      update.activeBannerIndex = resolveEnabledIndex(nextRows, config.activeBannerIndex);
       update.activeMessageId = update.activeMessageIds[update.activeBannerIndex] || '';
-      if (durationChanged) update.bannerEndsAt = null;
+      const nextGlobal = next.rotationSeconds;
+      const nextBanner = nextRows[update.activeBannerIndex] || null;
+      const nextCurrentDuration = nextBanner?.durationSeconds > nextGlobal ? nextBanner.durationSeconds : nextGlobal;
+      if (update.activeBannerIndex !== previousCurrentIndex || nextCurrentDuration !== previousCurrentDuration) update.bannerEndsAt = null;
     }
     update.schedulerFence = context.fence();
 
@@ -355,7 +472,7 @@ function createPersistentPinManager({
           const currentId = String(current?.message_id || '').trim();
           if (previousIds.has(currentId)) await unpinChatMessage(currentId);
         } catch (err) {
-          console.warn('[Persistent Pin] Settings disabled, but the current pin could not be checked/removed:', err?.message || err);
+          console.warn('[Persistent Pin] Settings disabled, but the current banner could not be checked/removed:', err?.message || err);
         }
       }
     } else {
@@ -365,7 +482,7 @@ function createPersistentPinManager({
           await resetForStream(status.streamId);
         }
         startMonitor(status.streamId || config.activeStreamId || '');
-        if (messagesChanged || durationChanged || !previousEnabled) {
+        if (settingsChanged || !previousEnabled) {
           try {
             const current = typeof getPinnedChatMessage === 'function' ? await getPinnedChatMessage() : null;
             const currentId = String(current?.message_id || '').trim();
@@ -380,7 +497,7 @@ function createPersistentPinManager({
       }
     }
 
-    console.log(`[Persistent Pin] Settings saved (${config.enabled ? 'enabled' : 'disabled'}; ${configuredMessages().length} banner(s), ${config.rotationSeconds}s each; hold ${config.startupHoldSeconds}s).`);
+    console.log(`[Persistent Pin] Settings saved (${config.enabled ? 'enabled' : 'disabled'}; ${enabledBanners().length}/${configuredBanners().length} banner(s) active; ${config.rotationSeconds}s global duration; hold ${config.startupHoldSeconds}s).`);
     return toClient();
   }
 
@@ -390,8 +507,8 @@ function createPersistentPinManager({
     const messages = configuredMessages();
     const index = clampIndex(bannerIndex, messages.length);
     const message = messages[index] || '';
-    if (!message) throw new Error('Persistent Stream Pin banner message is not configured.');
-    if (config.recoveryRequired) throw new Error('Persistent pin delivery needs operator review.');
+    if (!message) throw new Error('Rotating pinned banner message is not configured.');
+    if (config.recoveryRequired) throw new Error('Rotating pinned banner delivery needs operator review.');
     const stream = String(streamId || config.activeStreamId || 'offline');
     const hash = createHash('sha256').update(message).digest('hex').slice(0, 24);
     const key = `pin:${normalizedChannel}:${stream}:banner:${index}:${hash}:${Number(config.postGeneration) || 0}`;
@@ -416,7 +533,7 @@ function createPersistentPinManager({
     }
     const messageId = String(receipt.result?.message_id || '').trim();
     if (!messageId) {
-      const err = delivery.unknownError(key, new Error('Persistent pin has no usable message ID.'));
+      const err = delivery.unknownError(key, new Error('Rotating pinned banner has no usable message ID.'));
       const patch = { recoveryRequired: true, recoveryReason: String(err.message).slice(0, 600), deliveryKey: key };
       config = { ...config, ...patch };
       await persistRuntime(patch).catch(() => {});
@@ -458,9 +575,9 @@ function createPersistentPinManager({
   }
 
   async function pinBanner(index, durationSeconds, { streamId = '', allowPost = true } = {}) {
-    const messages = configuredMessages();
-    if (!messages.length) throw new Error('Persistent Stream Pin has no configured banners.');
-    const bannerIndex = clampIndex(index, messages.length);
+    const rows = configuredBanners();
+    if (!rows.some((row) => row.enabled !== false)) throw new Error('Rotating Pinned Banners has no enabled banners.');
+    const bannerIndex = resolveEnabledIndex(rows, index);
     let ids = configuredMessageIds();
     let messageId = ids[bannerIndex] || '';
     let reposted = false;
@@ -472,7 +589,8 @@ function createPersistentPinManager({
       reposted = ensured.reposted;
     }
 
-    const seconds = Math.max(MIN_RESTORE_SECONDS, Math.min(MAX_PERSISTENT_PIN_ROTATION_SECONDS, Math.round(Number(durationSeconds) || config.rotationSeconds)));
+    const requestedDuration = durationSeconds === undefined || durationSeconds === null || durationSeconds === '' ? effectiveDuration(bannerIndex) : Number(durationSeconds);
+    const seconds = Math.max(MIN_RESTORE_SECONDS, Math.min(MAX_PERSISTENT_PIN_ROTATION_SECONDS, Math.round(requestedDuration || effectiveDuration(bannerIndex))));
     try {
       await pinChatMessage(messageId, { durationSeconds: seconds });
     } catch (err) {
@@ -540,7 +658,7 @@ function createPersistentPinManager({
       activeStreamId: String(streamId || ''),
       activeMessageId: '',
       activeMessageIds: Array(messages.length).fill(''),
-      activeBannerIndex: 0,
+      activeBannerIndex: resolveEnabledIndex(configuredBanners(), 0),
       bannerEndsAt: null,
       postGeneration: 0,
       skipStreamId: ''
@@ -548,7 +666,9 @@ function createPersistentPinManager({
   }
 
   async function reconcileInternal(source = 'monitor') {
-    if (stopping || config.recoveryRequired || !config.enabled || !configuredMessages().length) {
+    const rows = configuredBanners();
+    const enabledRows = rows.filter((row) => row.enabled !== false);
+    if (stopping || config.recoveryRequired || !config.enabled || !enabledRows.length) {
       return { handled: false, reason: 'disabled_or_review' };
     }
     if (typeof getPinnedChatMessage !== 'function' || typeof pinChatMessage !== 'function') {
@@ -563,15 +683,23 @@ function createPersistentPinManager({
 
     const current = await getPinnedChatMessage();
     const currentId = String(current?.message_id || '').trim();
-    const messages = configuredMessages();
+    const banners = configuredBanners();
     let ids = configuredMessageIds();
     let index = currentIndex();
     let targetMessageId = ids[index] || String(config.activeMessageId || '').trim();
 
     const currentOwnedIndex = currentId ? ids.findIndex((id) => id && id === currentId) : -1;
+    if (currentId && currentOwnedIndex >= 0 && banners[currentOwnedIndex]?.enabled === false) {
+      // The currently pinned message is ours but that banner was just disabled.
+      // It is safe to replace our own pin with the next enabled banner.
+      const result = await pinBanner(index, effectiveDuration(index), { streamId });
+      console.log(`[Persistent Pin] Disabled active banner ${currentOwnedIndex + 1}; moved to banner ${index + 1} (${source}).`);
+      return result;
+    }
+
     if (currentId && currentOwnedIndex >= 0 && currentOwnedIndex !== index) {
-      // Adopt our own banner if Twitch still has a different banner from this
-      // stream pinned (for example after a restart during a handoff).
+      // Adopt our own enabled banner if Twitch still has a different banner from
+      // this stream pinned (for example after a restart during a handoff).
       index = currentOwnedIndex;
       targetMessageId = currentId;
       const twitchEndsAt = current?.ends_at ? new Date(current.ends_at) : null;
@@ -599,38 +727,42 @@ function createPersistentPinManager({
 
     if (currentId && currentId === targetMessageId) {
       if (!slotStarted) {
-        const result = await pinBanner(index, config.rotationSeconds, { streamId });
-        console.log(`[Persistent Pin] Started banner ${index + 1}/${messages.length} for ${config.rotationSeconds}s (${source}).`);
+        const duration = effectiveDuration(index);
+        const result = await pinBanner(index, duration, { streamId });
+        console.log(`[Persistent Pin] Started banner ${index + 1}/${banners.length} for ${duration}s (${source}).`);
         return result;
       }
       if (!due) {
         scheduleRotationTimer();
         return { handled: false, reason: 'already_pinned', messageId: currentId, bannerIndex: index };
       }
-      const nextIndex = (index + 1) % messages.length;
-      const result = await pinBanner(nextIndex, config.rotationSeconds, { streamId });
-      console.log(`[Persistent Pin] Rotated to banner ${nextIndex + 1}/${messages.length} for ${config.rotationSeconds}s (${source}).`);
+      const nextBannerIndex = nextIndex(index);
+      const duration = effectiveDuration(nextBannerIndex);
+      const result = await pinBanner(nextBannerIndex, duration, { streamId });
+      console.log(`[Persistent Pin] Rotated to banner ${nextBannerIndex + 1}/${banners.length} for ${duration}s (${source}).`);
       return result;
     }
 
     // There is no active pin. If the interrupted banner still has at least the
     // Twitch minimum duration left, resume only that remaining budget. Otherwise
-    // its slot is considered consumed and the next banner receives a fresh slot.
+    // its slot is considered consumed and the next enabled banner gets a fresh slot.
     if (!slotStarted) {
-      const result = await pinBanner(index, config.rotationSeconds, { streamId });
-      console.log(`[Persistent Pin] Started banner ${index + 1}/${messages.length} for ${config.rotationSeconds}s (${source}).`);
+      const duration = effectiveDuration(index);
+      const result = await pinBanner(index, duration, { streamId });
+      console.log(`[Persistent Pin] Started banner ${index + 1}/${banners.length} for ${duration}s (${source}).`);
       return result;
     }
 
     if (remainingSeconds >= MIN_RESTORE_SECONDS) {
       const result = await pinBanner(index, remainingSeconds, { streamId });
-      console.log(`[Persistent Pin] Resumed banner ${index + 1}/${messages.length} with ${remainingSeconds}s remaining (${source}).`);
+      console.log(`[Persistent Pin] Resumed banner ${index + 1}/${banners.length} with ${remainingSeconds}s remaining (${source}).`);
       return result;
     }
 
-    const nextIndex = (index + 1) % messages.length;
-    const result = await pinBanner(nextIndex, config.rotationSeconds, { streamId });
-    console.log(`[Persistent Pin] Interrupted banner ${index + 1}/${messages.length} expired; advanced to banner ${nextIndex + 1}/${messages.length} (${source}).`);
+    const nextBannerIndex = nextIndex(index);
+    const duration = effectiveDuration(nextBannerIndex);
+    const result = await pinBanner(nextBannerIndex, duration, { streamId });
+    console.log(`[Persistent Pin] Interrupted banner ${index + 1}/${banners.length} expired; advanced to banner ${nextBannerIndex + 1}/${banners.length} for ${duration}s (${source}).`);
     return result;
   }
 
@@ -662,7 +794,7 @@ function createPersistentPinManager({
   }
 
   async function handleStreamOnline({ event = {} } = {}) {
-    if (!config.enabled || !configuredMessages().length) return { handled: false, reason: 'not_configured' };
+    if (!config.enabled || !enabledBanners().length) return { handled: false, reason: 'not_configured' };
 
     const streamId = String(event?.id || event?.stream_id || '').trim();
     const live = streamStatus();
@@ -692,7 +824,7 @@ function createPersistentPinManager({
           activeStreamId: '',
           activeMessageId: '',
           activeMessageIds: Array(configuredMessages().length).fill(''),
-          activeBannerIndex: 0,
+          activeBannerIndex: resolveEnabledIndex(configuredBanners(), 0),
           bannerEndsAt: null,
           postGeneration: 0,
           skipStreamId: ''
@@ -711,7 +843,7 @@ function createPersistentPinManager({
       stopMonitor();
       return { live: false };
     }
-    if (!config.enabled || !configuredMessages().length) {
+    if (!config.enabled || !enabledBanners().length) {
       stopMonitor();
       return { live: true, enabled: false };
     }
@@ -727,7 +859,7 @@ function createPersistentPinManager({
   }
 
   async function repin() {
-    if (!configuredMessages().length) return { handled: false, reason: 'not_configured' };
+    if (!enabledBanners().length) return { handled: false, reason: 'not_configured' };
     if (!config.enabled) await persistEnabled(true);
 
     const status = streamStatus();
@@ -736,25 +868,19 @@ function createPersistentPinManager({
 
     beginPinPriorityHold();
     try {
-      const result = await runExclusive(async () => {
-        try {
-          const current = typeof getPinnedChatMessage === 'function' ? await getPinnedChatMessage() : null;
-          const currentId = String(current?.message_id || '').trim();
-          const ids = configuredMessageIds();
-          const targetId = ids[currentIndex()] || '';
-          // !repin is an explicit broadcaster/mod command, so it intentionally
-          // replaces the current pin. Automatic banner rotation never does this.
-          if (currentId && currentId !== targetId && typeof unpinChatMessage === 'function') await unpinChatMessage(currentId);
-          const pinned = await pinBanner(currentIndex(), config.rotationSeconds, { streamId: status.streamId || config.activeStreamId || '' });
-          console.log(`[Persistent Pin] !repin restored banner ${pinned.bannerIndex + 1}/${configuredMessages().length} and enabled persistence.`);
-          return pinned;
-        } catch (err) {
-          console.error('[Persistent Pin] !repin failed:', err?.message || err);
-          return { handled: false, reason: 'error' };
-        }
-      });
-      if (result?.handled) await holdOtherAutomations();
+      const result = await reconcileNow('repin_command');
+      if (result?.handled) {
+        console.log(`[Persistent Pin] !repin enabled rotation and restored banner ${Number(result.bannerIndex) + 1}/${configuredBanners().length}.`);
+        await holdOtherAutomations();
+      } else if (result?.reason === 'displaced') {
+        console.log('[Persistent Pin] !repin enabled rotation; another pin is active, so banners are waiting for the slot.');
+      } else {
+        console.log(`[Persistent Pin] !repin enabled rotation (${result?.reason || 'no immediate pin needed'}).`);
+      }
       return result;
+    } catch (err) {
+      console.error('[Persistent Pin] !repin failed:', err?.message || err);
+      return { handled: false, reason: 'error' };
     } finally {
       endPinPriorityHold();
     }
@@ -772,15 +898,20 @@ function createPersistentPinManager({
         const current = typeof getPinnedChatMessage === 'function' ? await getPinnedChatMessage() : null;
         const currentId = String(current?.message_id || '').trim();
         if (!currentId) {
-          console.log('[Persistent Pin] !unpin disabled persistence; nothing was currently pinned.');
+          console.log('[Persistent Pin] !unpin disabled rotation; nothing was currently pinned.');
           return { handled: true, reason: 'nothing_pinned' };
+        }
+        const ownIds = new Set(configuredMessageIds().filter(Boolean));
+        if (!ownIds.has(currentId)) {
+          console.log('[Persistent Pin] !unpin disabled rotation; the current manual/temporary pin was left untouched.');
+          return { handled: true, reason: 'other_pin_preserved', messageId: currentId };
         }
         if (typeof unpinChatMessage !== 'function') throw new Error('Twitch pinned-chat API is unavailable.');
         await unpinChatMessage(currentId);
-        console.log('[Persistent Pin] !unpin removed the current pin and disabled persistence.');
+        console.log('[Persistent Pin] !unpin removed the active rotating banner and disabled rotation.');
         return { handled: true, messageId: currentId };
       } catch (err) {
-        console.error('[Persistent Pin] !unpin disabled persistence, but removing the current pin failed:', err?.message || err);
+        console.error('[Persistent Pin] !unpin disabled rotation, but removing the active banner failed:', err?.message || err);
         return { handled: false, reason: 'error' };
       }
     });
@@ -841,5 +972,6 @@ module.exports = {
   MAX_PERSISTENT_PIN_HOLD_SECONDS,
   PERSISTENT_PIN_MONITOR_INTERVAL_MS,
   createPersistentPinManager,
-  normalizeConfig
+  normalizeConfig,
+  normalizeBannerOverrideSeconds
 };

@@ -20,9 +20,9 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
   app.post('/eventsub-reactions/persistent-pin', requireModSession, async (req, res) => {
     if (!getDatabaseConnected()) return unavailable(res);
     const manager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
-    if (!manager?.saveConfig) return res.status(503).json({ success: false, error: 'Persistent Stream Pin is unavailable.' });
+    if (!manager?.saveConfig) return res.status(503).json({ success: false, error: 'Rotating Pinned Banners are unavailable.' });
     try { return res.json({ success: true, persistentPin: await manager.saveConfig(req.body || {}) }); }
-    catch (err) { return res.status(400).json({ success: false, error: err.message || 'Could not save Persistent Stream Pin.' }); }
+    catch (err) { return res.status(400).json({ success: false, error: err.message || 'Could not save Rotating Pinned Banners.' }); }
   });
   app.post('/eventsub-reactions/save', requireModSession, async (req, res) => {
     const manager = getEventSubReactionManager();
