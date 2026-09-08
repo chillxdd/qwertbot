@@ -88,6 +88,8 @@ const TWITCH_BROADCASTER_SCOPES = [
 ];
 const OAUTH_STATE_LIFETIME = 10 * 60 * 1000;
 const OAUTH_VALIDATION_INTERVAL = 50 * 60 * 1000;
+const EVENTSUB_HEALTHY_ENSURE_INTERVAL = 60 * 60 * 1000;
+const EVENTSUB_RETRY_ENSURE_INTERVAL = 5 * 60 * 1000;
 const MOD_SESSION_COOKIE = 'sqwert_mod_session';
 const MOD_SESSION_LIFETIME = 12 * 60 * 60 * 1000;
 const MOD_SESSION_COOKIE_SECURE = Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER || process.env.NODE_ENV === 'production');
@@ -729,12 +731,32 @@ async function activateBot() {
   eventSubInbox.start();
   try { await persistentPinManager.syncLiveState(); }
   catch (err) { console.warn('[Persistent Pin] Startup sync pending:', err.message); }
-  try { await ensureEventSubSubscriptions(); }
+  try { await runEventSubEnsure(); }
   catch (err) { console.warn('[EventSub] Subscription setup pending:', err.message); }
   startOAuthValidationLoop();
   retentionTimer = setInterval(() => {
     if (runtime.isActive()) void purgeExpiredOptedOutProfiles(channelName).catch((err) => console.warn('[Retention]', err.message));
   }, 6 * 60 * 60000);
+}
+
+function eventSubEnsureHealthy(results) {
+  return Array.isArray(results) && results.length > 0 && results.every((item) =>
+    item && item.status !== 'error' && item.status !== 'skipped_missing_scope'
+  );
+}
+
+async function runEventSubEnsure() {
+  // Record every attempt, including startup failures. This prevents the 30-second
+  // runtime maintenance loop from immediately repeating the same ensure call.
+  maintainBot.lastEnsure = Date.now();
+  try {
+    const results = await ensureEventSubSubscriptions();
+    maintainBot.lastEnsureHealthy = eventSubEnsureHealthy(results);
+    return results;
+  } catch (err) {
+    maintainBot.lastEnsureHealthy = false;
+    throw err;
+  }
 }
 
 async function maintainBot() {
@@ -746,10 +768,15 @@ async function maintainBot() {
       catch (err) { console.warn('[Bot] Recovery pending:', err.message); }
     }
   }
-  // Optional-scope/auth failures must not permanently disable EventSub setup.
-  if (!maintainBot.lastEnsure || Date.now() - maintainBot.lastEnsure > 5 * 60000) {
-    maintainBot.lastEnsure = Date.now();
-    try { await ensureEventSubSubscriptions(); }
+
+  // Healthy EventSub subscriptions only need a periodic self-heal check. If any
+  // subscription is missing, errored, or waiting on broadcaster scope/auth, retry
+  // every five minutes until the full set is healthy again.
+  const ensureInterval = maintainBot.lastEnsureHealthy
+    ? EVENTSUB_HEALTHY_ENSURE_INTERVAL
+    : EVENTSUB_RETRY_ENSURE_INTERVAL;
+  if (!maintainBot.lastEnsure || Date.now() - maintainBot.lastEnsure >= ensureInterval) {
+    try { await runEventSubEnsure(); }
     catch (err) { console.warn('[EventSub] Setup retry pending:', err.message); }
   }
 }
