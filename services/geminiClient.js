@@ -130,11 +130,10 @@ function normalizePriority(value) {
   return 'normal';
 }
 
-function buildGeminiRequestBody(prompt, { stream = false, googleSearch = false, model = GEMINI_MODEL } = {}) {
+function buildGeminiRequestBody(prompt, { stream = false, model = GEMINI_MODEL } = {}) {
   const requestedModel = String(model || GEMINI_MODEL).trim() || GEMINI_MODEL;
   const body = { model: requestedModel, input: prompt };
   if (stream) body.stream = true;
-  if (googleSearch === true) body.tools = [{ type: 'google_search' }];
   return body;
 }
 
@@ -249,7 +248,7 @@ function streamEventFailure(event) {
   return err;
 }
 
-async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal = null, googleSearch = false, model = GEMINI_MODEL }) {
+async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal = null, model = GEMINI_MODEL }) {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
@@ -282,7 +281,7 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
         'Content-Type': 'application/json',
         'x-goog-api-key': apiKey
       },
-      body: JSON.stringify(buildGeminiRequestBody(prompt, { stream: true, googleSearch, model })),
+      body: JSON.stringify(buildGeminiRequestBody(prompt, { stream: true, model })),
       signal: controller.signal
     });
 
@@ -424,9 +423,9 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
   }
 }
 
-async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false, cancelSignal = null, googleSearch = false, model = GEMINI_MODEL } = {}) {
+async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false, cancelSignal = null, model = GEMINI_MODEL } = {}) {
   operationContext.throwIfCancelled();
-  if (stream === true) return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal, googleSearch, model });
+  if (stream === true) return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal, model });
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
   const startedAt = Date.now();
@@ -434,7 +433,7 @@ async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, la
     const response = await fetchWithTimeout(GEMINI_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(buildGeminiRequestBody(prompt, { googleSearch, model })),
+      body: JSON.stringify(buildGeminiRequestBody(prompt, { model })),
       timeoutMs, signal: cancelSignal
     });
     let data;

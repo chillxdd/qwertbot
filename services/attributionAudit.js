@@ -170,7 +170,7 @@ function buildAuditPrompt({
   const sentenceRows = sentences.map((sentence, index) => `[S${index + 1}] ${sentence}`).join('\n');
   const modeRules = mode === 'tagged'
     ? `- This is a Twitch bot answer. This audit protects CHANNEL/PERSON ATTRIBUTION; it is NOT a general-world fact checker.
-- Ordinary public/general-knowledge claims may come from the model's built-in knowledge or Google Search grounding and do NOT need to appear in Twitch chat, lore, session memory, viewer profiles, or verified Twitch events. Do not delete or weaken a public factual answer merely because channel evidence does not mention it.
+- Ordinary public/general-knowledge claims may come from the model's built-in knowledge or supplied public web-search evidence and do NOT need to appear in Twitch chat, lore, session memory, viewer profiles, or verified Twitch events. Do not delete or weaken a public factual answer merely because channel evidence does not mention it.
 - Verify identity binding, fact ownership, subject/object direction, possession, relationships, pronoun direction, current-stream claims, community-history claims, and broad claims about chat/viewers.
 - The REQUESTER and RESPONSE ADDRESSEE identities in TRUSTED IDENTITY REGISTRY are authoritative. In direct mode they may be the same account; in relay mode they are different accounts.
 - A profile/lore fact about one person may not be transferred to another. "X created Y" may not become "Y created X" or "X is your creator" when "your" refers to X.
