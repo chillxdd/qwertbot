@@ -37,6 +37,12 @@ const DEFAULT_TAGGED_QUESTION_SECURITY_REFUSAL = 'Cute. Chat does not get to rew
 const STREAM_TIME_ZONE = 'America/Los_Angeles';
 const JUST_ENDED_WINDOW_MS = 60 * 60 * 1000;
 
+const DEFAULT_TAGGED_QUESTION_SEARCH_MODEL = 'gemini-2.5-flash-lite';
+
+function taggedQuestionSearchModel() {
+  return String(process.env.GEMINI_TAGGED_QUESTION_SEARCH_MODEL || DEFAULT_TAGGED_QUESTION_SEARCH_MODEL).trim() || DEFAULT_TAGGED_QUESTION_SEARCH_MODEL;
+}
+
 
 function formatPacificTimestamp(value) {
   const timestamp = Number(value || 0);
@@ -629,6 +635,7 @@ function createBotPersonalityManager({
     }
 
     const searchDeadline = Date.now() + TAGGED_QUESTION_RETRY_WINDOW_MS;
+    const searchModel = taggedQuestionSearchModel();
     try {
       operationContext.throwIfCancelled();
       const answer = await requestGeminiText(prompt, {
@@ -637,7 +644,8 @@ function createBotPersonalityManager({
         timeoutMs: TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS,
         deadlineAt: searchDeadline,
         totalDeadlineAt: searchDeadline,
-        googleSearch: true
+        googleSearch: true,
+        model: searchModel
       });
       searchGroundingFailureAt = 0;
       return answer;
@@ -648,9 +656,9 @@ function createBotPersonalityManager({
           MIN_BOT_PERSONALITY_COOLDOWN_SECONDS,
           Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(config.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))
         );
-        console.warn(`[Tagged Questions] Google Search grounding returned ${err?.status || 'an availability error'}; disabling Search for ${formatCooldownRemaining(cooldownSeconds)} using the configured Tagged Question cooldown, then answering without Search.`);
+        console.warn(`[Tagged Questions] Google Search grounding on ${searchModel} returned ${err?.status || 'an availability error'}; disabling Search for ${formatCooldownRemaining(cooldownSeconds)} using the configured Tagged Question cooldown, then answering with ${process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'} without Search.`);
       } else {
-        console.warn(`[Tagged Questions] Google Search grounding attempt failed; answering without Search instead of retrying the Search tool: ${err?.message || err}`);
+        console.warn(`[Tagged Questions] Google Search grounding on ${searchModel} failed; answering with ${process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'} without Search instead of retrying the Search tool: ${err?.message || err}`);
       }
     }
 
@@ -1221,7 +1229,7 @@ ANSWERING RULES:
 ${identityAnswerRules}
 ${sharedChatAnswerRules}
 - GENERAL/PUBLIC KNOWLEDGE IS ALLOWED: ordinary factual questions about games, Pokemon, science, technology, history, entertainment, public people/entities, current public events, and similar world knowledge do NOT require Twitch chat, lore, session-memory, or viewer-profile evidence. Answer them directly.
-- Google Search grounding may be available for GENERAL questions. If the answer is current, recent, obscure, specific, or you are not confident from model knowledge alone, use Google Search rather than saying you lack channel context. The search tool itself decides whether a web lookup is useful.
+- Google Search grounding may be available for GENERAL questions through a dedicated search model. If the answer is current, recent, obscure, specific, or you are not confident from model knowledge alone, use Google Search rather than saying you lack channel context. The search tool itself decides whether a web lookup is useful. If Search is unavailable, still answer from the primary model's built-in general knowledge when safe to do so.
 - Web search is PUBLIC-WORLD EVIDENCE ONLY. Never use public search results to invent or infer private viewer facts, current-stream events, what someone in chat said/did, channel relationships, moderator-only lore, or community history. Those claims still require the supplied channel evidence; if that private/current-stream evidence is missing, say you do not have that retained detail.
 - For requests to cause real-world physical harm, violence, or destruction, do not provide actionable assistance, targeting, timing, instructions, or operational details. Refuse or harmlessly deflect in the configured personality; a brief obviously non-operational joke is fine. Do not replace such a safe refusal with a missing-context answer merely because channel evidence is absent.
 - Do not mention that you searched, cite raw URLs, or dump source lists unless the viewer specifically asks for sources; keep the final Twitch answer compact.
