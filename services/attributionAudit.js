@@ -354,6 +354,29 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
   return resultMap;
 }
 
+function hasTaggedSpecificAttributionRisk(sentence, identities = []) {
+  const text = String(sentence || '').trim();
+  if (!text) return false;
+
+  // Channel/community claims always need channel evidence. This deliberately
+  // excludes public entities such as companies, games, Pokemon, countries, etc.
+  if (/\b(?:viewer|viewers|chat|the chat|community|broadcaster|streamer|moderator|mods?|current stream|this stream|earlier on stream|earlier this stream|last stream)\b/i.test(text)) return true;
+
+  // A bare vocative/mention ("Motmo, nope.") is not a factual attribution.
+  // A named identity plus an explicit personal predicate is.
+  if (identities.some((identity) =>
+    textMentionsIdentity(text, identity) && sentenceHasExplicitIdentityPredicate(text, identity)
+  )) return true;
+
+  // Pronouns only become high-risk when they carry a personal/history/status
+  // claim. Generic conversational uses such as "your request is denied" or
+  // "you can press X" should survive an attribution-audit outage.
+  const pronounPersonalClaim = /\b(?:you|your|yours|he|she|him|his|her|hers|they|them|their|theirs)\b[^.!?;]{0,90}\b(?:said|says|asked|joked|claimed|reported|decided|agreed|suggested|likes?|loves?|hates?|prefers?|owns?|owned|created|made|played|watched|won|lost|died|joined|left|returned|remembered|forgot|met|knows?|knew|gifted|cheered|raided|subscribed)\b/i;
+  const personalRelationship = /\b(?:your|his|her|their)\s+(?:wife|husband|partner|girlfriend|boyfriend|friend|family|mother|father|mom|dad|sister|brother|child|kid|job|age|nickname|role|status|relationship|preference|opinion|history|profile|lore)\b/i;
+  const pronounStatusClaim = /\b(?:you|he|she|they)\b[^.!?;]{0,60}\b(?:are|is|was|were)\b[^.!?;]{0,40}\b(?:moderator|mod|broadcaster|streamer|viewer|friend|partner|husband|wife|girlfriend|boyfriend|creator|owner|regular|middle child)\b/i;
+  return pronounPersonalClaim.test(text) || personalRelationship.test(text) || pronounStatusClaim.test(text);
+}
+
 function hasAttributionRisk(sentence, identities = [], mode = 'recap') {
   const text = String(sentence || '').trim();
   if (!text) return false;
@@ -364,8 +387,9 @@ function hasAttributionRisk(sentence, identities = [], mode = 'recap') {
   if (mode === 'tagged') {
     // General-world facts such as "Minior has seven core colors" are not
     // attribution risks just because they contain verbs like is/has/won.
-    // Fail closed only when the sentence points back at a conversation/channel
-    // participant, broad chat/community group, or speaker/addressee pronoun.
+    // Keep the audit broad enough to catch ambiguous conversational pronouns,
+    // but use hasTaggedSpecificAttributionRisk() for fail-closed decisions so a
+    // harmless general answer is not replaced by an identity-context apology.
     return /\b(?:you|your|yours|yourself|he|she|him|his|her|hers|they|them|their|theirs|viewer|viewers|chat|community|broadcaster|streamer|moderator|mods?)\b/i.test(text);
   }
 
@@ -416,12 +440,14 @@ function applyAuditResults(sentences, resultMap) {
 function conservativeFallback(text, identities, mode, safeFallback = '') {
   const sentences = splitSentences(text);
   if (mode === 'tagged') {
-    const risky = sentences.some((sentence) => hasAttributionRisk(sentence, identities, mode));
+    const specificallyRisky = sentences.filter((sentence) => hasTaggedSpecificAttributionRisk(sentence, identities));
+    const risky = specificallyRisky.length > 0;
     return {
       text: risky ? String(safeFallback || '').trim() : String(text || '').trim(),
       changed: risky,
       auditFailed: true,
-      unsupported: risky ? sentences.filter((sentence) => hasAttributionRisk(sentence, identities, mode)).map((sentence) => ({ sentence, replacement: '', reason: 'audit unavailable' })) : []
+      fallbackCategory: risky ? 'identity-context' : 'general-answer-preserved',
+      unsupported: specificallyRisky.map((sentence) => ({ sentence, replacement: '', reason: 'audit unavailable: specific channel/person attribution requires evidence' }))
     };
   }
   const kept = sentences.filter((sentence) => !hasAttributionRisk(sentence, identities, mode));
@@ -464,6 +490,7 @@ async function auditGeneratedAttribution({
   requestText = null
 } = {}) {
   let current = String(text || '').replace(/\s+/g, ' ').trim();
+  const originalText = current;
   if (!current) return { text: '', changed: false, audited: 0, unsupported: [] };
   const chat = normalizeChatRecords(chatRecords);
   const events = normalizeEventRecords(eventRecords);
@@ -536,7 +563,20 @@ async function auditGeneratedAttribution({
     }
     changed = true;
     current = applied.text;
-    if (!current) break;
+    if (!current) {
+      if (mode === 'tagged') {
+        const fallback = conservativeFallback(originalText, identities, mode, safeFallback);
+        return {
+          ...fallback,
+          changed: true,
+          audited,
+          unsupported: [...allUnsupported, ...(fallback.unsupported || [])],
+          identities,
+          strippedAll: true
+        };
+      }
+      break;
+    }
 
     // A replacement generated on the final allowed pass has not itself been
     // audited. Never let that rewritten attribution escape unchecked.
@@ -572,6 +612,7 @@ module.exports = {
   sentenceHasBroadGroupGeneralization,
   validateRecapEvidence,
   hasAttributionRisk,
+  hasTaggedSpecificAttributionRisk,
   replacementIsConservative,
   applyAuditResults,
   conservativeFallback,
