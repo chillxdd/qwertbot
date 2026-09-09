@@ -964,7 +964,7 @@
           <div class="personality-cooldown-field">
             <label class="prompt-label" for="botPersonalityCooldown">Cooldown</label>
             <div class="duration-field"><input id="botPersonalityCooldown" type="number" min="5" max="86400" step="0.001" value="5"><span class="duration-unit">seconds</span></div>
-            <div class="detail">Regular viewers only; mods can bypass.</div>
+            <div class="detail">Regular viewers only; mods can bypass. If Google Search grounding is quota-blocked or unavailable, this same duration controls when Search is tried again; mods do not bypass that backend cooldown.</div>
           </div>
           <div class="personality-cooldown-field">
             <label class="prompt-label" for="botPersonalityRecapBuffer">Recap Collision Buffer</label>
@@ -1245,8 +1245,8 @@
     <div id="oauthPanel" class="section-panel">
       <h3>OAuth Management</h3>
       <div class="oauth-grid">
-        <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div><div class="oauth-action"><button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button><div id="oauthMsg" class="detail"></div></div></div>
-        <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div><div class="oauth-action"><button id="broadcasterOauthBtn">Authorize / Reauthorize Broadcaster</button><div id="broadcasterOauthMsg" class="detail"></div></div></div>
+        <div class="box"><div id="oauthBotLabel" class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div><div class="oauth-action"><button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button><div id="oauthMsg" class="detail"></div></div></div>
+        <div class="box"><div id="oauthBroadcasterLabel" class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div><div class="oauth-action"><button id="broadcasterOauthBtn">Authorize / Reauthorize Broadcaster</button><div id="broadcasterOauthMsg" class="detail"></div></div></div>
         <div class="box wide"><div class="label">Twitch Chat API</div><div id="oauthChatApiStatusBox" class="value warn">Checking...</div><div id="oauthChatApiDetail" class="detail"></div></div>
       </div>
     </div>

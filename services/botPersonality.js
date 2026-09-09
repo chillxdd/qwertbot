@@ -210,6 +210,26 @@ function taggedQuestionWebSearchEnabled() {
   return !['0', 'false', 'no', 'off', 'disabled'].includes(value);
 }
 
+function geminiErrorText(err) {
+  const data = err?.geminiData || {};
+  return [
+    err?.message,
+    data?.error?.message,
+    data?.message,
+    data?.error?.status
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function isSearchGroundingUnavailableError(err) {
+  const status = Number(err?.status || 0);
+  const text = geminiErrorText(err);
+  if (status === 429) return true;
+  if (status === 400 || status === 403) {
+    return /google.?search|grounding|tool|unsupported|not available|quota|billing|plan/.test(text);
+  }
+  return false;
+}
+
 function isModOrBroadcaster(tags = {}) {
   // Source-room roles in Shared Chat never grant GeneralQwert-room access or
   // cooldown bypasses. A guest can still use viewer-facing Tagged Questions.
@@ -218,7 +238,7 @@ function isModOrBroadcaster(tags = {}) {
   return badges.broadcaster === '1' || tags.mod === true || tags.mod === '1' || badges.moderator === '1';
 }
 
-async function callGeminiWithRetries(prompt, retryConfig, onRetry, { googleSearch = false } = {}) {
+async function callGeminiWithRetries(prompt, retryConfig, onRetry, { googleSearch = false, label = 'tagged-question' } = {}) {
   const retry = normalizeAiRetryConfig(retryConfig);
   const deadline = Date.now() + TAGGED_QUESTION_RETRY_WINDOW_MS;
   const maxAttempts = 1 + (retry.enabled ? retry.maxRetries : 0);
@@ -237,7 +257,7 @@ async function callGeminiWithRetries(prompt, retryConfig, onRetry, { googleSearc
     if (remainingMs <= 1000) break;
     try {
       operationContext.throwIfCancelled();
-      return await requestGeminiText(prompt, { label: 'tagged-question', priority: 'high', timeoutMs: Math.min(TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS, remainingMs), deadlineAt: deadline, totalDeadlineAt: deadline, googleSearch });
+      return await requestGeminiText(prompt, { label, priority: 'high', timeoutMs: Math.min(TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS, remainingMs), deadlineAt: deadline, totalDeadlineAt: deadline, googleSearch });
     } catch (err) {
       lastError = err;
       if (!retry.enabled || !isRetryableGeminiError(err)) break;
@@ -562,6 +582,7 @@ function createBotPersonalityManager({
   let lastPublicResponseAt = 0;
   let lastTaggedResponseAt = 0;
   let taggedQuestionsInFlight = 0;
+  let searchGroundingFailureAt = 0;
   const ownResponses = [];
   const failureGuards = new Map();
   const OWN_RESPONSE_TTL_MS = 15000;
@@ -583,6 +604,57 @@ function createBotPersonalityManager({
     if (index === -1) return false;
     ownResponses.splice(index, 1);
     return true;
+  }
+
+  function getSearchGroundingCooldownMs() {
+    if (!searchGroundingFailureAt) return 0;
+    const cooldownMs = Math.max(
+      MIN_BOT_PERSONALITY_COOLDOWN_SECONDS * 1000,
+      Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS * 1000, Number(config.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS) * 1000)
+    );
+    const remainingMs = Math.max(0, (searchGroundingFailureAt + cooldownMs) - Date.now());
+    if (remainingMs <= 0) searchGroundingFailureAt = 0;
+    return remainingMs;
+  }
+
+  async function callTaggedQuestionGemini(prompt, retryConfig, onRetry, { allowWebSearch = false } = {}) {
+    if (!allowWebSearch) {
+      return callGeminiWithRetries(prompt, retryConfig, onRetry, { googleSearch: false, label: 'tagged-question' });
+    }
+
+    const searchCooldownRemainingMs = getSearchGroundingCooldownMs();
+    if (searchCooldownRemainingMs > 0) {
+      console.info(`[Tagged Questions] Google Search grounding cooldown active (${formatCooldownRemaining(searchCooldownRemainingMs / 1000)} remaining); answering with Gemini knowledge only.`);
+      return callGeminiWithRetries(prompt, retryConfig, onRetry, { googleSearch: false, label: 'tagged-question-no-search-cooldown' });
+    }
+
+    const searchDeadline = Date.now() + TAGGED_QUESTION_RETRY_WINDOW_MS;
+    try {
+      operationContext.throwIfCancelled();
+      const answer = await requestGeminiText(prompt, {
+        label: 'tagged-question-search',
+        priority: 'high',
+        timeoutMs: TAGGED_QUESTION_ATTEMPT_TIMEOUT_MS,
+        deadlineAt: searchDeadline,
+        totalDeadlineAt: searchDeadline,
+        googleSearch: true
+      });
+      searchGroundingFailureAt = 0;
+      return answer;
+    } catch (err) {
+      if (isSearchGroundingUnavailableError(err)) {
+        searchGroundingFailureAt = Date.now();
+        const cooldownSeconds = Math.max(
+          MIN_BOT_PERSONALITY_COOLDOWN_SECONDS,
+          Math.min(MAX_BOT_PERSONALITY_COOLDOWN_SECONDS, Number(config.cooldownSeconds || MIN_BOT_PERSONALITY_COOLDOWN_SECONDS))
+        );
+        console.warn(`[Tagged Questions] Google Search grounding returned ${err?.status || 'an availability error'}; disabling Search for ${formatCooldownRemaining(cooldownSeconds)} using the configured Tagged Question cooldown, then answering without Search.`);
+      } else {
+        console.warn(`[Tagged Questions] Google Search grounding attempt failed; answering without Search instead of retrying the Search tool: ${err?.message || err}`);
+      }
+    }
+
+    return callGeminiWithRetries(prompt, retryConfig, onRetry, { googleSearch: false, label: 'tagged-question-no-search-fallback' });
   }
 
   async function loadConfig() {
@@ -1192,9 +1264,9 @@ Output only the answer.`;
     let answer;
     try {
       const allowPublicWebSearch = taggedQuestionWebSearchEnabled() && !persistentLoreHistoryOverride && !currentStreamRecallMode;
-      answer = await callGeminiWithRetries(prompt, config.aiRetry, ({ attempt, maxRetries, delayMs, error }) => {
+      answer = await callTaggedQuestionGemini(prompt, config.aiRetry, ({ attempt, maxRetries, delayMs, error }) => {
         console.warn(`[Tagged Questions] Temporary Gemini failure for ${displayName || 'viewer'}; retry ${attempt}/${maxRetries} in ${(delayMs / 1000).toFixed(0)}s: ${error?.message || error}`);
-      }, { googleSearch: allowPublicWebSearch });
+      }, { allowWebSearch: allowPublicWebSearch });
     } catch (err) {
       failureGuards.set(failureGuardKey, Date.now() + TAGGED_QUESTION_FAILURE_GUARD_MS);
       console.error(`[Tagged Questions] Gemini failed for ${displayName || 'viewer'} after retry handling:`, err?.message || err);
