@@ -113,10 +113,11 @@ function parseClipArguments(rawMessage, commandName, defaults = {}) {
     return { title: '', duration: defaultDuration, autoTitle: true, usedDefaults: true };
   }
 
-  // A leading number is a duration ONLY when followed by a pipe delimiter.
-  // This keeps "!clip 30 seconds to mars" as a title. Both "60 | title"
-  // and "60s | title" override duration. A blank right side intentionally
-  // means "use this duration and generate an automatic title".
+  // Duration syntax:
+  // - A pure numeric argument ("45" or "45s") is a duration with auto-title.
+  // - A leading duration followed by a pipe ("45 | title" or "45s | title")
+  //   overrides duration and optionally supplies a title.
+  // - Anything else remains a title, so "!clip 30 seconds to mars" still works.
   const explicit = args.match(/^([0-9]+(?:\.[0-9]+)?)\s*s?\s*\|\s*(.*)$/i);
   if (explicit) {
     const duration = Number(explicit[1]);
@@ -128,6 +129,20 @@ function parseClipArguments(rawMessage, commandName, defaults = {}) {
       title,
       duration,
       autoTitle: !title,
+      usedDefaults: false
+    };
+  }
+
+  const durationOnly = args.match(/^([0-9]+(?:\.[0-9]+)?)\s*s?$/i);
+  if (durationOnly) {
+    const duration = Number(durationOnly[1]);
+    if (!Number.isFinite(duration) || duration < MIN_CLIP_DURATION || duration > MAX_CLIP_DURATION) {
+      return { error: `Duration must be between ${MIN_CLIP_DURATION} and ${MAX_CLIP_DURATION} seconds.` };
+    }
+    return {
+      title: '',
+      duration,
+      autoTitle: true,
       usedDefaults: false
     };
   }

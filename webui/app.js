@@ -92,6 +92,7 @@ async function status() {
       ? (d.database.connected ? 'Ready' : 'Check database connection')
       : '';
 
+    const singleAccountMode = Boolean(d.oauth.singleAccountMode);
     const botMissing = d.oauth.botMissingScopes || [];
     const broadcaster = d.oauth.broadcaster || {};
     const broadcasterMissing = broadcaster.missingScopes || [];
@@ -100,13 +101,17 @@ async function status() {
     const chatReady = Boolean(d.oauth.chatApiReady);
     $('chatApiStatusLabel').textContent = loggedIn ? 'Twitch Chat API Status' : 'Chat Connection';
     $('chatApiStatusBox').textContent = loggedIn
-      ? (chatReady ? 'BOT BADGE READY' : 'NOT READY')
-      : (chatReady ? 'CONNECTED AS CHATBOT' : 'NOT CONNECTED');
+      ? (chatReady ? (singleAccountMode ? 'CHAT READY' : 'BOT BADGE READY') : 'NOT READY')
+      : (chatReady ? (singleAccountMode ? 'CONNECTED' : 'CONNECTED AS CHATBOT') : 'NOT CONNECTED');
     $('chatApiStatusBox').className = `value ${chatReady ? 'good' : 'warn'}`;
     $('chatApiDetail').textContent = loggedIn
       ? (chatReady
-        ? 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
-        : (!botReady || !broadcasterReady ? 'Complete both OAuth grants in OAuth Management' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render Diagnostics.'))
+        ? singleAccountMode
+          ? 'Outgoing messages use the broadcaster account as the sender; Twitch does not show the Chat Bot badge for the channel broadcaster.'
+          : 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
+        : (!botReady || !broadcasterReady
+          ? singleAccountMode ? 'Complete the combined OAuth grant in OAuth Management' : 'Complete both OAuth grants in OAuth Management'
+          : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render Diagnostics.'))
       : '';
 
     if (loggedIn) {
@@ -249,7 +254,7 @@ function renderNativeResponseFields(command) {
     info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !setlast. Current live category must be an approved official Pokémon title.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
-    info.push(`<div class="detail native-command-syntax"><code>!${esc(command)} [title]</code><br><code>!${esc(command)} [5–60s] | [title]</code><br>Leave title blank for automatic naming.</div>`);
+    info.push(`<div class="detail native-command-syntax"><code>!${esc(command)} [title]</code><br><code>!${esc(command)} [5–60s]</code><br><code>!${esc(command)} [5–60s] | [title]</code><br>A duration by itself uses automatic naming.</div>`);
   }
 
   $('nativeResponseFields').innerHTML = [...settingFields, ...responseFields, ...info].join('');
