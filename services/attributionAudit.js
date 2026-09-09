@@ -169,10 +169,13 @@ function buildAuditPrompt({
   const sentences = splitSentences(text);
   const sentenceRows = sentences.map((sentence, index) => `[S${index + 1}] ${sentence}`).join('\n');
   const modeRules = mode === 'tagged'
-    ? `- This is a Twitch bot answer. Verify identity binding, fact ownership, subject/object direction, possession, relationships, and pronoun direction.
+    ? `- This is a Twitch bot answer. This audit protects CHANNEL/PERSON ATTRIBUTION; it is NOT a general-world fact checker.
+- Ordinary public/general-knowledge claims may come from the model's built-in knowledge or Google Search grounding and do NOT need to appear in Twitch chat, lore, session memory, viewer profiles, or verified Twitch events. Do not delete or weaken a public factual answer merely because channel evidence does not mention it.
+- Verify identity binding, fact ownership, subject/object direction, possession, relationships, pronoun direction, current-stream claims, community-history claims, and broad claims about chat/viewers.
 - The REQUESTER and RESPONSE ADDRESSEE identities in TRUSTED IDENTITY REGISTRY are authoritative. In direct mode they may be the same account; in relay mode they are different accounts.
 - A profile/lore fact about one person may not be transferred to another. "X created Y" may not become "Y created X" or "X is your creator" when "your" refers to X.
-- In APPLICATION-SUPPLIED CONTEXT, approved profile facts, matched manual/approved subject lore, explicit routing facts, and AUDITED memory claims may support attribution. BOT CONTEXT ONLY, LEGACY UNAUDITED MEMORY, metadata, and broad compact indexes are orientation only and do not independently prove a named claim.
+- In APPLICATION-SUPPLIED CONTEXT, approved profile facts, matched manual/approved subject lore, explicit routing facts, and AUDITED memory claims may support channel/person attribution. BOT CONTEXT ONLY, LEGACY UNAUDITED MEMORY, metadata, and broad compact indexes are orientation only and do not independently prove a named channel claim.
+- Treat public entities such as games, Pokemon/species, companies, countries, historical figures, products, and other world-knowledge subjects as GENERAL KNOWLEDGE unless the sentence specifically assigns them a relationship/action involving a channel identity.
 - Second-person pronouns must refer to the response addressee; first-person pronouns refer to the bot unless a quoted source clearly uses them differently.
 - A stylistic joke is allowed only if it does not create a new factual relationship or reassign an existing fact.`
     : `- This is ${mode === 'memory' ? 'temporary current-stream memory' : 'an hourly recap'}.
@@ -183,6 +186,10 @@ function buildAuditPrompt({
 - Broad group wording such as "chat/viewers joked, discussed, debated, believed, focused on..." requires repeated direct support from multiple source messages. One isolated viewer remark may only support narrow wording such as "one viewer joked..." when recap-worthy.
 - A verified event supports only the platform action it records; it does not prove motives, emotions, jokes, or reactions.
 - Do not infer chronology or causality from source order.`;
+
+  const sentenceScopeRule = mode === 'tagged'
+    ? '- If a sentence contains only public/general-world knowledge and makes no factual claim about a viewer, broadcaster, bot, channel, chat/community, current stream, or private channel history, mark supported=true for attribution purposes. evidenceIds may be empty. Do not fact-check public knowledge against channel context.'
+    : '- If the sentence has no specific person/entity attribution, use true only when its scope and generality are also supported.';
 
   return `You are performing a strict attribution and identity audit on ${label}.
 
@@ -205,7 +212,7 @@ FOR EACH SENTENCE:
 - For recap/memory mode, evidenceIds MUST list the exact M... chat and/or E... event source IDs that directly support the sentence's factual claims. Do not cite merely nearby or keyword-similar lines.
 - If the sentence says a named person IS/HAS a status, role, relationship, preference, property, nickname, reaction, decision, or action, at least one cited source must explicitly bind that predicate to that person. A different viewer mentioning similar words is not evidence.
 - If the sentence uses broad group wording (chat/viewers/everyone/community), cite at least two directly relevant source messages; one isolated remark is insufficient for a group-level claim.
-- If the sentence has no specific person/entity attribution, use true only when its scope and generality are also supported.
+${sentenceScopeRule}
 - If unsupported, provide a minimal replacement that removes only the unsupported attribution/generalization while preserving supported material.
 - A replacement may not add a new person, fact, motive, chronology, causal link, relationship, status, or broader scope.
 - If no safe minimal replacement exists, use an empty replacement.
@@ -352,11 +359,18 @@ function hasAttributionRisk(sentence, identities = [], mode = 'recap') {
   if (!text) return false;
   if (identities.some((identity) => textMentionsIdentity(text, identity))) return true;
   if (/@[A-Za-z0-9_]{2,25}\b/.test(text)) return true;
-  if (/\b[A-Za-z][A-Za-z0-9_]{1,30}['’]s\b/.test(text)) return true;
+  if (mode !== 'tagged' && /\b[A-Za-z][A-Za-z0-9_]{1,30}['’]s\b/.test(text)) return true;
+
+  if (mode === 'tagged') {
+    // General-world facts such as "Minior has seven core colors" are not
+    // attribution risks just because they contain verbs like is/has/won.
+    // Fail closed only when the sentence points back at a conversation/channel
+    // participant, broad chat/community group, or speaker/addressee pronoun.
+    return /\b(?:you|your|yours|yourself|he|she|him|his|her|hers|they|them|their|theirs|viewer|viewers|chat|community|broadcaster|streamer|moderator|mods?)\b/i.test(text);
+  }
 
   const relationshipOrAction = /\b(?:is|are|was|were|has|had|made|shared|played|won|lost|died|met|built|coded|wrote|bought|ate|drank|joined|left|returned|arrived|celebrated|flirted|talked|discussed|mentioned|recounted|told|showed|posted|linked|recommended|wanted|needed|knows?|knew|remembered|forgot|called|named|nicknamed|gave|received|sent|used|claimed|reported|created|creator|owns?|owned|belongs? to|likes?|loves?|hates?|watches?|said|asked|joked|decided|agreed|suggested|gifted|cheered|raided|subscribed|thinks?|believes?|prefers?|experienced|requested|his|her|their|your|you|he|she)\b/i.test(text);
   if (!relationshipOrAction) return false;
-  if (mode === 'tagged') return true;
 
   // Group-level recap phrasing is safe during an audit outage because it does
   // not assign the action to a particular person. Everything else with an
@@ -454,6 +468,13 @@ async function auditGeneratedAttribution({
   const chat = normalizeChatRecords(chatRecords);
   const events = normalizeEventRecords(eventRecords);
   const identities = collectIdentityRegistry({ chatRecords: chat, eventRecords: events, extraIdentities, channelName });
+  if (mode === 'tagged') {
+    const sentences = splitSentences(current);
+    const riskySentences = sentences.filter((sentence) => hasAttributionRisk(sentence, identities, mode));
+    if (!riskySentences.length) {
+      return { text: current, changed: false, audited: 0, unsupported: [], identities, skipped: 'no-attribution-risk' };
+    }
+  }
   const selectedChat = selectChatEvidence(current, chat, identities);
   const sharedChatRules = formatSharedChatAuditRules(chat);
   const allUnsupported = [];
