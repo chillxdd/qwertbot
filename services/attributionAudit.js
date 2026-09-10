@@ -211,9 +211,11 @@ FOR EACH SENTENCE:
 - supported must be the JSON boolean true ONLY when every named-person/entity attribution, personal descriptor/status, relationship, and broad group generalization in that sentence is directly supported and directionally correct.
 - For recap/memory mode, evidenceIds MUST list the exact M... chat and/or E... event source IDs that directly support the sentence's factual claims. Do not cite merely nearby or keyword-similar lines.
 - If the sentence says a named person IS/HAS a status, role, relationship, preference, property, nickname, reaction, decision, or action, at least one cited source must explicitly bind that predicate to that person. A different viewer mentioning similar words is not evidence.
+- Treat coordinated named-subject wording as a high-risk attribution. A sentence like "A, B, and C discussed X, Y, and Z" is supported only if EACH named person's own cited source supports the full shared claim. If different viewers contributed different topics, do not imply that every person discussed every topic: split them into separately bound clauses/sentences, or generalize to "viewers" when the aggregate evidence supports the group-level topic summary.
 - If the sentence uses broad group wording (chat/viewers/everyone/community), cite at least two directly relevant source messages; one isolated remark is insufficient for a group-level claim.
 ${sentenceScopeRule}
 - If unsupported, provide a minimal replacement that removes only the unsupported attribution/generalization while preserving supported material.
+- Prefer a safe narrower replacement over deleting useful recap content. If the topic itself is supported but the named attribution is not, remove/generalize the unsafe name (for example "one viewer..." or "viewers...") rather than returning an empty replacement. Use an empty replacement only when the factual content itself cannot be safely preserved.
 - A replacement may not add a new person, fact, motive, chronology, causal link, relationship, status, or broader scope.
 - If no safe minimal replacement exists, use an empty replacement.
 
@@ -287,6 +289,151 @@ function identityMatchesEvent(identity, event = {}) {
   });
 }
 
+const DISCUSSION_PREDICATE_SOURCE = [
+  'said', 'says', 'asked', 'joked(?:\\s+about)?', 'suggested', 'claimed', 'reported',
+  'shared', 'discussed', 'talked(?:\\s+about)?', 'mentioned', 'debated',
+  'argued(?:\\s+about)?', 'reacted(?:\\s+to)?', 'recounted', 'recalled',
+  'commented(?:\\s+on)?', 'weighed\\s+in(?:\\s+on)?', 'questioned', 'mocked',
+  'teased', 'speculated(?:\\s+about)?', 'complained(?:\\s+about)?',
+  'recommended', 'posted', 'linked', 'told'
+].join('|');
+
+const IDENTITY_PREDICATE_SOURCE = [
+  'is', 'was', 'are', 'were', 'has', 'had', 'likes?', 'loves?', 'hates?', 'prefers?',
+  'owns?', 'owned', DISCUSSION_PREDICATE_SOURCE, 'decided', 'agreed', 'created', 'made',
+  'played', 'won', 'lost', 'died', 'joined', 'left', 'returned', 'celebrated', 'wanted',
+  'needed', 'believes?', 'thinks?', 'watches?', 'experienced', 'requested'
+].join('|');
+
+function escapeRegex(value = '') {
+  return String(value || '').replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+}
+
+function identityAliasMatches(text, identity, beforeIndex = Infinity) {
+  const value = String(text || '');
+  const aliases = normalizeIdentity(identity).aliases
+    .map((alias) => String(alias || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const matches = [];
+  for (const alias of aliases) {
+    const escaped = escapeRegex(alias);
+    const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(@?${escaped})(?=$|[^\\p{L}\\p{N}_])`, 'giu');
+    for (const match of value.matchAll(regex)) {
+      const start = match.index + String(match[1] || '').length;
+      const end = start + String(match[2] || '').length;
+      if (start >= beforeIndex || end > beforeIndex) continue;
+      matches.push({ start, end, alias: match[2] });
+    }
+  }
+  matches.sort((a, b) => a.start - b.start || b.end - a.end);
+  return matches;
+}
+
+function removeIdentityAliases(text, identities = []) {
+  let output = String(text || '');
+  const aliases = [];
+  for (const identity of identities) {
+    for (const alias of normalizeIdentity(identity).aliases) {
+      const value = String(alias || '').trim();
+      if (value) aliases.push(value);
+    }
+  }
+  aliases.sort((a, b) => b.length - a.length);
+  for (const alias of aliases) {
+    const escaped = escapeRegex(alias);
+    output = output.replace(new RegExp(`(^|[^\\p{L}\\p{N}_])@?${escaped}(?=$|[^\\p{L}\\p{N}_])`, 'giu'), '$1 ');
+  }
+  return output;
+}
+
+function findCollectiveNamedDiscussionAttribution(sentence, identities = []) {
+  const text = String(sentence || '');
+  const predicateRegex = new RegExp(`\\b(${DISCUSSION_PREDICATE_SOURCE})\\b`, 'giu');
+  for (const predicate of text.matchAll(predicateRegex)) {
+    const predicateStart = predicate.index;
+    const mentions = [];
+    for (const identity of identities) {
+      const matches = identityAliasMatches(text, identity, predicateStart);
+      if (!matches.length) continue;
+      const last = matches[matches.length - 1];
+      if (predicateStart - last.end > 180) continue;
+      mentions.push({ identity, ...last });
+    }
+    mentions.sort((a, b) => a.start - b.start);
+    if (mentions.length < 2) continue;
+
+    const firstStart = mentions[0].start;
+    const subjectSegment = text.slice(firstStart, predicateStart);
+    let residual = removeIdentityAliases(subjectSegment, mentions.map((item) => item.identity));
+    residual = residual
+      .replace(/['’]s\b/giu, ' ')
+      .replace(/\b(?:and|plus|with|both|all|also)\b/giu, ' ')
+      .replace(/[@,;&/+\s]+/gu, '')
+      .trim();
+    if (residual) continue;
+
+    const tail = text.slice(predicateStart + String(predicate[0] || '').length);
+    const hasBundledObject = /[,;]/.test(tail) || /\b(?:and|or|plus)\b/i.test(tail);
+    return {
+      firstStart,
+      predicateStart,
+      predicateEnd: predicateStart + String(predicate[0] || '').length,
+      predicateText: String(predicate[0] || ''),
+      identities: mentions.map((item) => item.identity),
+      hasBundledObject
+    };
+  }
+  return null;
+}
+
+function findSingleNamedDiscussionAttribution(sentence, identity = {}) {
+  const text = String(sentence || '');
+  const aliases = normalizeIdentity(identity).aliases
+    .map((alias) => String(alias || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  for (const alias of aliases) {
+    const escaped = escapeRegex(alias);
+    const regex = new RegExp(`(^|[^\\p{L}\\p{N}_])(@?${escaped})(?:['’]s)?\\s+(${DISCUSSION_PREDICATE_SOURCE})\\b`, 'iu');
+    const match = regex.exec(text);
+    if (!match) continue;
+    const firstStart = match.index + String(match[1] || '').length;
+    const predicateStart = match.index + String(match[0] || '').length - String(match[3] || '').length;
+    return {
+      firstStart,
+      predicateStart,
+      predicateEnd: predicateStart + String(match[3] || '').length,
+      predicateText: String(match[3] || ''),
+      identities: [identity],
+      hasBundledObject: false
+    };
+  }
+  return null;
+}
+
+function distinctChatAuthorCount(records = []) {
+  return new Set(normalizeChatRecords(records).map((record) => {
+    const author = normalizeIdentity(record.author || {});
+    return author.userId || author.login || String(author.displayName || '').toLowerCase();
+  }).filter(Boolean)).size;
+}
+
+function buildDiscussionGeneralization(sentence, identities = [], citedChats = [], preferredIdentity = null) {
+  const text = String(sentence || '').trim();
+  if (!text || !citedChats.length) return '';
+  const collective = findCollectiveNamedDiscussionAttribution(text, identities);
+  const info = collective || (preferredIdentity ? findSingleNamedDiscussionAttribution(text, preferredIdentity) : null);
+  if (!info) return '';
+
+  const authorCount = distinctChatAuthorCount(citedChats);
+  if (!authorCount) return '';
+  const prefix = text.slice(0, info.firstStart);
+  const replacementSubject = authorCount >= 2 ? 'viewers' : 'one viewer';
+  const subject = prefix.trim() ? replacementSubject : replacementSubject.replace(/^./, (char) => char.toUpperCase());
+  return `${prefix}${subject} ${text.slice(info.predicateStart)}`.replace(/\\s+/g, ' ').trim();
+}
+
 function sentenceHasExplicitIdentityPredicate(sentence, identity = {}) {
   const text = String(sentence || '');
   const aliases = normalizeIdentity(identity).aliases
@@ -294,8 +441,8 @@ function sentenceHasExplicitIdentityPredicate(sentence, identity = {}) {
     .filter(Boolean)
     .sort((a, b) => b.length - a.length);
   for (const alias of aliases) {
-    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const direct = new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?:['’]s)?\\s+(?:is|was|are|were|has|had|likes?|loves?|hates?|prefers?|owns?|owned|said|says|asked|joked|suggested|decided|agreed|claimed|reported|created|made|shared|played|won|lost|died|joined|left|returned|celebrated|wanted|needed|believes?|thinks?|watches?|experienced|requested)\\b`, 'iu');
+    const escaped = escapeRegex(alias);
+    const direct = new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}(?:['’]s)?\\s+(?:${IDENTITY_PREDICATE_SOURCE})\\b`, 'iu');
     const status = new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}['’]s\\s+(?:status|identity|role|relationship|preference|opinion|reaction|decision|choice|nickname|family|job|age|condition|position|reputation|history|experience)\\b`, 'iu');
     const asStatus = new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escaped}['’]s\\s+status\\s+as\\b`, 'iu');
     if (direct.test(text) || status.test(text) || asStatus.test(text)) return true;
@@ -323,6 +470,27 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
     const citedChats = evidenceIds.map((id) => chatById.get(id)).filter(Boolean);
     const citedEvents = evidenceIds.map((id) => eventById.get(id)).filter(Boolean);
 
+    const collective = findCollectiveNamedDiscussionAttribution(sentence, identities);
+    if (collective) {
+      const unsupportedCollectiveIdentity = collective.identities.find((identity) =>
+        !citedChats.some((record) => identityMatchesRecordAuthor(identity, record))
+      );
+      if (unsupportedCollectiveIdentity) {
+        const safeGeneralization = buildDiscussionGeneralization(sentence, identities, citedChats);
+        result.supported = false;
+        result.reason = `deterministic evidence check: coordinated discussion claim names ${unsupportedCollectiveIdentity.displayName || unsupportedCollectiveIdentity.login || 'a viewer'} without a cited chat message from that viewer`;
+        result.replacement = safeGeneralization;
+        continue;
+      }
+      if (collective.hasBundledObject) {
+        const safeGeneralization = buildDiscussionGeneralization(sentence, identities, citedChats);
+        result.supported = false;
+        result.reason = 'deterministic evidence check: multiple named viewers were bundled under one shared discussion predicate with multiple topics; generalized to avoid implying every named viewer discussed every listed topic';
+        result.replacement = safeGeneralization;
+        continue;
+      }
+    }
+
     const attributedIdentities = identities.filter((identity) =>
       textMentionsIdentity(sentence, identity) && sentenceHasExplicitIdentityPredicate(sentence, identity)
     );
@@ -332,9 +500,13 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
       return !hasOwnChat && !hasOwnEvent;
     });
     if (unsupportedIdentity) {
+      const safeGeneralization = buildDiscussionGeneralization(sentence, identities, citedChats, unsupportedIdentity);
       result.supported = false;
       result.reason = `deterministic evidence check: explicit claim about ${unsupportedIdentity.displayName || unsupportedIdentity.login || 'named identity'} lacks a cited source bound to that identity`;
-      result.replacement = '';
+      // Prefer preserving the supported topic without the unsafe name when the
+      // cited chat can support a narrower anonymous/group attribution. The next
+      // audit pass must validate this rewrite before it can escape.
+      result.replacement = safeGeneralization;
       continue;
     }
 
@@ -610,6 +782,8 @@ module.exports = {
   parseAuditResults,
   sentenceHasExplicitIdentityPredicate,
   sentenceHasBroadGroupGeneralization,
+  findCollectiveNamedDiscussionAttribution,
+  buildDiscussionGeneralization,
   validateRecapEvidence,
   hasAttributionRisk,
   hasTaggedSpecificAttributionRisk,

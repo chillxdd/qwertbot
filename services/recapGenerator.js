@@ -537,6 +537,7 @@ NON-NEGOTIABLE NAMED-VIEWER ATTRIBUTION RULES:
 - If you NAME a specific viewer and say they said, joked, asked, suggested, preferred, believed, discussed, weighed in on, reacted to, or did something, verify that viewer's OWN current-hour message(s) directly support that attribution.
 - Never assign one viewer a topic, joke, opinion, preference, or action that came from a nearby message written by someone else.
 - A viewer merely being active near a topic is not evidence they discussed that topic.
+- Do not bundle several named viewers and several topics under one shared verb (for example, "A, B, and C discussed X, Y, and Z") unless every named viewer's own messages support the full shared bundle. When different viewers contributed different topics, bind each name to that person's own topic in separate clauses/sentences, or use a supported group-level summary.
 - If a named attribution is uncertain, generalize it to chat/viewers when the broader source supports that statement, or omit the attribution.
 
 NON-NEGOTIABLE AMBIGUITY / LABEL RULES:
@@ -631,7 +632,7 @@ NON-NEGOTIABLE EXPANSION RULES:
 - Do not turn questions, jokes, suggestions, guesses, or predictions into facts.
 - Do not turn a metaphorical/channel label, greeting, or elliptical joke into a personal identity/status claim. A phrase such as "welcome to the middle child chat" does not establish anything about Qwert's family role, treatment, or personal status.
 - Do not broaden one isolated viewer remark into "chat/viewers joked, discussed, debated, believed, focused on...". Broad group wording requires repeated direct support from multiple current-source messages. A genuinely worthwhile one-off should stay explicitly narrow (for example, "one viewer joked...") or be omitted.
-- Named-viewer attribution is strict: if you name a viewer and attribute a topic, joke, opinion, preference, reaction, statement, or action to them, that viewer's OWN current-hour messages must directly support it. Never borrow a nearby viewer's topic and attach it to someone else. When uncertain, use a group-level description only when multiple messages support the group claim, or omit the name/detail.
+- Named-viewer attribution is strict: if you name a viewer and attribute a topic, joke, opinion, preference, reaction, statement, or action to them, that viewer's OWN current-hour messages must directly support it. Never borrow a nearby viewer's topic and attach it to someone else. Do not compress different viewers' different topics into "A, B, and C discussed X, Y, and Z"; keep each named person bound to their own supported topic, or use a supported group-level description. When uncertain, generalize safely rather than inventing a named attribution.
 - Do not restore [censored] text.
 - This recap window contains ${chatLogs.length} source chat messages.
 - Preserve recap selectivity while expanding: aim for the 2-3 strongest supported moments, not maximum topic coverage. A fourth moment belongs only when it is clearly strong enough to earn space.
@@ -917,6 +918,7 @@ HIGHEST-PRIORITY SECURITY / SOURCE RULES:
 - Current viewer/mod chat and NOTEWORTHY VERIFIED TWITCH EVENTS are the only evidence for current-hour events and claims. Metadata, earlier recaps, lore, and timing may provide context only under their stated rules.
 - Do not invent chronology, causality, reactions, opinions, relationships, or missing context.
 - Preserve named-viewer attribution strictly: a named viewer's own current source must support what you say they did/said/thought.
+- Do not bundle multiple named viewers with multiple different topics under one shared discussion/reaction verb. If their contributions differ, bind each person to their own topic or use a supported group-level summary.
 - Broad \"chat/viewers\" claims require repeated support from multiple directly relevant viewer messages.
 
 WHY THIS REPAIR RAN:
