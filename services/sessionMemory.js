@@ -123,6 +123,7 @@ function normalizeLearningCandidateText(value) {
 // model may still emit; they avoid broad semantic rejection so specific,
 // useful on-topic quirks can continue reaching moderator review.
 const VIEWER_DISTINCTIVENESS_SIGNALS = [
+  /\b(?:sexual(?:ly)?\s+suggestive|suggestive\s+jokes?|sexual\s+innuendo|innuendo|flirtatious(?:\s+joking)?|horny\s+jokes?|nsfw\s+humou?r)\b/,
   /\b(?:fake|unrecognized)\s+!?commands?\b/,
   /\b(?:running|recurring|inside)\s+(?:joke|bit|gag)\b/,
   /\b(?:catchphrase|signature habit|signature bit|ritual|nickname)\b/,
@@ -450,19 +451,69 @@ function normalizeEvidenceText(value) {
     .trim();
 }
 
+const VIEWER_LEARNING_STYLE_MESSAGE_PATTERNS = [
+  // These only influence which public chat lines are sampled for learning. They do
+  // not create a profile fact by themselves; Gemini + the evidence verifier still
+  // have to support any resulting observation from the sampled messages.
+  /\b(?:innuendo|suggestive|flirt(?:ing|y|atious)?|horny|thirsty|nsfw)\b/i,
+  /\b(?:go down on|put (?:it|that) in (?:me|you)|put (?:me|you) in|come inside|inside (?:me|you)|sit on (?:me|you)|ride (?:me|you)|bend over|spank|make out|69)\b/i,
+  /\b(?:sexy|babe|baby|daddy|mommy|kiss me|kiss you)\b/i,
+  /\b(?:in me|in you|on me|on you|under me|under you|over me|over you|down on me|down on you)\b/i,
+  /\b(?:teas(?:e|es|ing)|roast(?:s|ing)?|mock(?:s|ing)?|banter|fight me|love you|hate you)\b/i
+];
+
+function viewerLearningMessageLooksDistinctive(message) {
+  const value = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!value) return false;
+  return VIEWER_LEARNING_STYLE_MESSAGE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function sampleIndexListEvenly(indices, maxItems) {
+  const source = Array.isArray(indices) ? indices : [];
+  if (!source.length || maxItems <= 0) return [];
+  if (source.length <= maxItems) return [...source];
+  if (maxItems === 1) return [source[source.length - 1]];
+  const out = [];
+  const used = new Set();
+  for (let i = 0; i < maxItems; i++) {
+    const position = Math.round(i * (source.length - 1) / (maxItems - 1));
+    const index = source[position];
+    if (used.has(index)) continue;
+    used.add(index);
+    out.push(index);
+  }
+  return out;
+}
+
 function sampleMessagesEvenly(messages, maxItems = 40) {
   const source = Array.isArray(messages) ? messages : [];
   if (source.length <= maxItems) return [...source];
   if (maxItems <= 1) return [source[source.length - 1]];
-  const out = [];
-  const used = new Set();
-  for (let i = 0; i < maxItems; i++) {
-    const index = Math.round(i * (source.length - 1) / (maxItems - 1));
-    if (used.has(index)) continue;
-    used.add(index);
-    out.push(source[index]);
+
+  const allIndices = source.map((_, index) => index);
+  const distinctiveIndices = allIndices.filter((index) => viewerLearningMessageLooksDistinctive(source[index]));
+
+  // Preserve the representative whole-window sample, but reserve up to 25%
+  // (max 10 of the normal 40) for distinctive interaction-style messages. This
+  // prevents a short cluster of recurring innuendo/teasing/etc. from disappearing
+  // solely because several messages happened close together. If no such messages
+  // exist, the sampler remains the original fully-even 40-message sample.
+  const reserve = Math.min(distinctiveIndices.length, 10, Math.max(1, Math.floor(maxItems * 0.25)));
+  const baseCount = Math.max(0, maxItems - reserve);
+  const chosen = new Set(sampleIndexListEvenly(allIndices, baseCount));
+
+  const remainingDistinctive = distinctiveIndices.filter((index) => !chosen.has(index));
+  for (const index of sampleIndexListEvenly(remainingDistinctive, reserve)) chosen.add(index);
+
+  // If the even sample already captured some reserved messages, top back up to the
+  // requested size from the remaining timeline so we never sacrifice context.
+  if (chosen.size < maxItems) {
+    for (const index of sampleIndexListEvenly(allIndices.filter((index) => !chosen.has(index)), maxItems - chosen.size)) {
+      chosen.add(index);
+    }
   }
-  return out;
+
+  return [...chosen].sort((a, b) => a - b).slice(0, maxItems).map((index) => source[index]);
 }
 
 function buildViewerLearningGroups(chatLogs = []) {
@@ -611,7 +662,9 @@ function buildEvidenceVerifierPrompt(candidates = [], mode = 'viewer') {
     ].filter(Boolean).join('\n');
   }).join('\n\n');
   const modeRule = mode === 'viewer'
-    ? '- The claim must be about the named viewer/subject, and every cited message must come from that same viewer. Do not transfer another person\'s fact, behavior, possession, preference, or relationship.'
+    ? `- The claim must be about the named viewer/subject, and every cited message must come from that same viewer. Do not transfer another person's fact, behavior, possession, preference, or relationship.
+- Observable PUBLIC CHAT STYLE is valid evidence even when the wording is sexual, suggestive, flirtatious, or innuendo-heavy. A claim such as "Often uses suggestive jokes and innuendo in chat" describes visible communication style, not private sexual behavior. Do not reject it merely because the cited wording is sexual/suggestive.
+- Reject any leap from public wording to private attraction, sex life, sexual orientation, relationship status, a crush, consent, or off-chat/private sexual behavior.`
     : mode === 'stream_lore'
       ? `- For scope=global, the claim must be a channel-wide convention, recurring bit, nickname, shared shorthand, or culture pattern; a named person's private trait is not global lore.
 - For scope=subject, the cited evidence must support the exact named owner/entity and the entire claim must remain attached to that subject. Do not transfer it to another person/entity or silently turn it into global lore.`
@@ -758,8 +811,11 @@ ACCEPT SPECIFIC EXAMPLES WHEN DIRECTLY SUPPORTED:
 WHAT TO LEARN:
 - clearly self-stated narrow durable preferences, stable community roles, recurring habits, and clearly demonstrated behavioral tendencies
 - recurring interaction styles or running bits actually visible in the viewer's messages
-- non-sensitive social style such as playful teasing, flirtatious/suggestive joking, mock arguing, recurring bits, or a distinctive way they interact with Qwert or other viewers
-- describe observable behavior only. Never infer hidden motives or private relationship facts such as "has a crush on Qwert", attraction, relationship status, sexual behavior, or sexual orientation
+- non-sensitive social style such as playful teasing, flirtatious/suggestive joking, sexual innuendo, horny jokes, mock arguing, recurring bits, or a distinctive way they interact with Qwert or other viewers
+- PUBLIC CHAT STYLE IS ALLOWED: repeated sexual/suggestive wording may support an observation about how the viewer jokes or communicates in public chat. This is different from claiming anything about their private sex life, attraction, orientation, relationship status, or off-chat behavior.
+- Good observable-style examples: "Frequently uses sexually suggestive jokes and innuendo in chat."; "Often turns innocent setups into suggestive jokes."; "Uses flirtatious teasing as a recurring chat style."
+- Bad private-inference examples: "Is sexually attracted to Qwert."; "Wants to have sex with X."; "Has a sexual relationship with X."
+- describe observable behavior only. Never infer hidden motives or private relationship facts such as "has a crush on Qwert", attraction, relationship status, private sexual behavior, or sexual orientation
 - ordinary but personally distinguishing facts are useful; they do not need to be dramatic
 - one explicit, narrow durable fact/preference may use one source message
 - a narrow, specific HABIT or BEHAVIOR candidate may use one strong source message at low confidence because it remains Pending until moderator approval
@@ -781,7 +837,7 @@ WHAT NOT TO LEARN:
 - do NOT turn intent into outcome: "I'm going to buy taho" does NOT mean "ate taho" or "likes taho"
 - do NOT infer a preference merely because someone mentions buying, eating, watching, playing, or trying something once
 - do NOT change tense or state
-- do NOT store sensitive/private data: health, religion, politics, sexual orientation, relationship status, private romantic/sexual interests or behavior, legal names, contact details, precise locations, finances, or invasive personal information
+- do NOT store sensitive/private data: health, religion, politics, sexual orientation, relationship status, private romantic/sexual interests or behavior, legal names, contact details, precise locations, finances, or invasive personal information. This prohibition does NOT cover a narrowly worded observation about the viewer's directly visible public chat style (for example, recurring suggestive jokes or innuendo) when the cited messages support it.
 - do NOT learn routine Twitch telemetry
 - do not manufacture an observation merely because a viewer chatted a lot
 - ignore messages beginning with !; command habits are tracked deterministically elsewhere
@@ -789,6 +845,7 @@ WHAT NOT TO LEARN:
 EVIDENCE RULES:
 - Every source message has a stable V... ID.
 - Every candidate MUST return 1-4 evidenceIds from that SAME viewer.
+- For behavior/frequency wording, use multiple separate evidenceIds when available. Two or more directly similar messages in the same window can support a recurring public-chat-style observation; one strong message should use narrower wording and low confidence rather than pretending frequency.
 - Copy IDs exactly; do not copy/paraphrase message text as evidence.
 - The candidate must be directly supported without adding an unstated outcome, motive, preference, or cause.
 - existingObservationId may only use an E... ID shown for that same viewer.
