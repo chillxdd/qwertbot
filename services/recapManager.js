@@ -11,7 +11,13 @@ const {
   clearSessionMemory,
   getActiveRecapState,
   saveActiveRecapState,
-  clearStreamRecapsForStream
+  clearStreamRecapsForStream,
+  saveFinalLearningJob,
+  getFinalLearningJob,
+  getPendingFinalLearningJobs,
+  updateFinalLearningSegment,
+  markFinalLearningRetry,
+  clearFinalLearningJob
 } = require('./streamRecapHistory');
 const { getStreamLore, applyStreamLoreObservations, buildEffectiveLore } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
@@ -137,6 +143,8 @@ function createRecapManager({
   const chatIds = new Set();
   const eventIds = new Set();
   const tasks = new Set();
+  const finalLearningInFlight = new Set();
+  const finalLearningRetryTimers = new Map();
   const serializeControl = createSerialExecutor();
   const serializeLifecycle = createSerialExecutor();
   const serializeLearning = createSerialExecutor();
@@ -806,6 +814,160 @@ function createRecapManager({
     console.log(restored ? '[Recap Persistence] Existing recap cadence preserved across restart.' : '[Recap] First recap will send after 60 minutes.');
   }
 
+  function finalLearningMessageKey(item = {}) {
+    const record = normalizeChatRecord(item);
+    return String(record.sourceMessageId || record.twitchMessageId || '').trim()
+      || `${Number(record.timestamp || 0)}:${record.author?.userId || record.author?.login || ''}:${record.text || ''}`;
+  }
+
+  function buildStreamEndLearningSegments() {
+    const segments = [];
+    const seen = new Set();
+    const addSegment = ({ segmentId, messages, viewerLearningDone = false, streamLoreDone = false }) => {
+      const unique = [];
+      for (const raw of normalizeChatRecords(messages || [])) {
+        const key = finalLearningMessageKey(raw);
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        unique.push(toStoredChatRecord(raw));
+      }
+      if (!unique.length || (viewerLearningDone && streamLoreDone)) return;
+      segments.push({ segmentId, messageSnapshot: unique, viewerLearningDone, streamLoreDone, createdAt: Date.now() });
+    };
+
+    if (pendingLearning && (!pendingLearning.viewerLearningDone || !pendingLearning.streamLoreDone)) {
+      addSegment({
+        segmentId: `pending:${pendingLearning.windowId}`,
+        messages: pendingLearning.messageSnapshot,
+        viewerLearningDone: pendingLearning.viewerLearningDone,
+        streamLoreDone: pendingLearning.streamLoreDone
+      });
+    }
+
+    addSegment({ segmentId: `tail:${windowId}`, messages: recapMessages });
+
+    // If both pieces still need both permanent-learning stages, combining them
+    // saves one Viewer Profile pass and one Stream Lore pass at shutdown.
+    if (segments.length === 2 && segments.every((segment) => !segment.viewerLearningDone && !segment.streamLoreDone)) {
+      return [{
+        segmentId: `final:${currentStreamId || lastKnownPersistedStreamId}:${Date.now()}`,
+        messageSnapshot: segments.flatMap((segment) => segment.messageSnapshot),
+        viewerLearningDone: false,
+        streamLoreDone: false,
+        createdAt: Date.now()
+      }];
+    }
+    return segments;
+  }
+
+  function clearFinalLearningRetryTimer(streamId) {
+    const timer = finalLearningRetryTimers.get(streamId);
+    if (timer) clearTimeout(timer);
+    finalLearningRetryTimers.delete(streamId);
+  }
+
+  function scheduleFinalLearningRetry(streamId, delayMs = 0) {
+    if (!streamId || managerStopping) return;
+    clearFinalLearningRetryTimer(streamId);
+    const timer = operationContext.detached(() => setTimeout(() => {
+      finalLearningRetryTimers.delete(streamId);
+      launchFinalStreamLearning(streamId).catch((err) => console.error('[Stream End Learning] Scheduler failed:', err?.message || err));
+    }, Math.max(0, Number(delayMs) || 0)));
+    finalLearningRetryTimers.set(streamId, timer);
+  }
+
+  async function persistFinalLearningStage(streamId, segmentId, field) {
+    const result = await updateFinalLearningSegment({ streamId, segmentId, patch: { [field]: true }, writerFence: operationContext.fence() });
+    if (!result?.matchedCount && !result?.modifiedCount) throw new Error(`Could not persist ${field} checkpoint for final stream learning.`);
+  }
+
+  async function performFinalLearningSegment(streamId, segment) {
+    const chatRecords = normalizeChatRecords(segment.messageSnapshot || []);
+    const permanentLearningChatRecords = chatRecords.filter((item) => item.kind !== 'bot_context' && !isSharedChatGuest(item));
+    const permanentLearningRecords = sanitizeChatForGemini(permanentLearningChatRecords).records;
+    if (!permanentLearningRecords.length) {
+      if (!segment.viewerLearningDone) await persistFinalLearningStage(streamId, segment.segmentId, 'viewerLearningDone');
+      if (!segment.streamLoreDone) await persistFinalLearningStage(streamId, segment.segmentId, 'streamLoreDone');
+      return;
+    }
+
+    if (!segment.viewerLearningDone) {
+      let settings = { automaticLearningEnabled: false };
+      try { settings = await getViewerProfileSettings(channelName); }
+      catch (err) { console.error('[Stream End Learning] Could not load Viewer Profile settings:', err?.message || err); }
+      if (settings.automaticLearningEnabled) {
+        const existingProfiles = await getViewerLearningContext(channelName, permanentLearningRecords);
+        const viewerUpdates = await generateViewerLearningUpdates({ chatLogs: permanentLearningRecords, existingProfiles });
+        if (viewerUpdates.length) {
+          const result = await applyViewerProfileUpdates({ channelName, chatLogs: permanentLearningRecords, updates: viewerUpdates });
+          console.log(`[Viewer Profiles] Stream-end learning processed ${viewerUpdates.length} viewer update(s): ${result.created} new pending, ${result.reinforced} reinforced, ${result.refined} pending auto-refined, ${result.revisionsProposed} approved revision proposal(s), ${result.contradictions} contradiction update(s), ${result.skipped} skipped.`);
+        } else console.log('[Viewer Profiles] Stream-end learning found no durable viewer observations or updates.');
+      }
+      await persistFinalLearningStage(streamId, segment.segmentId, 'viewerLearningDone');
+      segment.viewerLearningDone = true;
+    }
+
+    if (!segment.streamLoreDone) {
+      let currentLoreRecord = null;
+      try { currentLoreRecord = await getStreamLore(channelName); }
+      catch (err) { console.error('[Stream End Learning] Could not load Stream Lore context:', err?.message || err); }
+      const loreObservations = await generateStreamLoreObservations({
+        chatLogs: permanentLearningRecords,
+        existingObservations: currentLoreRecord?.learnedObservations || []
+      });
+      if (loreObservations.length) {
+        const result = await applyStreamLoreObservations(channelName, loreObservations);
+        console.log(`[Stream Lore] Stream-end learning processed ${loreObservations.length} candidate(s): ${result.created} new pending, ${result.reinforced} reinforced, ${result.refined} pending auto-refined, ${result.revisionsProposed} approved revision proposal(s), ${result.contradictions} contradiction update(s), ${result.skipped} skipped.`);
+      } else console.log('[Stream Lore] Stream-end learning found no durable channel-lore candidates or updates.');
+      await persistFinalLearningStage(streamId, segment.segmentId, 'streamLoreDone');
+      segment.streamLoreDone = true;
+    }
+  }
+
+  async function launchFinalStreamLearning(streamId) {
+    const normalizedStreamId = String(streamId || '').trim();
+    if (!normalizedStreamId || managerStopping || finalLearningInFlight.has(normalizedStreamId)) return;
+    const job = await getFinalLearningJob({ streamId: normalizedStreamId });
+    if (!job?.segments?.length) return;
+    const nextAttemptAt = Math.max(0, Number(job.nextAttemptAt || 0));
+    if (nextAttemptAt > Date.now()) { scheduleFinalLearningRetry(normalizedStreamId, nextAttemptAt - Date.now()); return; }
+
+    finalLearningInFlight.add(normalizedStreamId);
+    clearFinalLearningRetryTimer(normalizedStreamId);
+    try {
+      await serializeLearning(async () => {
+        console.log(`[Stream End Learning] Starting final Viewer Profile/Stream Lore pass for stream ${normalizedStreamId} (${job.segments.length} segment${job.segments.length === 1 ? '' : 's'}).`);
+        for (const segment of job.segments) await performFinalLearningSegment(normalizedStreamId, segment);
+      });
+      await clearFinalLearningJob({ streamId: normalizedStreamId, writerFence: operationContext.fence() });
+      console.log(`[Stream End Learning] Final permanent-learning pass complete for stream ${normalizedStreamId}.`);
+    } catch (err) {
+      if (managerStopping) return;
+      if (err?.cancelled) {
+        // Another lifecycle transition may cancel the shared low-priority Gemini
+        // work. Keep the durable job and try again shortly instead of stranding it.
+        scheduleFinalLearningRetry(normalizedStreamId, 5000);
+        return;
+      }
+      const retryAt = Date.now() + 60000;
+      console.error('[Stream End Learning] Final learning failed; durable job will retry in 60 seconds:', err?.message || err);
+      try { await markFinalLearningRetry({ streamId: normalizedStreamId, error: err?.message || err, retryAt, writerFence: operationContext.fence() }); } catch (_) {}
+      scheduleFinalLearningRetry(normalizedStreamId, 60000);
+    } finally {
+      finalLearningInFlight.delete(normalizedStreamId);
+    }
+  }
+
+  async function resumeFinalStreamLearningJobs() {
+    try {
+      const jobs = await getPendingFinalLearningJobs({ channelName, limit: 25 });
+      for (const job of jobs) scheduleFinalLearningRetry(job.streamId, Math.max(0, Number(job.nextAttemptAt || 0) - Date.now()));
+      if (jobs.length) console.log(`[Stream End Learning] Restored ${jobs.length} durable final-learning job(s).`);
+    } catch (err) {
+      console.error('[Stream End Learning] Could not restore pending final-learning jobs:', err?.message || err);
+    }
+  }
+
   async function finishPendingEnd() {
     if (!pendingEnd) return;
     const ending = pendingEnd;
@@ -833,11 +995,35 @@ function createRecapManager({
     const endedStreamId = currentStreamId || lastKnownPersistedStreamId;
     lastStreamEndedAt = resolvedEndedAt; lastStreamLifecycleEventType = 'offline';
     lastStreamLifecycleEventAt = resolvedEndedAt; lastEndedStreamId = endedStreamId;
-    cancelTasks(); recapGenerationEpoch += 1; clearRecapTimer(); clearLearningTimer(); pendingLearning = null;
+
+    // Freeze public/recap work first, then durably hand the unfinished permanent
+    // learning + the unsent final chat tail to an offline-safe worker. Session
+    // Memory is intentionally excluded because it is temporary by design.
+    cancelTasks();
+    cancelRecapGeminiWork({ includeLearning: true });
+    recapGenerationEpoch += 1; clearRecapTimer(); clearLearningTimer();
+    const finalLearningSegments = buildStreamEndLearningSegments();
+    if (endedStreamId && finalLearningSegments.length) {
+      try {
+        await saveFinalLearningJob({ streamId: endedStreamId, channelName, segments: finalLearningSegments, writerFence: operationContext.fence() });
+        console.log(`[Stream End Learning] Captured ${finalLearningSegments.reduce((sum, segment) => sum + segment.messageSnapshot.length, 0)} message(s) across ${finalLearningSegments.length} final learning segment(s).`);
+        // Start the durable worker immediately. It is independent of the now-ended
+        // live session, so cleanup failures cannot strand the saved learning job.
+        scheduleFinalLearningRetry(endedStreamId, 0);
+      } catch (err) {
+        // Do not silently throw away the in-memory tail if Mongo is temporarily
+        // unavailable. Stream cleanup is withheld so the normal lifecycle retry
+        // can attempt the durable handoff again.
+        recoveryReason = 'Stream ended, but the final learning snapshot could not be saved yet.';
+        throw err;
+      }
+    }
+    pendingLearning = null;
     streamLive = false; recapInProgress = false; nextRecapAt = 0;
     pendingEnd ||= { streamId: endedStreamId, endedAt: resolvedEndedAt };
-    try { await finishPendingEnd(); }
-    catch (err) {
+    try {
+      await finishPendingEnd();
+    } catch (err) {
       recoveryReason = 'Stream ended, but MongoDB cleanup is pending. The saved stream will be retried safely.';
       throw err;
     }
@@ -1933,6 +2119,7 @@ function createRecapManager({
         if (!managerStopping) void validateStoredToken().catch((err) => console.warn('[Recap] Token validation:', err.message));
       }, TOKEN_VALIDATION_INTERVAL));
       await checkStreamStatus();
+      await resumeFinalStreamLearningJobs();
       console.log('[Recap] Detection enabled; three offline polls required. Restored recaps have a 60-second startup grace period.');
     })();
     try { await startPromise; } catch (err) { started = false; throw err; }
@@ -1942,6 +2129,7 @@ function createRecapManager({
     managerStopping = true; lifecycleRevision += 1;
     clearRecapTimer();
     clearLearningTimer();
+    for (const streamId of [...finalLearningRetryTimers.keys()]) clearFinalLearningRetryTimer(streamId);
     clearInterval(streamPollTimer); clearInterval(tokenValidationTimer); clearInterval(activeStateCheckpointTimer);
     streamPollTimer = null; tokenValidationTimer = null; activeStateCheckpointTimer = null;
     cancelTasks();

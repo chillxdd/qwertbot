@@ -1,6 +1,7 @@
 const { WRITE_OPTIONS } = require('./reliability/store');
 const operationContext = require('./reliability/context');
 const StreamRecapSession = require('../models/StreamRecapSession');
+const StreamEndLearningJob = require('../models/StreamEndLearningJob');
 
 function normalizeStreamId(streamId) {
   return String(streamId || '').trim();
@@ -148,6 +149,72 @@ async function saveActiveRecapState({ streamId, channelName, startedAt, state, w
   }
 }
 
+async function saveFinalLearningJob({ streamId, channelName, segments = [], writerFence = operationContext.fence() }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  const normalizedChannelName = normalizeChannelName(channelName);
+  const safeSegments = Array.isArray(segments)
+    ? segments.filter((segment) => segment?.segmentId && Array.isArray(segment?.messageSnapshot) && segment.messageSnapshot.length)
+    : [];
+  if (!normalizedStreamId || !normalizedChannelName || !safeSegments.length) return null;
+  const now = Date.now();
+  try {
+    return await StreamEndLearningJob.findOneAndUpdate({ streamId: normalizedStreamId,
+      $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
+      $setOnInsert: { streamId: normalizedStreamId },
+      $set: { writerFence, channelName: normalizedChannelName, segments: safeSegments,
+        attempts: 0, nextAttemptAt: now, lastError: '' }
+    }, { ...WRITE_OPTIONS, upsert: true, new: true, setDefaultsOnInsert: true }).lean();
+  } catch (err) {
+    if (err?.code === 11000) throw new Error('Stale final-learning snapshot rejected: a newer instance owns this stream job.');
+    throw err;
+  }
+}
+
+async function getFinalLearningJob({ streamId }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  if (!normalizedStreamId) return null;
+  return StreamEndLearningJob.findOne({ streamId: normalizedStreamId }).lean();
+}
+
+async function getPendingFinalLearningJobs({ channelName, limit = 10 } = {}) {
+  const normalizedChannelName = normalizeChannelName(channelName);
+  if (!normalizedChannelName) return [];
+  const safeLimit = Math.max(1, Math.min(25, Number(limit) || 10));
+  return StreamEndLearningJob.find({ channelName: normalizedChannelName })
+    .sort({ updatedAt: 1 })
+    .limit(safeLimit)
+    .lean();
+}
+
+async function updateFinalLearningSegment({ streamId, segmentId, patch = {}, writerFence = operationContext.fence() }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  const normalizedSegmentId = String(segmentId || '').trim();
+  if (!normalizedStreamId || !normalizedSegmentId) return null;
+  const allowed = ['viewerLearningDone', 'streamLoreDone'];
+  const set = { writerFence, lastError: '' };
+  for (const field of allowed) if (field in patch) set[`segments.$.${field}`] = patch[field] === true;
+  return StreamEndLearningJob.updateOne({ streamId: normalizedStreamId, 'segments.segmentId': normalizedSegmentId,
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, { $set: set }, WRITE_OPTIONS);
+}
+
+async function markFinalLearningRetry({ streamId, error = '', retryAt = Date.now() + 60000, writerFence = operationContext.fence() }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  if (!normalizedStreamId) return null;
+  return StreamEndLearningJob.updateOne({ streamId: normalizedStreamId,
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
+    $inc: { attempts: 1 },
+    $set: { writerFence, nextAttemptAt: Number(retryAt) || Date.now() + 60000,
+      lastError: String(error || '').slice(0, 1000) }
+  }, WRITE_OPTIONS);
+}
+
+async function clearFinalLearningJob({ streamId, writerFence = operationContext.fence() }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  if (!normalizedStreamId) return null;
+  return StreamEndLearningJob.deleteOne({ streamId: normalizedStreamId,
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, WRITE_OPTIONS);
+}
+
 async function clearStreamRecapsForStream({ streamId, channelName, writerFence = operationContext.fence() }) {
   if (!streamId || !channelName) return null;
   // Keep a short-lived tombstone so a late old-session write cannot recreate it.
@@ -180,5 +247,11 @@ module.exports = {
   saveActiveRecapState,
   clearActiveRecapState,
   clearStreamRecapsByChannel,
-  clearStreamRecapsForStream
+  clearStreamRecapsForStream,
+  saveFinalLearningJob,
+  getFinalLearningJob,
+  getPendingFinalLearningJobs,
+  updateFinalLearningSegment,
+  markFinalLearningRetry,
+  clearFinalLearningJob
 };
