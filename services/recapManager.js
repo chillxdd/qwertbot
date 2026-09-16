@@ -11,6 +11,7 @@ const {
   clearSessionMemory,
   getActiveRecapState,
   saveActiveRecapState,
+  saveActiveRecapDelta,
   clearStreamRecapsForStream,
   saveFinalLearningJob,
   getFinalLearningJob,
@@ -148,8 +149,9 @@ function createRecapManager({
   const serializeControl = createSerialExecutor();
   const serializeLifecycle = createSerialExecutor();
   const serializeLearning = createSerialExecutor();
-  const stateWriter = createSerialWriter(async (snapshot) => {
-    await saveActiveRecapState(snapshot);
+  const stateWriter = createSerialWriter(async (operation) => {
+    if (operation?.mode === 'delta') return saveActiveRecapDelta(operation.payload);
+    return saveActiveRecapState(operation?.payload || operation);
   });
   let twitchClientId = (process.env.TWITCH_CLIENT_ID || '').trim();
   let streamStateInitialized = false;
@@ -182,6 +184,7 @@ function createRecapManager({
   let activeStateCheckpointTimer = null;
   let activeStateDirty = false;
   let activeStateSaveInProgress = false;
+  let persistedActiveStateCheckpoint = null;
   let lastStreamStartedAt = 0;
   let lastStreamEndedAt = 0;
   let lastStreamLifecycleEventType = '';
@@ -501,23 +504,148 @@ function createRecapManager({
   }
 
 
-  function buildActiveState() {
+  function buildActiveStateMetadata() {
     return {
       windowId, windowCreatedAt, capacityReached, recoveryReason, recoveryDeliveryKey,
+      messageSequence, contextSequence, eventSequence,
+      firstRecapSent, streamSessionStartedAt, twitchStreamStartedAt, nextRecapAt,
+      recapPaused, collectionPaused, pausedRemainingMs
+    };
+  }
+
+  function buildActiveState() {
+    return {
+      ...buildActiveStateMetadata(),
       recapMessages: recapMessages.map((item) => toStoredChatRecord(item)),
-      messageSequence,
       streamContexts,
-      contextSequence,
       twitchEvents: twitchEvents.map((item) => toStoredEventRecord(item)),
-      eventSequence,
-      firstRecapSent,
-      streamSessionStartedAt,
-      twitchStreamStartedAt,
-      nextRecapAt,
-      recapPaused,
-      collectionPaused,
-      pausedRemainingMs,
       pendingLearning
+    };
+  }
+
+  function pendingLearningCheckpoint(value) {
+    if (!value) return null;
+    return {
+      streamId: String(value.streamId || ''),
+      windowId: String(value.windowId || ''),
+      createdAt: Number(value.createdAt || 0),
+      messageCount: Array.isArray(value.messageSnapshot) ? value.messageSnapshot.length : 0,
+      contextCount: Array.isArray(value.contextSnapshot) ? value.contextSnapshot.length : 0,
+      eventCount: Array.isArray(value.eventSnapshot) ? value.eventSnapshot.length : 0
+    };
+  }
+
+  function activeStateCheckpointFromCurrent() {
+    return {
+      windowId: String(windowId || ''),
+      messageSequence: Number(messageSequence || 0),
+      messageCount: recapMessages.length,
+      contextSequence: Number(contextSequence || 0),
+      contextCount: streamContexts.length,
+      eventSequence: Number(eventSequence || 0),
+      eventCount: twitchEvents.length,
+      pendingLearning: pendingLearningCheckpoint(pendingLearning)
+    };
+  }
+
+  function samePendingLearningSnapshot(a, b) {
+    return Boolean(a && b &&
+      a.streamId === b.streamId &&
+      a.windowId === b.windowId &&
+      a.createdAt === b.createdAt &&
+      a.messageCount === b.messageCount &&
+      a.contextCount === b.contextCount &&
+      a.eventCount === b.eventCount);
+  }
+
+  function appendSafe(items, throughSequence, persistedCount) {
+    let persistedPrefixCount = 0;
+    for (const item of items) {
+      if (Number(item?.id || 0) <= throughSequence) persistedPrefixCount += 1;
+    }
+    return persistedPrefixCount === persistedCount;
+  }
+
+  function buildActiveStateDelta(base) {
+    const set = buildActiveStateMetadata();
+    const push = {};
+    const sameWindow = String(base.windowId || '') === String(windowId || '');
+
+    if (sameWindow && appendSafe(recapMessages, base.messageSequence, base.messageCount)) {
+      const added = recapMessages
+        .filter((item) => Number(item?.id || 0) > base.messageSequence)
+        .map((item) => toStoredChatRecord(item));
+      if (added.length) push.recapMessages = added;
+    } else {
+      set.recapMessages = recapMessages.map((item) => toStoredChatRecord(item));
+    }
+
+    if (sameWindow && appendSafe(streamContexts, base.contextSequence, base.contextCount)) {
+      const added = streamContexts.filter((item) => Number(item?.id || 0) > base.contextSequence);
+      if (added.length) push.streamContexts = added;
+    } else {
+      set.streamContexts = streamContexts;
+    }
+
+    if (sameWindow && appendSafe(twitchEvents, base.eventSequence, base.eventCount)) {
+      const added = twitchEvents
+        .filter((item) => Number(item?.id || 0) > base.eventSequence)
+        .map((item) => toStoredEventRecord(item));
+      if (added.length) push.twitchEvents = added;
+    } else {
+      set.twitchEvents = twitchEvents.map((item) => toStoredEventRecord(item));
+    }
+
+    const currentPending = pendingLearningCheckpoint(pendingLearning);
+    if (!samePendingLearningSnapshot(base.pendingLearning, currentPending)) {
+      // A newly-created learning handoff has to be written once in full. After
+      // that, its large immutable source arrays are never retransmitted.
+      set.pendingLearning = pendingLearning;
+    } else if (pendingLearning) {
+      set['pendingLearning.streamId'] = String(pendingLearning.streamId || '');
+      set['pendingLearning.windowId'] = String(pendingLearning.windowId || '');
+      set['pendingLearning.dueAt'] = Number(pendingLearning.dueAt || 0);
+      set['pendingLearning.generationStartedAt'] = Number(pendingLearning.generationStartedAt || 0);
+      set['pendingLearning.windowThroughAt'] = Number(pendingLearning.windowThroughAt || 0);
+      set['pendingLearning.recapSummaryBody'] = String(pendingLearning.recapSummaryBody || '');
+      set['pendingLearning.streamLore'] = String(pendingLearning.streamLore || '');
+      set['pendingLearning.sessionMemoryDone'] = pendingLearning.sessionMemoryDone === true;
+      set['pendingLearning.viewerLearningDone'] = pendingLearning.viewerLearningDone === true;
+      set['pendingLearning.streamLoreDone'] = pendingLearning.streamLoreDone === true;
+      set['pendingLearning.createdAt'] = Number(pendingLearning.createdAt || 0);
+    }
+
+    return {
+      payload: {
+        streamId: currentStreamId,
+        writerFence: operationContext.fence(),
+        expected: {
+          windowId: base.windowId,
+          messageSequence: base.messageSequence,
+          contextSequence: base.contextSequence,
+          eventSequence: base.eventSequence,
+          pendingLearningWindowId: base.pendingLearning?.windowId || '',
+          pendingLearningIsNull: !base.pendingLearning
+        },
+        set,
+        push
+      },
+      nextCheckpoint: activeStateCheckpointFromCurrent()
+    };
+  }
+
+  function buildFullActiveStateOperation() {
+    const state = buildActiveState();
+    return {
+      operation: {
+        mode: 'full',
+        payload: {
+          streamId: currentStreamId, channelName,
+          startedAt: twitchStreamStartedAt || streamSessionStartedAt || null,
+          writerFence: operationContext.fence(), state
+        }
+      },
+      nextCheckpoint: activeStateCheckpointFromCurrent()
     };
   }
 
@@ -525,16 +653,37 @@ function createRecapManager({
     if (!currentStreamId || !streamLive) return;
     if (!force && !activeStateDirty) return;
     if (!force && stateWriter.pending) return;
-    const snapshot = { streamId: currentStreamId, channelName,
-      startedAt: twitchStreamStartedAt || streamSessionStartedAt || null,
-      writerFence: operationContext.fence(), state: buildActiveState() };
+
+    let prepared;
+    if (persistedActiveStateCheckpoint) {
+      const delta = buildActiveStateDelta(persistedActiveStateCheckpoint);
+      prepared = { operation: { mode: 'delta', payload: delta.payload }, nextCheckpoint: delta.nextCheckpoint };
+    } else {
+      prepared = buildFullActiveStateOperation();
+    }
+
     activeStateDirty = false;
-    const saving = stateWriter.save(snapshot);
+    let saving = stateWriter.save(prepared.operation);
     activeStateSavePromise = saving;
     activeStateSaveInProgress = true;
     try {
-      await saving;
+      let result = await saving;
+
+      if (prepared.operation.mode === 'delta' && result?.matched === false) {
+        // A timeout-after-commit, legacy sequence value, or another valid state
+        // transition can make the local delta base stale. Resynchronize once
+        // with a full checkpoint instead of risking duplicate $push entries.
+        console.warn('[Recap Persistence] Delta base changed; resynchronizing with one full checkpoint.');
+        prepared = buildFullActiveStateOperation();
+        activeStateDirty = false;
+        saving = stateWriter.save(prepared.operation);
+        activeStateSavePromise = saving;
+        result = await saving;
+      }
+
+      persistedActiveStateCheckpoint = prepared.nextCheckpoint;
       lastPersistenceError = '';
+      return result;
     } catch (err) {
       activeStateDirty = true;
       lastPersistenceError = String(err?.message || err);
@@ -698,6 +847,7 @@ function createRecapManager({
       nextRecapAt = Number(saved.nextRecapAt || 0);
 
       activeStateDirty = false;
+      persistedActiveStateCheckpoint = activeStateCheckpointFromCurrent();
       rebuildWindowIndex();
       await recoverWindowDelivery();
       schedulePendingLearning();
@@ -744,6 +894,7 @@ function createRecapManager({
     clearRecapTimer();
     clearLearningTimer();
     pendingLearning = null;
+    persistedActiveStateCheckpoint = null;
     windowId = randomUUID(); windowCreatedAt = Date.now(); windowBytes = 0;
     capacityReached = false; recoveryReason = ''; recoveryDeliveryKey = '';
     chatIds.clear(); eventIds.clear();
@@ -985,7 +1136,8 @@ function createRecapManager({
     pendingLearning = null; clearLearningTimer();
     firstRecapSent = false; recapInProgress = false; recapPaused = false; collectionPaused = false;
     pausedRemainingMs = 0; streamSessionStartedAt = 0; twitchStreamStartedAt = 0; nextRecapAt = 0;
-    activeStateDirty = false; chatIds.clear(); eventIds.clear(); windowBytes = 0;
+    activeStateDirty = false; persistedActiveStateCheckpoint = null;
+    chatIds.clear(); eventIds.clear(); windowBytes = 0;
     capacityReached = false; recoveryReason = ''; recoveryDeliveryKey = ''; pendingEnd = null;
     console.log('[Recap] Qwert is OFFLINE. Ended stream state was durably cleared without touching another stream.');
   }

@@ -137,16 +137,66 @@ async function saveActiveRecapState({ streamId, channelName, startedAt, state, w
   const normalizedChannelName = normalizeChannelName(channelName);
   if (!normalizedStreamId || !normalizedChannelName || !state) throw new Error('Invalid active recap checkpoint.');
   try {
-    return await StreamRecapSession.findOneAndUpdate({ streamId: normalizedStreamId, endedAt: null,
+    // updateOne avoids sending the just-written multi-megabyte document back to
+    // Render. Callers only need durable acknowledgement, not the saved document.
+    return await StreamRecapSession.updateOne({ streamId: normalizedStreamId, endedAt: null,
       $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
       $setOnInsert: { channelName: normalizedChannelName, streamId: normalizedStreamId,
         startedAt: startedAt ? new Date(startedAt) : null },
       $set: { writerFence, activeState: { ...state, savedAt: new Date() } }
-    }, { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true }).lean();
+    }, { ...WRITE_OPTIONS, upsert: true, setDefaultsOnInsert: true });
   } catch (err) {
     if (err.code === 11000) throw new Error('Stale recap checkpoint rejected: a newer instance/session owns the state.');
     throw err;
   }
+}
+
+async function saveActiveRecapDelta({ streamId, expected = {}, set = {}, push = {}, writerFence = operationContext.fence() }) {
+  const normalizedStreamId = normalizeStreamId(streamId);
+  if (!normalizedStreamId) throw new Error('Invalid active recap delta checkpoint.');
+
+  const filter = {
+    streamId: normalizedStreamId,
+    endedAt: null,
+    $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }],
+    'activeState.windowId': String(expected.windowId || ''),
+    'activeState.messageSequence': Number(expected.messageSequence || 0),
+    'activeState.contextSequence': Number(expected.contextSequence || 0),
+    'activeState.eventSequence': Number(expected.eventSequence || 0)
+  };
+
+  if (expected.pendingLearningWindowId) {
+    filter['activeState.pendingLearning.windowId'] = String(expected.pendingLearningWindowId);
+  } else if (expected.pendingLearningIsNull === true) {
+    // MongoDB's null match also accepts a missing field, which keeps this
+    // compatible with active-state documents created before pendingLearning.
+    filter['activeState.pendingLearning'] = null;
+  }
+
+  const $set = {
+    writerFence,
+    'activeState.savedAt': new Date()
+  };
+  for (const [key, value] of Object.entries(set || {})) {
+    if (!key || key.startsWith('$')) continue;
+    $set[`activeState.${key}`] = value;
+  }
+
+  const $push = {};
+  for (const [key, values] of Object.entries(push || {})) {
+    if (!key || key.startsWith('$') || !Array.isArray(values) || values.length === 0) continue;
+    $push[`activeState.${key}`] = { $each: values };
+  }
+
+  const update = { $set };
+  if (Object.keys($push).length) update.$push = $push;
+
+  const result = await StreamRecapSession.updateOne(filter, update, WRITE_OPTIONS);
+  return {
+    matched: Number(result?.matchedCount || 0) > 0,
+    matchedCount: Number(result?.matchedCount || 0),
+    modifiedCount: Number(result?.modifiedCount || 0)
+  };
 }
 
 async function saveFinalLearningJob({ streamId, channelName, segments = [], writerFence = operationContext.fence() }) {
@@ -245,6 +295,7 @@ module.exports = {
   clearSessionMemory,
   getActiveRecapState,
   saveActiveRecapState,
+  saveActiveRecapDelta,
   clearActiveRecapState,
   clearStreamRecapsByChannel,
   clearStreamRecapsForStream,
