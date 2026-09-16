@@ -139,12 +139,17 @@ async function saveActiveRecapState({ streamId, channelName, startedAt, state, w
   try {
     // updateOne avoids sending the just-written multi-megabyte document back to
     // Render. Callers only need durable acknowledgement, not the saved document.
-    return await StreamRecapSession.updateOne({ streamId: normalizedStreamId, endedAt: null,
+    const now = new Date();
+    // Use the native collection for active-state persistence so MongoDB receives
+    // the compact recovery records exactly as built. Mongoose subdocument
+    // defaults would otherwise re-expand omitted empty/default fields before the
+    // command is sent across Render -> Atlas.
+    return await StreamRecapSession.collection.updateOne({ streamId: normalizedStreamId, endedAt: null,
       $or: [{ writerFence: { $exists: false } }, { writerFence: { $lte: writerFence } }] }, {
       $setOnInsert: { channelName: normalizedChannelName, streamId: normalizedStreamId,
-        startedAt: startedAt ? new Date(startedAt) : null },
-      $set: { writerFence, activeState: { ...state, savedAt: new Date() } }
-    }, { ...WRITE_OPTIONS, upsert: true, setDefaultsOnInsert: true });
+        startedAt: startedAt ? new Date(startedAt) : null, endedAt: null, createdAt: now },
+      $set: { writerFence, activeState: { ...state, savedAt: now }, updatedAt: now }
+    }, { ...WRITE_OPTIONS, upsert: true });
   } catch (err) {
     if (err.code === 11000) throw new Error('Stale recap checkpoint rejected: a newer instance/session owns the state.');
     throw err;
@@ -191,7 +196,8 @@ async function saveActiveRecapDelta({ streamId, expected = {}, set = {}, push = 
   const update = { $set };
   if (Object.keys($push).length) update.$push = $push;
 
-  const result = await StreamRecapSession.updateOne(filter, update, WRITE_OPTIONS);
+  update.$set.updatedAt = new Date();
+  const result = await StreamRecapSession.collection.updateOne(filter, update, WRITE_OPTIONS);
   return {
     matched: Number(result?.matchedCount || 0) > 0,
     matchedCount: Number(result?.matchedCount || 0),

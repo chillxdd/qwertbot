@@ -50,6 +50,7 @@ const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
 const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
 const ACTIVE_STATE_CHECKPOINT_INTERVAL = 30 * 1000;
+const PERSISTENCE_TELEMETRY_INTERVAL_MS = 10 * 60 * 1000;
 const STARTUP_GRACE_MS = 60000;
 const MAX_WINDOW_MESSAGES = 12000;
 const MAX_WINDOW_EVENTS = 2000;
@@ -75,6 +76,84 @@ function toStoredChatRecord(value, defaults = {}) {
 
 function toStoredEventRecord(value, defaults = {}) {
   return normalizeEventRecord(value, defaults);
+}
+
+// The in-memory recap record is intentionally rich because it is used by recap,
+// attribution, Shared Chat, and learning code. MongoDB recovery checkpoints do
+// not need every derived/default field. Persist a compact lossless form and
+// rebuild the rich form with normalizeChatRecord()/normalizeEventRecord() after
+// a restart. This materially reduces Atlas egress in busy chat.
+function compactIdentityForPersistence(value = {}) {
+  const identity = normalizeIdentity(value);
+  const out = {};
+  if (identity.userId) out.userId = identity.userId;
+  if (identity.login) out.login = identity.login;
+  if (identity.displayName) out.displayName = identity.displayName;
+  if (identity.role && identity.role !== 'unknown') out.role = identity.role;
+  return Object.keys(out).length ? out : null;
+}
+
+function nonEmptyObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+function toPersistedChatRecord(value, defaults = {}) {
+  const record = normalizeChatRecord(value, defaults);
+  const out = { id: record.id, timestamp: record.timestamp, body: record.text };
+  if (record.twitchMessageId) out.twitchMessageId = record.twitchMessageId;
+  if (record.sourceMessageId) out.sourceMessageId = record.sourceMessageId;
+  if (record.kind && record.kind !== 'viewer') out.kind = record.kind;
+  const author = compactIdentityForPersistence(record.author);
+  if (author) out.author = author;
+  if (record.replyTo) {
+    const reply = {};
+    if (record.replyTo.messageId) reply.messageId = record.replyTo.messageId;
+    if (record.replyTo.text) reply.text = record.replyTo.text;
+    const replyAuthor = compactIdentityForPersistence(record.replyTo.author);
+    if (replyAuthor) reply.author = replyAuthor;
+    if (Object.keys(reply).length) out.replyTo = reply;
+  }
+  // Normal Twitch messages carry destinationRoomId even when Shared Chat is not
+  // active. It is reconstructible/no-op metadata, so do not pay to persist it.
+  if (record.sharedChat?.active) out.sharedChat = record.sharedChat;
+  if (nonEmptyObject(record.metadata)) out.metadata = record.metadata;
+  return out;
+}
+
+function toPersistedEventRecord(value, defaults = {}) {
+  const record = normalizeEventRecord(value, defaults);
+  const out = { id: record.id, timestamp: record.timestamp, type: record.type, text: record.text };
+  if (record.sourceEventId) out.sourceEventId = record.sourceEventId;
+  const actor = compactIdentityForPersistence(record.actor);
+  if (actor) out.actor = actor;
+  const target = compactIdentityForPersistence(record.target);
+  if (target) out.target = target;
+  if (record.anonymous) out.anonymous = true;
+  if (record.amount !== null && record.amount !== undefined) out.amount = record.amount;
+  if (record.quantity !== null && record.quantity !== undefined) out.quantity = record.quantity;
+  if (record.rewardId) out.rewardId = record.rewardId;
+  if (nonEmptyObject(record.metadata)) out.metadata = record.metadata;
+  return out;
+}
+
+function toPersistedPendingLearning(value) {
+  if (!value) return null;
+  return {
+    streamId: String(value.streamId || ''),
+    windowId: String(value.windowId || ''),
+    dueAt: Number(value.dueAt || 0),
+    generationStartedAt: Number(value.generationStartedAt || 0),
+    windowThroughAt: Number(value.windowThroughAt || 0),
+    recapSummaryBody: String(value.recapSummaryBody || ''),
+    streamLore: String(value.streamLore || ''),
+    messageSnapshot: Array.isArray(value.messageSnapshot) ? value.messageSnapshot.map((item) => toPersistedChatRecord(item)) : [],
+    contextSnapshot: Array.isArray(value.contextSnapshot) ? value.contextSnapshot : [],
+    eventSnapshot: Array.isArray(value.eventSnapshot) ? value.eventSnapshot.map((item) => toPersistedEventRecord(item)) : [],
+    sessionMemoryDone: value.sessionMemoryDone === true,
+    viewerLearningDone: value.viewerLearningDone === true,
+    streamLoreDone: value.streamLoreDone === true,
+    createdAt: Number(value.createdAt || 0)
+  };
 }
 
 function replyReferenceFromInput(replyTo = null, tags = {}) {
@@ -185,6 +264,13 @@ function createRecapManager({
   let activeStateDirty = false;
   let activeStateSaveInProgress = false;
   let persistedActiveStateCheckpoint = null;
+  let persistenceTelemetry = {
+    startedAt: Date.now(),
+    deltaWrites: 0,
+    fullWrites: 0,
+    logicalBytes: 0,
+    maxLogicalBytes: 0
+  };
   let lastStreamStartedAt = 0;
   let lastStreamEndedAt = 0;
   let lastStreamLifecycleEventType = '';
@@ -516,10 +602,10 @@ function createRecapManager({
   function buildActiveState() {
     return {
       ...buildActiveStateMetadata(),
-      recapMessages: recapMessages.map((item) => toStoredChatRecord(item)),
+      recapMessages: recapMessages.map((item) => toPersistedChatRecord(item)),
       streamContexts,
-      twitchEvents: twitchEvents.map((item) => toStoredEventRecord(item)),
-      pendingLearning
+      twitchEvents: twitchEvents.map((item) => toPersistedEventRecord(item)),
+      pendingLearning: toPersistedPendingLearning(pendingLearning)
     };
   }
 
@@ -574,10 +660,10 @@ function createRecapManager({
     if (sameWindow && appendSafe(recapMessages, base.messageSequence, base.messageCount)) {
       const added = recapMessages
         .filter((item) => Number(item?.id || 0) > base.messageSequence)
-        .map((item) => toStoredChatRecord(item));
+        .map((item) => toPersistedChatRecord(item));
       if (added.length) push.recapMessages = added;
     } else {
-      set.recapMessages = recapMessages.map((item) => toStoredChatRecord(item));
+      set.recapMessages = recapMessages.map((item) => toPersistedChatRecord(item));
     }
 
     if (sameWindow && appendSafe(streamContexts, base.contextSequence, base.contextCount)) {
@@ -590,29 +676,25 @@ function createRecapManager({
     if (sameWindow && appendSafe(twitchEvents, base.eventSequence, base.eventCount)) {
       const added = twitchEvents
         .filter((item) => Number(item?.id || 0) > base.eventSequence)
-        .map((item) => toStoredEventRecord(item));
+        .map((item) => toPersistedEventRecord(item));
       if (added.length) push.twitchEvents = added;
     } else {
-      set.twitchEvents = twitchEvents.map((item) => toStoredEventRecord(item));
+      set.twitchEvents = twitchEvents.map((item) => toPersistedEventRecord(item));
     }
 
     const currentPending = pendingLearningCheckpoint(pendingLearning);
     if (!samePendingLearningSnapshot(base.pendingLearning, currentPending)) {
       // A newly-created learning handoff has to be written once in full. After
       // that, its large immutable source arrays are never retransmitted.
-      set.pendingLearning = pendingLearning;
+      set.pendingLearning = toPersistedPendingLearning(pendingLearning);
     } else if (pendingLearning) {
-      set['pendingLearning.streamId'] = String(pendingLearning.streamId || '');
-      set['pendingLearning.windowId'] = String(pendingLearning.windowId || '');
+      // The snapshot identity, source arrays, recap text, and stream-lore context
+      // are immutable after creation. Only retransmit the fields that actually
+      // change while delayed learning runs.
       set['pendingLearning.dueAt'] = Number(pendingLearning.dueAt || 0);
-      set['pendingLearning.generationStartedAt'] = Number(pendingLearning.generationStartedAt || 0);
-      set['pendingLearning.windowThroughAt'] = Number(pendingLearning.windowThroughAt || 0);
-      set['pendingLearning.recapSummaryBody'] = String(pendingLearning.recapSummaryBody || '');
-      set['pendingLearning.streamLore'] = String(pendingLearning.streamLore || '');
       set['pendingLearning.sessionMemoryDone'] = pendingLearning.sessionMemoryDone === true;
       set['pendingLearning.viewerLearningDone'] = pendingLearning.viewerLearningDone === true;
       set['pendingLearning.streamLoreDone'] = pendingLearning.streamLoreDone === true;
-      set['pendingLearning.createdAt'] = Number(pendingLearning.createdAt || 0);
     }
 
     return {
@@ -649,6 +731,40 @@ function createRecapManager({
     };
   }
 
+  function checkpointLogicalBytes(operation) {
+    try {
+      return Buffer.byteLength(JSON.stringify(operation?.payload || operation || {}));
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function recordPersistenceTelemetry(operation) {
+    const mode = operation?.mode === 'delta' ? 'delta' : 'full';
+    const bytes = checkpointLogicalBytes(operation);
+    if (mode === 'delta') persistenceTelemetry.deltaWrites += 1;
+    else persistenceTelemetry.fullWrites += 1;
+    persistenceTelemetry.logicalBytes += bytes;
+    persistenceTelemetry.maxLogicalBytes = Math.max(persistenceTelemetry.maxLogicalBytes, bytes);
+
+    // Full checkpoints should now be exceptional (initial state/resync). Log
+    // them immediately so Render logs make an accidental full-write loop obvious.
+    if (mode === 'full') {
+      console.log(`[Recap Persistence] FULL checkpoint logical payload ${(bytes / 1024).toFixed(1)} KiB.`);
+    }
+
+    const elapsed = Date.now() - persistenceTelemetry.startedAt;
+    if (elapsed < PERSISTENCE_TELEMETRY_INTERVAL_MS) return;
+    console.log(
+      `[Recap Persistence] Last ${Math.max(1, Math.round(elapsed / 60000))}m: ` +
+      `${persistenceTelemetry.deltaWrites} delta / ${persistenceTelemetry.fullWrites} full checkpoint(s), ` +
+      `${(persistenceTelemetry.logicalBytes / (1024 * 1024)).toFixed(2)} MiB logical payload total, ` +
+      `${(persistenceTelemetry.maxLogicalBytes / 1024).toFixed(1)} KiB max. ` +
+      'MongoDB transport is configured for zlib wire compression.'
+    );
+    persistenceTelemetry = { startedAt: Date.now(), deltaWrites: 0, fullWrites: 0, logicalBytes: 0, maxLogicalBytes: 0 };
+  }
+
   async function persistActiveState({ force = false } = {}) {
     if (!currentStreamId || !streamLive) return;
     if (!force && !activeStateDirty) return;
@@ -663,6 +779,7 @@ function createRecapManager({
     }
 
     activeStateDirty = false;
+    recordPersistenceTelemetry(prepared.operation);
     let saving = stateWriter.save(prepared.operation);
     activeStateSavePromise = saving;
     activeStateSaveInProgress = true;
@@ -676,6 +793,7 @@ function createRecapManager({
         console.warn('[Recap Persistence] Delta base changed; resynchronizing with one full checkpoint.');
         prepared = buildFullActiveStateOperation();
         activeStateDirty = false;
+        recordPersistenceTelemetry(prepared.operation);
         saving = stateWriter.save(prepared.operation);
         activeStateSavePromise = saving;
         result = await saving;

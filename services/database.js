@@ -26,12 +26,30 @@ async function connectDatabase() {
     mongoose.connection.on('disconnected', () => console.warn('[Database] MongoDB disconnected; bot lease work will stop.'));
     mongoose.connection.on('error', (err) => console.error('[Database] Connection error:', err.message));
   }
-  connecting = mongoose.connect(uri, { serverSelectionTimeoutMS: 5000, connectTimeoutMS: 10000,
-    socketTimeoutMS: 20000, maxPoolSize: 10, autoCreate: false, autoIndex: false });
+  // Atlas is outside Render, so every byte QwertBot sends to MongoDB counts
+  // as Render Service-Initiated bandwidth. The MongoDB driver does not enable
+  // wire compression by default. zlib is built into Node (no extra dependency)
+  // and Atlas supports MongoDB wire-protocol compression, so enable it for all
+  // database commands. This is especially important for recap checkpoint batches
+  // that contain many similarly-shaped chat records.
+  const requestedCompressionLevel = Number(process.env.MONGODB_ZLIB_COMPRESSION_LEVEL ?? 6);
+  const zlibCompressionLevel = Number.isInteger(requestedCompressionLevel)
+    ? Math.max(-1, Math.min(9, requestedCompressionLevel))
+    : 6;
+  connecting = mongoose.connect(uri, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 10000,
+    socketTimeoutMS: 20000,
+    maxPoolSize: 10,
+    autoCreate: false,
+    autoIndex: false,
+    compressors: ['zlib'],
+    zlibCompressionLevel
+  });
   try {
     await connecting;
     if (!isDatabaseConnected()) throw new Error('MongoDB connection completed without an available database handle.');
-    console.log('[Database] MongoDB connected.');
+    console.log(`[Database] MongoDB connected with zlib wire compression (level ${zlibCompressionLevel}).`);
     return mongoose.connection;
   } finally { connecting = null; }
 }
