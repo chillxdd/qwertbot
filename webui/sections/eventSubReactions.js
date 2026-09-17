@@ -318,28 +318,29 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
           <option value="green">Green</option>
           <option value="orange">Orange</option>
         </select>
-        <div class="event-action-discord-options" hidden>
-          <label>Discord Webhook URL
-            <div class="event-action-discord-webhook-line">
-              <input class="event-action-discord-webhook" type="password" autocomplete="new-password" spellcheck="false" placeholder="https://discord.com/api/webhooks/ID/TOKEN">
-              <button class="secondary event-action-discord-test" type="button">Test</button>
-            </div>
-          </label>
-          <label>Discord Mentions
-            <select class="event-action-discord-mentions">
-              <option value="none">No pings</option>
-              <option value="everyone">Allow @everyone / @here</option>
-              <option value="roles">Allow role pings</option>
-              <option value="all">Allow @everyone/@here + roles</option>
-            </select>
-          </label>
-          <div class="detail event-action-discord-help"></div>
-        </div>
       </div>
       <div class="event-action-order-buttons">
         <button class="secondary event-action-up" type="button" title="Move up">↑</button>
         <button class="secondary event-action-down" type="button" title="Move down">↓</button>
         <button class="secondary event-action-remove" type="button">Remove</button>
+      </div>
+      <div class="event-action-discord-options" hidden>
+        <div class="event-action-discord-title">Discord notification settings</div>
+        <label>Webhook URL
+          <div class="event-action-discord-webhook-line">
+            <input class="event-action-discord-webhook" type="password" autocomplete="new-password" spellcheck="false" placeholder="https://discord.com/api/webhooks/ID/TOKEN">
+            <button class="secondary event-action-discord-test" type="button">Test</button>
+          </div>
+        </label>
+        <label>Mentions
+          <select class="event-action-discord-mentions">
+            <option value="none">No pings</option>
+            <option value="everyone">Allow @everyone / @here</option>
+            <option value="roles">Allow role pings</option>
+            <option value="all">Allow @everyone/@here + roles</option>
+          </select>
+        </label>
+        <div class="detail event-action-discord-help"></div>
       </div>`;
     const typeEl = row.querySelector('.event-action-type');
     const valueWrap = row.querySelector('.event-action-value-wrap');
