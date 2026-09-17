@@ -1,4 +1,10 @@
-const { requestGeminiDataWithRetry } = require('./geminiClient');
+const {
+  GEMINI_MODEL,
+  GEMINI_RECAP_PRIMARY_MODEL,
+  GEMINI_RECAP_PRIMARY_DAILY_LIMIT,
+  requestGeminiDataWithRetry
+} = require('./geminiClient');
+const { claimRecapPrimaryQuota } = require('./geminiRecapQuota');
 const { detectPromptInjection, createUntrustedBlock } = require('./promptSecurity');
 const { getRecapPromptConfig, getDefaultRecapPromptConfig } = require('./recapPromptConfig');
 const {
@@ -354,9 +360,10 @@ function formatPreviousRecaps(previousRecaps = []) {
   return `PREVIOUS HOURLY RECAPS FROM THIS STREAM:\n${lines.join('\n')}\n\nPREVIOUS RECAP RULES:\n- These earlier recaps are continuity context only. They are NOT evidence that anything happened again in the current hour.\n- Use them to recognize callbacks, recurring jokes, names, or ongoing themes and to avoid unnecessarily repeating old recap material.\n- Every factual claim in the CURRENT recap must still be supported by the CURRENT source chat or CURRENT verified Twitch events.\n- Do not carry an old event, result, opinion, relationship, or joke into the current recap unless the current source supports that it continued or returned.\n- If an older recap conflicts with the current source, trust the current source.\n- Do not waste space re-explaining old context unless it helps make a current-hour callback understandable.`;
 }
 
-async function sendGeminiPrompt(prompt, { label = 'recap', maxRetries = 1 } = {}) {
+async function sendGeminiPrompt(prompt, { label = 'recap', maxRetries = 1, model = GEMINI_MODEL } = {}) {
   return requestGeminiDataWithRetry(prompt, {
     label,
+    model,
     priority: 'normal',
     timeoutMs: 180000,
     retryOnTimeout: false,
@@ -652,7 +659,69 @@ Before outputting, silently verify every causal link, specific noun/label, and i
 Output ONLY the revised recap.`;
 }
 async function callGemini(chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, primaryInstructions = '', botUsername = '') {
-  return sendGeminiPrompt(buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, primaryInstructions, botUsername), { label: 'hourly-recap-primary', maxRetries: 1 });
+  const prompt = buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, primaryInstructions, botUsername);
+  const premiumModel = GEMINI_RECAP_PRIMARY_MODEL;
+  const fallbackModel = GEMINI_MODEL;
+  const quota = await claimRecapPrimaryQuota({
+    model: premiumModel,
+    limit: GEMINI_RECAP_PRIMARY_DAILY_LIMIT
+  });
+
+  if (quota.allowed) {
+    console.log(`[Recap Gemini] Routing hourly primary recap to ${premiumModel} (${quota.used}/${quota.limit} QwertBot premium start(s) for ${quota.pacificDay} Pacific).`);
+    try {
+      const data = await sendGeminiPrompt(prompt, {
+        label: 'hourly-recap-primary-flash',
+        model: premiumModel,
+        // The non-Lite model has a small 20-RPD allowance. Never spend a
+        // second premium request retrying the same recap; Lite is the retry path.
+        maxRetries: 0
+      });
+      if (!extractGeminiText(data)) {
+        const err = new Error(`${premiumModel} returned no readable primary recap text.`);
+        err.retryable = true;
+        throw err;
+      }
+      return {
+        data,
+        model: premiumModel,
+        premium: true,
+        fallback: false,
+        quota
+      };
+    } catch (err) {
+      if (err?.cancelled) throw err;
+      console.warn(`[Recap Gemini] ${premiumModel} primary failed (${err?.message || err}). Falling back to ${fallbackModel} without another premium attempt.`);
+      const data = await sendGeminiPrompt(prompt, {
+        label: 'hourly-recap-primary-lite-fallback',
+        model: fallbackModel,
+        maxRetries: 1
+      });
+      return {
+        data,
+        model: fallbackModel,
+        premium: false,
+        fallback: true,
+        fallbackReason: err?.message || String(err),
+        quota
+      };
+    }
+  }
+
+  console.log(`[Recap Gemini] ${premiumModel} QwertBot daily cap reached (${quota.used}/${quota.limit} for ${quota.pacificDay} Pacific). Using ${fallbackModel} for the hourly primary recap.`);
+  const data = await sendGeminiPrompt(prompt, {
+    label: 'hourly-recap-primary-lite-quota-fallback',
+    model: fallbackModel,
+    maxRetries: 1
+  });
+  return {
+    data,
+    model: fallbackModel,
+    premium: false,
+    fallback: true,
+    fallbackReason: 'premium_daily_cap',
+    quota
+  };
 }
 
 async function expandRecapWithGemini({ currentSummary, chatLogs, streamContexts = [], twitchEvents = [], previousRecaps = [], streamLore = '', streamTiming = {}, targetMin = 400, attempt = 1, acceptableMin = 380, expansionInstructions = '', botUsername = '' }) {
@@ -1154,9 +1223,23 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   }
 
   let primaryData;
+  let primaryRouting = {
+    model: GEMINI_MODEL,
+    premium: false,
+    fallback: false,
+    fallbackReason: ''
+  };
 
   try {
-    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, promptConfig.primaryInstructions, botUsername);
+    const primaryResult = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, promptConfig.primaryInstructions, botUsername);
+    primaryData = primaryResult.data;
+    primaryRouting = {
+      model: primaryResult.model || GEMINI_MODEL,
+      premium: Boolean(primaryResult.premium),
+      fallback: Boolean(primaryResult.fallback),
+      fallbackReason: String(primaryResult.fallbackReason || ''),
+      quota: primaryResult.quota || null
+    };
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error('Gemini blocked the chat input even after sensitive-term redaction.');
@@ -1366,7 +1449,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   console.log('[Recap Gemini] Final recap:', summary);
   console.log(`[Recap Gemini] Final length: ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
 
-  return { summary, sanitization };
+  return { summary, sanitization, primaryRouting };
 }
 
 

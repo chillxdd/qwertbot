@@ -20,6 +20,7 @@ const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PER
 const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('../services/renderLogs');
 const { getRuntimeDiagnostics } = require('../services/runtimeDiagnostics');
 const { getGeminiClientStatus } = require('../services/geminiClient');
+const { getRecapPrimaryQuotaStatus } = require('../services/geminiRecapQuota');
 const { getAuthStatus } = require('../services/twitchAuth');
 const { getBroadcasterAuthStatus } = require('../services/twitchBroadcasterAuth');
 const { getChatApiReadiness } = require('../services/twitchChat');
@@ -214,9 +215,14 @@ function registerDashboardRoutes(app, options) {
     const taggedStatus = getBotPersonalityManager?.()?.getRecapCollisionStatus?.() || {};
     const runtime = getRuntimeDiagnostics();
     const gemini = getGeminiClientStatus();
+    const recapPrimaryQuota = await getRecapPrimaryQuotaStatus({
+      model: gemini.recapPrimaryModel,
+      limit: gemini.recapPrimaryDailyLimit
+    });
     const diagnostics = {
       runtime,
       gemini,
+      recapPrimaryQuota,
       taggedQuestions: {
         inFlight: Number(taggedStatus.taggedQuestionsInFlight || 0)
       },
@@ -226,7 +232,12 @@ function registerDashboardRoutes(app, options) {
         collectionPaused: Boolean(recapStatus.collectionPaused),
         stopped: Boolean(recapStatus.recapSystemStopped),
         messagesInWindow: Number(recapStatus.messagesInWindow || 0),
-        twitchEventsInWindow: Number(recapStatus.twitchEventsInWindow || 0)
+        twitchEventsInWindow: Number(recapStatus.twitchEventsInWindow || 0),
+        lastPrimaryModel: recapStatus.lastRecapPrimaryModel || null,
+        lastPrimaryPremium: Boolean(recapStatus.lastRecapPrimaryPremium),
+        lastPrimaryFallback: Boolean(recapStatus.lastRecapPrimaryFallback),
+        lastPrimaryFallbackReason: recapStatus.lastRecapPrimaryFallbackReason || null,
+        lastPrimaryAt: recapStatus.lastRecapPrimaryAt || null
       },
       services: {
         databaseConnected: Boolean(getDatabaseConnected()),

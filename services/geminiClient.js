@@ -4,6 +4,8 @@ const { createQueuePolicy } = require('./reliability/queuePolicy');
 const chooseQueuedJob = createQueuePolicy();
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim() || 'gemini-3.5-flash-lite';
+const GEMINI_RECAP_PRIMARY_MODEL = String(process.env.GEMINI_RECAP_PRIMARY_MODEL || 'gemini-3.5-flash').trim() || 'gemini-3.5-flash';
+const GEMINI_RECAP_PRIMARY_DAILY_LIMIT = clampNumber(process.env.GEMINI_RECAP_PRIMARY_DAILY_LIMIT, 1, 1000, 20);
 const HARD_MAX_REQUESTS_PER_MINUTE = 12;
 const REQUEST_RATE_WINDOW_MS = 60 * 1000;
 const MIN_SAFE_REQUEST_START_SPACING_MS = Math.ceil(REQUEST_RATE_WINDOW_MS / HARD_MAX_REQUESTS_PER_MINUTE);
@@ -65,6 +67,7 @@ function recordRequestStart(job, startedAt = Date.now()) {
     finishedAt: null,
     durationMs: null,
     label: String(job?.options?.label || 'gemini'),
+    model: String(job?.options?.model || GEMINI_MODEL),
     priority: String(job?.priority || normalizePriority(job?.options?.priority)),
     outcome: 'active',
     status: null
@@ -103,6 +106,8 @@ function getGeminiClientStatus() {
   const recentCutoff = now - REQUEST_RATE_WINDOW_MS;
   return {
     model: GEMINI_MODEL,
+    recapPrimaryModel: GEMINI_RECAP_PRIMARY_MODEL,
+    recapPrimaryDailyLimit: GEMINI_RECAP_PRIMARY_DAILY_LIMIT,
     requestSpacingMs: getGeminiRequestSpacingMs(),
     hardMaxRequestsPerMinute: HARD_MAX_REQUESTS_PER_MINUTE,
     requestsStartedLastMinute: requestStartTimes.length,
@@ -680,6 +685,8 @@ async function requestGeminiTextWithRetry(prompt, options = {}) {
 module.exports = {
   configureSharedRateGate,
   GEMINI_MODEL,
+  GEMINI_RECAP_PRIMARY_MODEL,
+  GEMINI_RECAP_PRIMARY_DAILY_LIMIT,
   HARD_MAX_REQUESTS_PER_MINUTE,
   REQUEST_RATE_WINDOW_MS,
   DEFAULT_REQUEST_SPACING_MS,

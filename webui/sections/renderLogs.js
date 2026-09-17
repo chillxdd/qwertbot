@@ -42,6 +42,7 @@ export function initRenderLogsSection({ $, postJson }) {
     const eventLoop = runtime.eventLoop || {};
     const processInfo = runtime.process || {};
     const gemini = diag?.gemini || {};
+    const recapPrimaryQuota = diag?.recapPrimaryQuota || {};
     const tagged = diag?.taggedQuestions || {};
     const recap = diag?.recap || {};
     const services = diag?.services || {};
@@ -87,7 +88,7 @@ export function initRenderLogsSection({ $, postJson }) {
     setDiagnostic(
       'diagGemini',
       `${queued} queued${gemini.processing ? ' · active' : ''}`,
-      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · ${gemini.model || 'Gemini'}`,
+      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · Default: ${gemini.model || 'Gemini'} · Recap primary: ${gemini.recapPrimaryModel || 'default'}`,
       geminiState
     );
 
@@ -96,7 +97,7 @@ export function initRenderLogsSection({ $, postJson }) {
       ? recentGemini.map((entry) => {
           const stamp = entry.startedAt ? new Date(entry.startedAt).toLocaleTimeString() : '--:--:--';
           const result = entry.outcome === 'active' ? 'ACTIVE' : entry.status || String(entry.outcome || '').toUpperCase();
-          return `${stamp} ${entry.label || 'gemini'} [${entry.priority || 'normal'}] ${result}`;
+          return `${stamp} ${entry.label || 'gemini'} [${entry.model || gemini.model || 'Gemini'} · ${entry.priority || 'normal'}] ${result}`;
         }).join(' · ')
       : 'No Gemini HTTP requests started in the last 60 seconds.';
     setDiagnostic(
@@ -104,6 +105,23 @@ export function initRenderLogsSection({ $, postJson }) {
       recentGemini.length ? `${recentGemini.length} start${recentGemini.length === 1 ? '' : 's'}` : 'None',
       requestSummary,
       recentGemini.some((entry) => Number(entry.status) === 429) ? 'bad' : 'good'
+    );
+
+    const premiumUsed = Math.max(0, Number(recapPrimaryQuota.used || 0));
+    const premiumLimit = Math.max(1, Number(recapPrimaryQuota.limit || gemini.recapPrimaryDailyLimit || 20));
+    const premiumRemaining = Math.max(0, premiumLimit - premiumUsed);
+    const premiumState = premiumUsed >= premiumLimit ? 'warn' : premiumUsed >= Math.ceil(premiumLimit * 0.8) ? 'warn' : 'good';
+    const lastPrimary = recap.lastPrimaryModel
+      ? `Last recap primary: ${recap.lastPrimaryModel}${recap.lastPrimaryFallback ? ' (Lite fallback)' : recap.lastPrimaryPremium ? ' (premium)' : ''}${recap.lastPrimaryAt ? ` at ${new Date(recap.lastPrimaryAt).toLocaleTimeString()}` : ''}.`
+      : 'No recap primary has run since this process started.';
+    const quotaSource = recapPrimaryQuota.source && recapPrimaryQuota.source !== 'mongodb'
+      ? ` Counter source: ${recapPrimaryQuota.source}.`
+      : '';
+    setDiagnostic(
+      'diagRecapFlash',
+      `${premiumUsed}/${premiumLimit} starts today`,
+      `${premiumRemaining} QwertBot premium start${premiumRemaining === 1 ? '' : 's'} remaining · ${recapPrimaryQuota.model || gemini.recapPrimaryModel || 'Gemini Flash'} · resets at midnight Pacific. ${lastPrimary}${quotaSource}`,
+      premiumState
     );
 
     const taggedInFlight = Number(tagged.inFlight || 0);

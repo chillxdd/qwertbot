@@ -248,6 +248,11 @@ function createRecapManager({
   let eventSequence = 0;
   let firstRecapSent = false;
   let recapInProgress = false;
+  let lastRecapPrimaryModel = '';
+  let lastRecapPrimaryPremium = false;
+  let lastRecapPrimaryFallback = false;
+  let lastRecapPrimaryFallbackReason = '';
+  let lastRecapPrimaryAt = 0;
   let recapGenerationEpoch = 0;
   let streamSessionStartedAt = 0;
   let twitchStreamStartedAt = 0;
@@ -2106,6 +2111,12 @@ function createRecapManager({
         };
         const result = await generateRecap(chatRecords, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName, botUsername);
         recapSummaryBody = result.summary;
+        const routing = result.primaryRouting || {};
+        lastRecapPrimaryModel = String(routing.model || '');
+        lastRecapPrimaryPremium = Boolean(routing.premium);
+        lastRecapPrimaryFallback = Boolean(routing.fallback);
+        lastRecapPrimaryFallbackReason = String(routing.fallbackReason || '');
+        lastRecapPrimaryAt = Date.now();
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
 
@@ -2286,6 +2297,11 @@ function createRecapManager({
       recapSystemStopped: Boolean(recapPaused && collectionPaused),
       loggingMessages: streamStateInitialized && streamLive && !collectionPaused,
       recapInProgress,
+      lastRecapPrimaryModel: lastRecapPrimaryModel || null,
+      lastRecapPrimaryPremium,
+      lastRecapPrimaryFallback,
+      lastRecapPrimaryFallbackReason: lastRecapPrimaryFallbackReason || null,
+      lastRecapPrimaryAt: lastRecapPrimaryAt || null,
       firstRecapSent,
       messagesInWindow: recapMessages.length,
       twitchEventsInWindow: twitchEvents.length,
