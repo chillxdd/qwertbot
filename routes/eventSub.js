@@ -2,13 +2,13 @@ const context = require('../services/reliability/context');
 const { createInbox } = require('../services/reliability/inbox');
 const { createSerialExecutor } = require('../services/reliability/serialWriter');
 const { collection } = require('../services/reliability/store');
+const { ONE_SHOT_EVENT_TYPES, claimOneShotEvent } = require('../services/eventSubEntityDedupe');
 const { noteEventReceived, verifyEventSubRequest } = require('../services/twitchEventSub');
 const { normalizeIdentity, numberOrNull } = require('../services/sourceRecords');
 
 function cleanInline(value, max = 240) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
-
 
 function identityFromEvent(event = {}, prefix = 'user', role = 'viewer') {
   const key = String(prefix || 'user').replace(/_+$/g, '');
@@ -396,6 +396,16 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
     if (!recapManager.getStatus().streamStateInitialized) throw new Error('Twitch stream state is not known yet.');
     const currentStartedAt = Number(recapManager.getStatus().twitchStreamStartedAt || 0);
     if (currentStartedAt && timestamp < currentStartedAt) return; // Old stream, never reset a new one.
+
+    if (ONE_SHOT_EVENT_TYPES.has(type)) {
+      const guard = await step('one_shot_dedupe', () => claimOneShotEvent(namespace, type, event, job.messageId));
+      if (!guard?.accepted) {
+        const status = cleanInline(event?.status || '', 40) || 'n/a';
+        console.log(`[EventSub] Suppressed duplicate ${type}: ${guard?.entityKind || 'event'}=${guard?.entityId || 'unknown'} status=${status} firstMessage=${guard?.ownerMessageId || 'unknown'} duplicateMessage=${job.messageId}.`);
+        return;
+      }
+    }
+
     const plan = await prepareSerial(async () => {
       if (!restoredFilters) {
         // Rebuild only aggregation state, never replay reactions. Each durable
