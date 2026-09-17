@@ -1,4 +1,4 @@
-const { EVENT_TYPES, MAX_ACTIONS, MAX_HOLD_SECONDS, MAX_ACTION_DELAY_SECONDS } = require('../services/eventSubReactions');
+const { EVENT_TYPES, MAX_ACTIONS, MAX_HOLD_SECONDS, MAX_ACTION_DELAY_SECONDS, MAX_DISCORD_EMBED_FIELDS } = require('../services/eventSubReactions');
 
 function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseConnected, getEventSubReactionManager, getPersistentPinManager = null }) {
   const unavailable = (res) => res.status(503).json({ success: false, error: 'EventSub Reactions require MongoDB to be connected.' });
@@ -17,7 +17,7 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
         eventTypes: EVENT_TYPES,
         automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0),
         discordWebhookStorage: manager.getDiscordSecretStatus?.() || { ready: false, preferredSource: null, usingFallback: false },
-        limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS }
+        limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS, maxDiscordEmbedFields: MAX_DISCORD_EMBED_FIELDS }
       });
     } catch (err) {
       return res.status(500).json({ success: false, error: err.message || 'Could not load EventSub reactions.' });
@@ -39,7 +39,10 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
     try {
       await manager.testDiscordNotification({
         webhookUrl: String(req.body?.webhookUrl || ''),
-        webhookId: String(req.body?.webhookId || '')
+        webhookId: String(req.body?.webhookId || ''),
+        content: String(req.body?.content || ''),
+        discordEmbed: req.body?.discordEmbed || null,
+        eventType: String(req.body?.eventType || '')
       });
       return res.json({ success: true });
     } catch (err) {

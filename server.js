@@ -274,7 +274,8 @@ eventSubReactionManager = createEventSubReactionManager({
   getCustomCommandManager: () => customCommandManager,
   noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve(),
   getAutomationSpacingSeconds: () => automationSpacingManager?.getSettings?.().minimumSpacingSeconds || 0,
-  getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false }
+  getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
+  getStreamStatus: () => recapManager?.getStatus?.() || {}
 });
 
 botPersonalityManager = createBotPersonalityManager({

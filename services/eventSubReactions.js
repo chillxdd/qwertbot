@@ -42,6 +42,8 @@ const ANNOUNCEMENT_COLORS = new Set(['primary', 'blue', 'green', 'orange', 'purp
 const MAX_ACTIONS = 12;
 const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
 const MAX_ACTION_DELAY_SECONDS = 300;
+const MAX_DISCORD_EMBED_FIELDS = 10;
+const DEFAULT_DISCORD_EMBED_COLOR = '#9146FF';
 
 function sleep(ms) { return context.sleep(ms); }
 function cleanText(value, max = 500) { return Array.from(String(value || '').trim()).slice(0, max).join(''); }
@@ -72,6 +74,80 @@ function discordAllowedMentions(mode) {
 
 function discordWebhookConfigured(action = {}) {
   return Boolean(String(action.discordWebhookId || '').trim() && action.discordWebhookSecret?.data);
+}
+
+function normalizeDiscordColor(value) {
+  const raw = String(value || DEFAULT_DISCORD_EMBED_COLOR).trim();
+  const normalized = raw.startsWith('#') ? raw : `#${raw}`;
+  if (!/^#[0-9a-f]{6}$/i.test(normalized)) throw new Error('Discord embed color must be a 6-digit hex color such as #9146FF.');
+  return normalized.toUpperCase();
+}
+
+function normalizeExternalUrl(value, label = 'Discord URL') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let url;
+  try { url = new URL(raw); } catch (_) { throw new Error(`${label} must be a valid http(s) URL.`); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error(`${label} must be a valid http(s) URL.`);
+  return url.toString();
+}
+
+function normalizeDiscordUrlTemplate(value, label) {
+  const raw = cleanText(value, 2048);
+  if (!raw) return '';
+  // EventSub variables are resolved at send time, so URL templates containing
+  // variables cannot be fully validated until then.
+  if (/\$\([^)]+\)/.test(raw)) return raw;
+  return normalizeExternalUrl(raw, label);
+}
+
+function normalizeDiscordEmbed(raw = {}) {
+  const enabled = raw?.enabled === true;
+  const title = cleanText(raw.title, 256);
+  const description = cleanText(raw.description, 4096);
+  const url = enabled ? normalizeDiscordUrlTemplate(raw.url, 'Discord embed title URL') : cleanText(raw.url, 2048);
+  const color = normalizeDiscordColor(raw.color);
+  const thumbnailUrl = enabled ? normalizeDiscordUrlTemplate(raw.thumbnailUrl, 'Discord embed thumbnail URL') : cleanText(raw.thumbnailUrl, 2048);
+  const imageUrl = enabled ? normalizeDiscordUrlTemplate(raw.imageUrl, 'Discord embed image URL') : cleanText(raw.imageUrl, 2048);
+  const footer = cleanText(raw.footer, 2048);
+  const timestamp = raw.timestamp === true;
+  const rawFields = Array.isArray(raw.fields) ? raw.fields : [];
+  if (rawFields.length > MAX_DISCORD_EMBED_FIELDS) throw new Error(`Discord embeds can have at most ${MAX_DISCORD_EMBED_FIELDS} custom fields in QwertBot.`);
+  const fields = rawFields.map((field, index) => {
+    const name = cleanText(field?.name, 256);
+    const value = cleanText(field?.value, 1024);
+    if (!name && !value) return null;
+    if (enabled && (!name || !value)) throw new Error(`Discord embed field ${index + 1} needs both a name and value.`);
+    return { name, value, inline: field?.inline === true };
+  }).filter(Boolean);
+  const buttonLabel = cleanText(raw.buttonLabel, 80);
+  const buttonUrl = enabled ? normalizeDiscordUrlTemplate(raw.buttonUrl, 'Discord button URL') : cleanText(raw.buttonUrl, 2048);
+  if (enabled && Boolean(buttonLabel) !== Boolean(buttonUrl)) throw new Error('Discord link button needs both a label and URL.');
+  if (enabled && !title && !description && !thumbnailUrl && !imageUrl && !footer && !fields.some((field) => field.name && field.value)) {
+    throw new Error('Include Embed is enabled, but the embed is empty. Add a title, description, image, footer, or custom field.');
+  }
+  const totalChars = Array.from(title + description + footer + fields.map((field) => field.name + field.value).join('')).length;
+  if (totalChars > 6000) throw new Error("Discord embed text exceeds Discord's 6000-character total embed limit.");
+  return { enabled, title, description, url, color, thumbnailUrl, imageUrl, footer, timestamp, fields, buttonLabel, buttonUrl };
+}
+
+function discordEmbedToClient(raw = {}) {
+  return {
+    enabled: raw?.enabled === true,
+    title: String(raw?.title || ''),
+    description: String(raw?.description || ''),
+    url: String(raw?.url || ''),
+    color: /^#[0-9a-f]{6}$/i.test(String(raw?.color || '')) ? String(raw.color).toUpperCase() : DEFAULT_DISCORD_EMBED_COLOR,
+    thumbnailUrl: String(raw?.thumbnailUrl || ''),
+    imageUrl: String(raw?.imageUrl || ''),
+    footer: String(raw?.footer || ''),
+    timestamp: raw?.timestamp === true,
+    fields: (Array.isArray(raw?.fields) ? raw.fields : []).slice(0, MAX_DISCORD_EMBED_FIELDS).map((field) => ({
+      name: String(field?.name || ''), value: String(field?.value || ''), inline: field?.inline === true
+    })),
+    buttonLabel: String(raw?.buttonLabel || ''),
+    buttonUrl: String(raw?.buttonUrl || '')
+  };
 }
 
 function decryptDiscordWebhook(action = {}) {
@@ -175,7 +251,8 @@ function reactionToClient(item, automationSpacingSeconds = 0) {
       ...(action.type === 'discord_notification' ? {
         discordWebhookId: String(action.discordWebhookId || ''),
         discordWebhookConfigured: discordWebhookConfigured(action),
-        discordMentionMode: DISCORD_MENTION_MODES.has(String(action.discordMentionMode || '')) ? String(action.discordMentionMode) : 'none'
+        discordMentionMode: DISCORD_MENTION_MODES.has(String(action.discordMentionMode || '')) ? String(action.discordMentionMode) : 'none',
+        discordEmbed: discordEmbedToClient(action.discordEmbed)
       } : {})
     })) : [],
     createdAt: item.createdAt || null,
@@ -218,10 +295,9 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingRea
       throw new Error(`Action delay must be between 0 and ${MAX_ACTION_DELAY_SECONDS} seconds.`);
     }
     const value = cleanText(raw.value, type === 'discord_notification' ? 2000 : 500);
-    if ((type === 'chat_message' || type === 'custom_command' || type === 'twitch_announcement' || type === 'discord_notification') && !value) {
+    if ((type === 'chat_message' || type === 'custom_command' || type === 'twitch_announcement') && !value) {
       if (type === 'chat_message') throw new Error('Chat Message needs text.');
       if (type === 'twitch_announcement') throw new Error('Twitch Announcement needs text.');
-      if (type === 'discord_notification') throw new Error('Discord Notification needs message text.');
       throw new Error('Custom Command needs a command such as !so $(raider).');
     }
     const color = ANNOUNCEMENT_COLORS.has(String(raw.color || '').toLowerCase()) ? String(raw.color).toLowerCase() : 'primary';
@@ -232,6 +308,8 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingRea
     const existingAction = requestedWebhookId ? existingDiscordById.get(requestedWebhookId) : null;
     const enteredWebhookUrl = String(raw.discordWebhookUrl || '').trim();
     const mentionMode = DISCORD_MENTION_MODES.has(String(raw.discordMentionMode || '')) ? String(raw.discordMentionMode) : 'none';
+    const discordEmbed = normalizeDiscordEmbed(raw.discordEmbed || {});
+    if (!value && !discordEmbed.enabled) throw new Error('Discord Notification needs message text, an embed, or both.');
     let discordWebhookId = existingAction ? requestedWebhookId : randomUUID();
     let discordWebhookSecret;
     if (enteredWebhookUrl) {
@@ -242,7 +320,7 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingRea
     } else {
       throw new Error('Discord Notification needs a Webhook URL. Paste it once; saved webhook URLs are hidden when you reopen the reaction.');
     }
-    return { ...base, discordWebhookId, discordWebhookSecret, discordMentionMode: mentionMode };
+    return { ...base, discordWebhookId, discordWebhookSecret, discordMentionMode: mentionMode, discordEmbed };
   });
   return {
     name,
@@ -254,10 +332,11 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingRea
   };
 }
 
-function renderEventTemplate(template, type, event = {}) {
+function renderEventTemplate(template, type, event = {}, extra = {}) {
   const actor = eventActor(event, type);
   const choices = (Array.isArray(event.choices) ? event.choices : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
   const outcomes = (Array.isArray(event.outcomes) ? event.outcomes : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
+  const streamTitle = String(extra.streamTitle || '').trim();
   const map = {
     user: actor.name,
     username: actor.login || actor.name,
@@ -268,7 +347,7 @@ function renderEventTemplate(template, type, event = {}) {
     level: Number(event.level || 0),
     months: Number(event.cumulative_months || 0),
     event: EVENT_TYPES.find((item) => item.type === type)?.label || type,
-    title: eventTitle(type, event),
+    title: type === 'stream.online' && streamTitle ? streamTitle : eventTitle(type, event),
     choices: choices || outcomes,
     votes: sumNumeric(event.choices, 'votes'),
     points: sumNumeric(event.outcomes, 'channel_points'),
@@ -279,12 +358,49 @@ function renderEventTemplate(template, type, event = {}) {
     target: Number(event.target_amount || 0),
     duration: Number(event.duration_seconds || 0),
     status: String(event.status || '').trim(),
-    automatic: event.is_automatic ? 'yes' : 'no'
+    automatic: event.is_automatic ? 'yes' : 'no',
+    channel: String(extra.channelName || event.broadcaster_user_name || event.broadcaster_user_login || '').trim(),
+    game: String(extra.game || '').trim(),
+    url: String(extra.streamUrl || '').trim(),
+    thumbnail: String(extra.thumbnail || '').trim(),
+    started: String(extra.startedAt || event.started_at || '').trim()
   };
-  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
+  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|url|thumbnail|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
-function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null, getAutomationSpacingStatus = null }) {
+function renderDiscordEmbed(raw = {}, type, event = {}, extra = {}) {
+  if (!raw?.enabled) return { embed: null, components: [] };
+  const text = (value, max) => cleanText(renderEventTemplate(value, type, event, extra), max);
+  const url = (value, label) => {
+    const rendered = text(value, 2048);
+    return rendered ? normalizeExternalUrl(rendered, label) : '';
+  };
+  const embed = {};
+  const title = text(raw.title, 256);
+  const description = text(raw.description, 4096);
+  const titleUrl = url(raw.url, 'Discord embed title URL');
+  const thumbnailUrl = url(raw.thumbnailUrl, 'Discord embed thumbnail URL');
+  const imageUrl = url(raw.imageUrl, 'Discord embed image URL');
+  const footer = text(raw.footer, 2048);
+  if (title) embed.title = title;
+  if (description) embed.description = description;
+  if (titleUrl && title) embed.url = titleUrl;
+  embed.color = parseInt(normalizeDiscordColor(raw.color).slice(1), 16);
+  if (thumbnailUrl) embed.thumbnail = { url: thumbnailUrl };
+  if (imageUrl) embed.image = { url: imageUrl };
+  if (footer) embed.footer = { text: footer };
+  if (raw.timestamp === true) embed.timestamp = new Date().toISOString();
+  const fields = (Array.isArray(raw.fields) ? raw.fields : []).slice(0, MAX_DISCORD_EMBED_FIELDS).map((field) => ({
+    name: text(field?.name, 256), value: text(field?.value, 1024), inline: field?.inline === true
+  })).filter((field) => field.name && field.value);
+  if (fields.length) embed.fields = fields;
+  const buttonLabel = text(raw.buttonLabel, 80);
+  const buttonUrl = url(raw.buttonUrl, 'Discord button URL');
+  const components = buttonLabel && buttonUrl ? [{ type: 1, components: [{ type: 2, style: 5, label: buttonLabel, url: buttonUrl }] }] : [];
+  return { embed, components };
+}
+
+function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null, getAutomationSpacingStatus = null, getStreamStatus = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
 
@@ -292,6 +408,20 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     if (typeof getAutomationSpacingSeconds !== 'function') return 0;
     const value = Number(getAutomationSpacingSeconds());
     return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
+
+  function eventTemplateContext(event = {}) {
+    let status = {};
+    try { status = typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {}; } catch (_) {}
+    const startedMs = Number(status.twitchStreamStartedAt || status.streamSessionStartedAt || 0);
+    return {
+      channelName: String(event.broadcaster_user_name || event.broadcaster_user_login || normalizedChannel).trim(),
+      streamTitle: String(status.currentStreamTitle || status.title || ''),
+      game: String(status.currentStreamCategory || status.category || ''),
+      streamUrl: `https://twitch.tv/${normalizedChannel}`,
+      thumbnail: `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(normalizedChannel)}-1280x720.jpg`,
+      startedAt: startedMs > 0 ? new Date(startedMs).toISOString() : String(event.started_at || '')
+    };
   }
 
   async function refreshCache() {
@@ -339,14 +469,20 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     return reactionToClient(saved, currentAutomationSpacingSeconds());
   }
 
-  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none') {
+  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none', { embed = null, components = [] } = {}) {
     const url = normalizeDiscordWebhookUrl(webhookUrl);
     const message = cleanText(content, 2000);
-    if (!message) throw new Error('Discord Notification message is empty.');
-    const response = await fetch(url, {
+    if (!message && !embed && !(Array.isArray(components) && components.length)) throw new Error('Discord Notification is empty.');
+    const body = { allowed_mentions: discordAllowedMentions(mentionMode) };
+    if (message) body.content = message;
+    if (embed) body.embeds = [embed];
+    if (Array.isArray(components) && components.length) body.components = components;
+    const targetUrl = new URL(url);
+    if (Array.isArray(components) && components.length) targetUrl.searchParams.set('with_components', 'true');
+    const response = await fetch(targetUrl.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: message, allowed_mentions: discordAllowedMentions(mentionMode) })
+      body: JSON.stringify(body)
     });
     if (!response.ok) {
       let detail = '';
@@ -369,7 +505,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     return null;
   }
 
-  async function testDiscordNotification({ webhookUrl = '', webhookId = '' } = {}) {
+  async function testDiscordNotification({ webhookUrl = '', webhookId = '', content = '', discordEmbed = null, eventType = 'stream.online' } = {}) {
     let targetUrl = String(webhookUrl || '').trim();
     if (targetUrl) targetUrl = normalizeDiscordWebhookUrl(targetUrl);
     else {
@@ -377,7 +513,17 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       if (!action) throw new Error('Saved Discord webhook was not found. Save the reaction first or paste a webhook URL.');
       targetUrl = decryptDiscordWebhook(action);
     }
-    await postDiscordWebhook(targetUrl, 'QwertBot Discord notification test ✅', 'none');
+    const type = EVENT_TYPE_SET.has(String(eventType || '')) ? String(eventType) : 'stream.online';
+    const previewEvent = type === 'channel.raid'
+      ? { from_broadcaster_user_name: 'ExampleRaider', from_broadcaster_user_login: 'exampleraider', viewers: 42 }
+      : { user_name: 'ExampleUser', user_login: 'exampleuser', bits: 100, total: 5, cumulative_months: 12, title: 'Example event title', started_at: new Date().toISOString() };
+    const extra = eventTemplateContext(previewEvent);
+    const normalizedEmbed = discordEmbed ? normalizeDiscordEmbed(discordEmbed) : { enabled: false };
+    const rendered = renderDiscordEmbed(normalizedEmbed, type, previewEvent, extra);
+    const renderedContent = renderEventTemplate(String(content || ''), type, previewEvent, extra).trim();
+    const message = renderedContent || (rendered.embed || rendered.components.length ? '' : 'QwertBot Discord notification test ✅');
+    // Test sends always suppress mentions, regardless of the saved action setting.
+    await postDiscordWebhook(targetUrl, message, 'none', rendered);
     return { success: true };
   }
 
@@ -413,8 +559,9 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
   async function runAction(action, type, event) {
     await context.assertOperation();
     if (action.delaySeconds > 0) await sleep(action.delaySeconds * 1000);
+    const templateContext = eventTemplateContext(event);
     if (action.type === 'chat_message') {
-      const message = renderEventTemplate(action.value, type, event).trim();
+      const message = renderEventTemplate(action.value, type, event, templateContext).trim();
       if (message) {
         await sendMessage(normalizedChannel, message);
         if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
@@ -422,7 +569,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       return;
     }
     if (action.type === 'twitch_announcement') {
-      const message = renderEventTemplate(action.value, type, event).trim();
+      const message = renderEventTemplate(action.value, type, event, templateContext).trim();
       if (message) {
         if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
         await sendAnnouncement(message, { color: action.color || 'primary' });
@@ -433,7 +580,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     if (action.type === 'custom_command') {
       const manager = getCustomCommandManager?.();
       if (!manager) throw new Error('Custom Commands is not available.');
-      const rawMessage = renderEventTemplate(action.value, type, event).trim();
+      const rawMessage = renderEventTemplate(action.value, type, event, templateContext).trim();
       if (!rawMessage) return;
       const actor = eventActor(event, type);
       const result = await manager.handleMessage({
@@ -448,19 +595,20 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       return;
     }
     if (action.type === 'discord_notification') {
-      const message = renderEventTemplate(action.value, type, event).trim();
-      if (!message) return;
+      const message = renderEventTemplate(action.value, type, event, templateContext).trim();
+      const renderedEmbed = renderDiscordEmbed(action.discordEmbed || {}, type, event, templateContext);
+      if (!message && !renderedEmbed.embed && !renderedEmbed.components.length) return;
       const mentionMode = DISCORD_MENTION_MODES.has(String(action.discordMentionMode || '')) ? String(action.discordMentionMode) : 'none';
       const key = context.nextDeliveryKey('discord-notification');
       if (key) {
         await delivery.deliver({
           key,
           kind: 'event-discord-notification',
-          payload: { content: message, mentionMode, webhookId: String(action.discordWebhookId || '') },
-          send: (saved) => postDiscordWebhook(decryptDiscordWebhook(action), saved.content, saved.mentionMode)
+          payload: { content: message, mentionMode, webhookId: String(action.discordWebhookId || ''), embed: renderedEmbed.embed, components: renderedEmbed.components },
+          send: (saved) => postDiscordWebhook(decryptDiscordWebhook(action), saved.content, saved.mentionMode, { embed: saved.embed || null, components: saved.components || [] })
         });
       } else {
-        await postDiscordWebhook(decryptDiscordWebhook(action), message, mentionMode);
+        await postDiscordWebhook(decryptDiscordWebhook(action), message, mentionMode, renderedEmbed);
       }
       return;
     }
@@ -548,9 +696,12 @@ module.exports = {
   MAX_ACTIONS,
   MAX_HOLD_SECONDS,
   MAX_ACTION_DELAY_SECONDS,
+  MAX_DISCORD_EMBED_FIELDS,
   createEventSubReactionManager,
   renderEventTemplate,
   numericEventValue,
   normalizeDiscordWebhookUrl,
-  discordAllowedMentions
+  discordAllowedMentions,
+  normalizeDiscordEmbed,
+  renderDiscordEmbed
 };

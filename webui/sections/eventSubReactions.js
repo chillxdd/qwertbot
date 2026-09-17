@@ -1,7 +1,7 @@
 export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) {
   let reactions = [];
   let eventTypes = [];
-  let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300 };
+  let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300, maxDiscordEmbedFields: 10 };
   let automationSpacingSeconds = 0;
   let discordWebhookStorage = { ready: false, preferredSource: null, usingFallback: false };
   const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
@@ -288,11 +288,34 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     return type;
   }
 
+  function readDiscordEmbed(row) {
+    const fields = [...row.querySelectorAll('.event-action-discord-embed-field')].map((fieldRow) => ({
+      name: fieldRow.querySelector('.event-action-discord-embed-field-name').value.trim(),
+      value: fieldRow.querySelector('.event-action-discord-embed-field-value').value.trim(),
+      inline: fieldRow.querySelector('.event-action-discord-embed-field-inline').checked
+    })).filter((field) => field.name || field.value);
+    return {
+      enabled: row.querySelector('.event-action-discord-embed-toggle').checked,
+      title: row.querySelector('.event-action-discord-embed-title-input').value.trim(),
+      description: row.querySelector('.event-action-discord-embed-description').value.trim(),
+      url: row.querySelector('.event-action-discord-embed-url').value.trim(),
+      color: row.querySelector('.event-action-discord-embed-color').value || '#9146FF',
+      thumbnailUrl: row.querySelector('.event-action-discord-embed-thumbnail').value.trim(),
+      imageUrl: row.querySelector('.event-action-discord-embed-image').value.trim(),
+      footer: row.querySelector('.event-action-discord-embed-footer').value.trim(),
+      timestamp: row.querySelector('.event-action-discord-embed-timestamp').checked,
+      fields,
+      buttonLabel: row.querySelector('.event-action-discord-button-label').value.trim(),
+      buttonUrl: row.querySelector('.event-action-discord-button-url').value.trim()
+    };
+  }
+
   function actionRow(action = { type: 'chat_message', value: '', delaySeconds: 0, enabled: true }) {
     const row = document.createElement('div');
     row.className = 'event-reaction-action-row';
     row.dataset.discordWebhookId = String(action.discordWebhookId || '');
     row.dataset.discordWebhookConfigured = action.discordWebhookConfigured ? '1' : '0';
+    const embed = action.discordEmbed || {};
     row.innerHTML = `
       <label class="inline-check event-action-enabled"><input class="event-action-enabled-input" type="checkbox" ${action.enabled === false ? '' : 'checked'}> Use</label>
       <label>Action
@@ -340,6 +363,49 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
             <option value="all">Allow @everyone/@here + roles</option>
           </select>
         </label>
+        <label class="inline-check event-action-discord-embed-check"><input class="event-action-discord-embed-toggle" type="checkbox" ${embed.enabled ? 'checked' : ''}> Include Embed</label>
+        <div class="event-action-discord-embed" hidden>
+          <div class="event-action-discord-embed-heading">
+            <div><strong>Discord embed</strong><div class="detail">Optional rich card below the normal message. EventSub variables work in these fields too.</div></div>
+          </div>
+          <div class="event-action-discord-embed-grid">
+            <label>Title
+              <input class="event-action-discord-embed-title-input" maxlength="256" value="${esc(embed.title || '')}" placeholder="Example: $(channel) is now live on Twitch!">
+            </label>
+            <label>Title URL
+              <input class="event-action-discord-embed-url" maxlength="2048" value="${esc(embed.url || '')}" placeholder="$(url)">
+            </label>
+            <label class="event-action-discord-embed-description-wrap">Description
+              <textarea class="event-action-discord-embed-description" maxlength="4096" placeholder="Example: $(title)">${esc(embed.description || '')}</textarea>
+            </label>
+            <label>Accent Color
+              <input class="event-action-discord-embed-color" type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(String(embed.color || '')) ? String(embed.color) : '#9146FF')}">
+            </label>
+            <label>Thumbnail URL
+              <input class="event-action-discord-embed-thumbnail" maxlength="2048" value="${esc(embed.thumbnailUrl || '')}" placeholder="Optional small image URL">
+            </label>
+            <label class="event-action-discord-embed-wide">Large Image URL
+              <input class="event-action-discord-embed-image" maxlength="2048" value="${esc(embed.imageUrl || '')}" placeholder="$(thumbnail) for the live Twitch preview">
+            </label>
+            <label>Footer
+              <input class="event-action-discord-embed-footer" maxlength="2048" value="${esc(embed.footer || '')}" placeholder="QwertBot">
+            </label>
+            <label class="inline-check event-action-discord-embed-timestamp-wrap"><input class="event-action-discord-embed-timestamp" type="checkbox" ${embed.timestamp ? 'checked' : ''}> Include timestamp</label>
+          </div>
+          <div class="event-action-discord-embed-fields-head">
+            <div><strong>Fields</strong><div class="detail">Optional name/value pairs such as Game → $(game).</div></div>
+            <button class="secondary event-action-discord-add-field" type="button">Add Field</button>
+          </div>
+          <div class="event-action-discord-embed-fields"></div>
+          <div class="event-action-discord-button-grid">
+            <label>Link Button Label
+              <input class="event-action-discord-button-label" maxlength="80" value="${esc(embed.buttonLabel || '')}" placeholder="Watch Stream">
+            </label>
+            <label>Link Button URL
+              <input class="event-action-discord-button-url" maxlength="2048" value="${esc(embed.buttonUrl || '')}" placeholder="$(url)">
+            </label>
+          </div>
+        </div>
         <div class="detail event-action-discord-help"></div>
       </div>`;
     const typeEl = row.querySelector('.event-action-type');
@@ -351,9 +417,60 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const mentionEl = row.querySelector('.event-action-discord-mentions');
     const discordHelp = row.querySelector('.event-action-discord-help');
     const testBtn = row.querySelector('.event-action-discord-test');
+    const embedToggle = row.querySelector('.event-action-discord-embed-toggle');
+    const embedPanel = row.querySelector('.event-action-discord-embed');
+    const embedFieldsEl = row.querySelector('.event-action-discord-embed-fields');
+    const addEmbedFieldBtn = row.querySelector('.event-action-discord-add-field');
     typeEl.value = action.type || 'chat_message';
     colorEl.value = action.color || 'primary';
     mentionEl.value = ['none', 'everyone', 'roles', 'all'].includes(action.discordMentionMode) ? action.discordMentionMode : 'none';
+
+    const addEmbedField = (field = {}) => {
+      if (embedFieldsEl.children.length >= limits.maxDiscordEmbedFields) return;
+      const fieldRow = document.createElement('div');
+      fieldRow.className = 'event-action-discord-embed-field';
+      fieldRow.innerHTML = `
+        <label>Name<input class="event-action-discord-embed-field-name" maxlength="256" value="${esc(field.name || '')}" placeholder="Game"></label>
+        <label>Value<input class="event-action-discord-embed-field-value" maxlength="1024" value="${esc(field.value || '')}" placeholder="$(game)"></label>
+        <label class="inline-check event-action-discord-embed-field-inline-wrap"><input class="event-action-discord-embed-field-inline" type="checkbox" ${field.inline ? 'checked' : ''}> Inline</label>
+        <button class="secondary event-action-discord-embed-field-remove" type="button">Remove</button>`;
+      fieldRow.querySelector('.event-action-discord-embed-field-remove').onclick = () => { fieldRow.remove(); updateEmbedFieldsState(); };
+      embedFieldsEl.appendChild(fieldRow);
+      updateEmbedFieldsState();
+    };
+    const updateEmbedFieldsState = () => {
+      addEmbedFieldBtn.disabled = embedFieldsEl.children.length >= limits.maxDiscordEmbedFields;
+      addEmbedFieldBtn.textContent = embedFieldsEl.children.length ? `Add Field (${embedFieldsEl.children.length}/${limits.maxDiscordEmbedFields})` : 'Add Field';
+    };
+    (Array.isArray(embed.fields) ? embed.fields : []).forEach(addEmbedField);
+    updateEmbedFieldsState();
+
+    const embedLooksEmpty = () => {
+      const cfg = readDiscordEmbed(row);
+      return !cfg.title && !cfg.description && !cfg.url && !cfg.thumbnailUrl && !cfg.imageUrl && !cfg.footer && !cfg.fields.length && !cfg.buttonLabel && !cfg.buttonUrl;
+    };
+    const applyStreamOnlineDefaults = () => {
+      if ($('eventReactionType').value !== 'stream.online' || !embedLooksEmpty()) return;
+      row.querySelector('.event-action-discord-embed-title-input').value = '$(channel) is now live on Twitch!';
+      row.querySelector('.event-action-discord-embed-description').value = '$(title)';
+      row.querySelector('.event-action-discord-embed-url').value = '$(url)';
+      row.querySelector('.event-action-discord-embed-image').value = '$(thumbnail)';
+      row.querySelector('.event-action-discord-embed-footer').value = 'QwertBot';
+      row.querySelector('.event-action-discord-embed-timestamp').checked = true;
+      row.querySelector('.event-action-discord-button-label').value = 'Watch Stream';
+      row.querySelector('.event-action-discord-button-url').value = '$(url)';
+      if (!embedFieldsEl.children.length) addEmbedField({ name: 'Game', value: '$(game)', inline: true });
+    };
+    const updateEmbedUi = ({ applyDefaults = false } = {}) => {
+      if (applyDefaults && embedToggle.checked) applyStreamOnlineDefaults();
+      embedPanel.hidden = !embedToggle.checked;
+      valueEl.placeholder = embedToggle.checked
+        ? 'Optional message above the embed, e.g. @everyone Qwert is live!'
+        : 'Example: 🚨 $(raider) raided with $(viewers) viewers!';
+    };
+    embedToggle.addEventListener('change', () => updateEmbedUi({ applyDefaults: true }));
+    addEmbedFieldBtn.onclick = () => addEmbedField();
+
     const updateDiscordHelp = (extra = '') => {
       const configured = row.dataset.discordWebhookConfigured === '1';
       const base = configured
@@ -361,7 +478,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
         : (discordWebhookStorage.ready
           ? 'Paste a Discord webhook URL. It is encrypted server-side and hidden after save.'
           : 'Webhook encryption is not configured. Set CONFIG_ENCRYPTION_KEY once, or keep an existing QWERT_OAUTH_LINK_SECRET / TWITCH_CLIENT_SECRET configured.');
-      const mentionHelp = ' @everyone/@here ping only when allowed above. Role ping syntax: <@&ROLE_ID>.';
+      const mentionHelp = ' @everyone/@here ping only when allowed above. Role ping syntax: <@&ROLE_ID>. Test always suppresses pings.';
       discordHelp.textContent = `${extra ? `${extra} ` : ''}${base}${mentionHelp}`;
       discordHelp.classList.toggle('bad', !discordWebhookStorage.ready && !configured);
     };
@@ -374,7 +491,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       if (type === 'chat_message') valueEl.placeholder = 'Example: Thanks for the raid, $(raider)!';
       else if (type === 'twitch_announcement') valueEl.placeholder = 'Example: Welcome in, $(raider)!';
       else if (type === 'custom_command') valueEl.placeholder = 'Example: !so $(raider)';
-      else if (type === 'discord_notification') valueEl.placeholder = 'Example: 🚨 $(raider) raided with $(viewers) viewers!';
+      else if (type === 'discord_notification') updateEmbedUi();
       if (type === 'discord_notification') {
         webhookEl.placeholder = row.dataset.discordWebhookConfigured === '1'
           ? 'Saved webhook — leave blank to keep'
@@ -388,11 +505,17 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       const webhookId = row.dataset.discordWebhookId || '';
       if (!webhookUrl && !webhookId) return updateDiscordHelp('Paste a webhook URL before testing.');
       testBtn.disabled = true;
-      updateDiscordHelp('Sending a no-ping test...');
+      updateDiscordHelp('Sending a no-ping preview...');
       try {
-        const d = await postJson('/eventsub-reactions/test-discord', { webhookUrl, webhookId });
+        const d = await postJson('/eventsub-reactions/test-discord', {
+          webhookUrl,
+          webhookId,
+          content: valueEl.value.trim(),
+          discordEmbed: readDiscordEmbed(row),
+          eventType: $('eventReactionType').value
+        });
         if (!d.success) throw new Error(d.error || 'Discord webhook test failed.');
-        updateDiscordHelp('Test sent successfully.');
+        updateDiscordHelp('Preview sent successfully.');
       } catch (err) {
         updateDiscordHelp(`Test failed: ${err.message || err}`);
       } finally {
@@ -402,6 +525,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     row.querySelector('.event-action-up').onclick = () => { const prev=row.previousElementSibling; if (prev) actionsEl.insertBefore(row, prev); };
     row.querySelector('.event-action-down').onclick = () => { const next=row.nextElementSibling; if (next) actionsEl.insertBefore(next, row); };
     row.querySelector('.event-action-remove').onclick = () => { row.remove(); updateAddActionState(); };
+    updateEmbedUi();
     update();
     return row;
   }
@@ -422,7 +546,8 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       enabled: row.querySelector('.event-action-enabled-input').checked,
       discordWebhookId: row.dataset.discordWebhookId || '',
       discordWebhookUrl: row.querySelector('.event-action-discord-webhook').value.trim(),
-      discordMentionMode: row.querySelector('.event-action-discord-mentions').value || 'none'
+      discordMentionMode: row.querySelector('.event-action-discord-mentions').value || 'none',
+      discordEmbed: readDiscordEmbed(row)
     }));
   }
 
