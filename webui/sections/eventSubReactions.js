@@ -1,7 +1,7 @@
 export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) {
   let reactions = [];
   let eventTypes = [];
-  let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300, maxDiscordEmbedFields: 10 };
+  let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300, maxDiscordEmbedFields: 10, maxDiscordEmbedButtons: 5 };
   let automationSpacingSeconds = 0;
   let discordWebhookStorage = { ready: false, preferredSource: null, usingFallback: false };
   const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
@@ -294,6 +294,10 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       value: fieldRow.querySelector('.event-action-discord-embed-field-value').value.trim(),
       inline: fieldRow.querySelector('.event-action-discord-embed-field-inline').checked
     })).filter((field) => field.name || field.value);
+    const buttons = [...row.querySelectorAll('.event-action-discord-embed-button')].map((buttonRow) => ({
+      label: buttonRow.querySelector('.event-action-discord-button-label').value.trim(),
+      url: buttonRow.querySelector('.event-action-discord-button-url').value.trim()
+    })).filter((button) => button.label || button.url);
     return {
       enabled: row.querySelector('.event-action-discord-embed-toggle').checked,
       title: row.querySelector('.event-action-discord-embed-title-input').value.trim(),
@@ -305,8 +309,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       footer: row.querySelector('.event-action-discord-embed-footer').value.trim(),
       timestamp: row.querySelector('.event-action-discord-embed-timestamp').checked,
       fields,
-      buttonLabel: row.querySelector('.event-action-discord-button-label').value.trim(),
-      buttonUrl: row.querySelector('.event-action-discord-button-url').value.trim()
+      buttons
     };
   }
 
@@ -397,14 +400,11 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
             <button class="secondary event-action-discord-add-field" type="button">Add Field</button>
           </div>
           <div class="event-action-discord-embed-fields"></div>
-          <div class="event-action-discord-button-grid">
-            <label>Link Button Label
-              <input class="event-action-discord-button-label" maxlength="80" value="${esc(embed.buttonLabel || '')}" placeholder="Watch Stream">
-            </label>
-            <label>Link Button URL
-              <input class="event-action-discord-button-url" maxlength="2048" value="${esc(embed.buttonUrl || '')}" placeholder="$(url)">
-            </label>
+          <div class="event-action-discord-embed-buttons-head">
+            <div><strong>Buttons</strong><div class="detail">Optional link buttons below the card. Up to ${limits.maxDiscordEmbedButtons} buttons.</div></div>
+            <button class="secondary event-action-discord-add-button" type="button">Add Button</button>
           </div>
+          <div class="event-action-discord-embed-buttons"></div>
         </div>
         <div class="detail event-action-discord-help"></div>
       </div>`;
@@ -421,6 +421,8 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const embedPanel = row.querySelector('.event-action-discord-embed');
     const embedFieldsEl = row.querySelector('.event-action-discord-embed-fields');
     const addEmbedFieldBtn = row.querySelector('.event-action-discord-add-field');
+    const embedButtonsEl = row.querySelector('.event-action-discord-embed-buttons');
+    const addEmbedButtonBtn = row.querySelector('.event-action-discord-add-button');
     typeEl.value = action.type || 'chat_message';
     colorEl.value = action.color || 'primary';
     mentionEl.value = ['none', 'everyone', 'roles', 'all'].includes(action.discordMentionMode) ? action.discordMentionMode : 'none';
@@ -445,9 +447,33 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     (Array.isArray(embed.fields) ? embed.fields : []).forEach(addEmbedField);
     updateEmbedFieldsState();
 
+    const updateEmbedButtonsState = () => {
+      addEmbedButtonBtn.disabled = embedButtonsEl.children.length >= limits.maxDiscordEmbedButtons;
+      addEmbedButtonBtn.textContent = embedButtonsEl.children.length
+        ? `Add Button (${embedButtonsEl.children.length}/${limits.maxDiscordEmbedButtons})`
+        : 'Add Button';
+    };
+    const addEmbedButton = (button = {}) => {
+      if (embedButtonsEl.children.length >= limits.maxDiscordEmbedButtons) return;
+      const buttonRow = document.createElement('div');
+      buttonRow.className = 'event-action-discord-embed-button';
+      buttonRow.innerHTML = `
+        <label>Label<input class="event-action-discord-button-label" maxlength="80" value="${esc(button.label || '')}" placeholder="Watch Stream"></label>
+        <label>URL<input class="event-action-discord-button-url" maxlength="2048" value="${esc(button.url || '')}" placeholder="$(url)"></label>
+        <button class="secondary event-action-discord-embed-button-remove" type="button">Remove</button>`;
+      buttonRow.querySelector('.event-action-discord-embed-button-remove').onclick = () => { buttonRow.remove(); updateEmbedButtonsState(); };
+      embedButtonsEl.appendChild(buttonRow);
+      updateEmbedButtonsState();
+    };
+    const initialButtons = Array.isArray(embed.buttons) && embed.buttons.length
+      ? embed.buttons
+      : ((embed.buttonLabel || embed.buttonUrl) ? [{ label: embed.buttonLabel || '', url: embed.buttonUrl || '' }] : []);
+    initialButtons.forEach(addEmbedButton);
+    updateEmbedButtonsState();
+
     const embedLooksEmpty = () => {
       const cfg = readDiscordEmbed(row);
-      return !cfg.title && !cfg.description && !cfg.url && !cfg.thumbnailUrl && !cfg.imageUrl && !cfg.footer && !cfg.fields.length && !cfg.buttonLabel && !cfg.buttonUrl;
+      return !cfg.title && !cfg.description && !cfg.url && !cfg.thumbnailUrl && !cfg.imageUrl && !cfg.footer && !cfg.fields.length && !cfg.buttons.length;
     };
     const applyStreamOnlineDefaults = () => {
       if ($('eventReactionType').value !== 'stream.online' || !embedLooksEmpty()) return;
@@ -457,8 +483,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       row.querySelector('.event-action-discord-embed-image').value = '$(thumbnail)';
       row.querySelector('.event-action-discord-embed-footer').value = 'QwertBot';
       row.querySelector('.event-action-discord-embed-timestamp').checked = true;
-      row.querySelector('.event-action-discord-button-label').value = 'Watch Stream';
-      row.querySelector('.event-action-discord-button-url').value = '$(url)';
+      if (!embedButtonsEl.children.length) addEmbedButton({ label: 'Watch Stream', url: '$(url)' });
       if (!embedFieldsEl.children.length) addEmbedField({ name: 'Game', value: '$(game)', inline: true });
     };
     const updateEmbedUi = ({ applyDefaults = false } = {}) => {
@@ -470,11 +495,12 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     };
     embedToggle.addEventListener('change', () => updateEmbedUi({ applyDefaults: true }));
     addEmbedFieldBtn.onclick = () => addEmbedField();
+    addEmbedButtonBtn.onclick = () => addEmbedButton();
 
     const updateDiscordHelp = (extra = '') => {
       const configured = row.dataset.discordWebhookConfigured === '1';
       const base = configured
-        ? 'Saved webhook configured. Leave URL blank to keep it; pasting a new URL replaces it.'
+        ? 'Webhook saved securely. Type a new URL only if you want to replace it.'
         : (discordWebhookStorage.ready
           ? 'Paste a Discord webhook URL. It is encrypted server-side and hidden after save.'
           : 'Webhook encryption is not configured. Set CONFIG_ENCRYPTION_KEY once, or keep an existing QWERT_OAUTH_LINK_SECRET / TWITCH_CLIENT_SECRET configured.');
@@ -494,7 +520,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       else if (type === 'discord_notification') updateEmbedUi();
       if (type === 'discord_notification') {
         webhookEl.placeholder = row.dataset.discordWebhookConfigured === '1'
-          ? 'Saved webhook — leave blank to keep'
+          ? '••••••••••••••••••••••••'
           : 'https://discord.com/api/webhooks/ID/TOKEN';
         updateDiscordHelp();
       }

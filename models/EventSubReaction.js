@@ -14,6 +14,11 @@ const discordEmbedFieldSchema = new mongoose.Schema({
   inline: { type: Boolean, default: false }
 }, { _id: false });
 
+const discordEmbedButtonSchema = new mongoose.Schema({
+  label: { type: String, default: '', maxlength: 80 },
+  url: { type: String, default: '', maxlength: 2048 }
+}, { _id: false });
+
 const discordEmbedSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: false },
   title: { type: String, default: '', maxlength: 256 },
@@ -25,6 +30,9 @@ const discordEmbedSchema = new mongoose.Schema({
   footer: { type: String, default: '', maxlength: 2048 },
   timestamp: { type: Boolean, default: false },
   fields: { type: [discordEmbedFieldSchema], default: [] },
+  buttons: { type: [discordEmbedButtonSchema], default: [] },
+  // Legacy single-button fields are retained so already-saved reactions keep
+  // working until they are next edited/saved in the new UI.
   buttonLabel: { type: String, default: '', maxlength: 80 },
   buttonUrl: { type: String, default: '', maxlength: 2048 }
 }, { _id: false });

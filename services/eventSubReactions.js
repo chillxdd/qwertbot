@@ -43,6 +43,7 @@ const MAX_ACTIONS = 12;
 const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
 const MAX_ACTION_DELAY_SECONDS = 300;
 const MAX_DISCORD_EMBED_FIELDS = 10;
+const MAX_DISCORD_EMBED_BUTTONS = 5;
 const DEFAULT_DISCORD_EMBED_COLOR = '#9146FF';
 
 function sleep(ms) { return context.sleep(ms); }
@@ -120,15 +121,31 @@ function normalizeDiscordEmbed(raw = {}) {
     if (enabled && (!name || !value)) throw new Error(`Discord embed field ${index + 1} needs both a name and value.`);
     return { name, value, inline: field?.inline === true };
   }).filter(Boolean);
-  const buttonLabel = cleanText(raw.buttonLabel, 80);
-  const buttonUrl = enabled ? normalizeDiscordUrlTemplate(raw.buttonUrl, 'Discord button URL') : cleanText(raw.buttonUrl, 2048);
-  if (enabled && Boolean(buttonLabel) !== Boolean(buttonUrl)) throw new Error('Discord link button needs both a label and URL.');
+  // New format is a repeatable buttons array (up to Discord's 5 buttons in
+  // one action row). Fall back to the old single-button pair so reactions
+  // saved by the previous build continue to work without a migration.
+  let rawButtons = Array.isArray(raw.buttons) ? raw.buttons : [];
+  if (!rawButtons.length && (raw.buttonLabel || raw.buttonUrl)) {
+    rawButtons = [{ label: raw.buttonLabel, url: raw.buttonUrl }];
+  }
+  if (rawButtons.length > MAX_DISCORD_EMBED_BUTTONS) {
+    throw new Error(`Discord embeds can have at most ${MAX_DISCORD_EMBED_BUTTONS} link buttons in QwertBot.`);
+  }
+  const buttons = rawButtons.map((button, index) => {
+    const label = cleanText(button?.label, 80);
+    const buttonUrl = enabled
+      ? normalizeDiscordUrlTemplate(button?.url, `Discord button ${index + 1} URL`)
+      : cleanText(button?.url, 2048);
+    if (!label && !buttonUrl) return null;
+    if (enabled && (!label || !buttonUrl)) throw new Error(`Discord link button ${index + 1} needs both a label and URL.`);
+    return { label, url: buttonUrl };
+  }).filter(Boolean);
   if (enabled && !title && !description && !thumbnailUrl && !imageUrl && !footer && !fields.some((field) => field.name && field.value)) {
     throw new Error('Include Embed is enabled, but the embed is empty. Add a title, description, image, footer, or custom field.');
   }
   const totalChars = Array.from(title + description + footer + fields.map((field) => field.name + field.value).join('')).length;
   if (totalChars > 6000) throw new Error("Discord embed text exceeds Discord's 6000-character total embed limit.");
-  return { enabled, title, description, url, color, thumbnailUrl, imageUrl, footer, timestamp, fields, buttonLabel, buttonUrl };
+  return { enabled, title, description, url, color, thumbnailUrl, imageUrl, footer, timestamp, fields, buttons };
 }
 
 function discordEmbedToClient(raw = {}) {
@@ -145,8 +162,13 @@ function discordEmbedToClient(raw = {}) {
     fields: (Array.isArray(raw?.fields) ? raw.fields : []).slice(0, MAX_DISCORD_EMBED_FIELDS).map((field) => ({
       name: String(field?.name || ''), value: String(field?.value || ''), inline: field?.inline === true
     })),
-    buttonLabel: String(raw?.buttonLabel || ''),
-    buttonUrl: String(raw?.buttonUrl || '')
+    buttons: (() => {
+      const current = Array.isArray(raw?.buttons) ? raw.buttons : [];
+      const source = current.length ? current : ((raw?.buttonLabel || raw?.buttonUrl) ? [{ label: raw.buttonLabel, url: raw.buttonUrl }] : []);
+      return source.slice(0, MAX_DISCORD_EMBED_BUTTONS).map((button) => ({
+        label: String(button?.label || ''), url: String(button?.url || '')
+      }));
+    })()
   };
 }
 
@@ -394,9 +416,15 @@ function renderDiscordEmbed(raw = {}, type, event = {}, extra = {}) {
     name: text(field?.name, 256), value: text(field?.value, 1024), inline: field?.inline === true
   })).filter((field) => field.name && field.value);
   if (fields.length) embed.fields = fields;
-  const buttonLabel = text(raw.buttonLabel, 80);
-  const buttonUrl = url(raw.buttonUrl, 'Discord button URL');
-  const components = buttonLabel && buttonUrl ? [{ type: 1, components: [{ type: 2, style: 5, label: buttonLabel, url: buttonUrl }] }] : [];
+  const currentButtons = Array.isArray(raw.buttons) ? raw.buttons : [];
+  const sourceButtons = currentButtons.length ? currentButtons : ((raw.buttonLabel || raw.buttonUrl) ? [{ label: raw.buttonLabel, url: raw.buttonUrl }] : []);
+  const renderedButtons = sourceButtons.slice(0, MAX_DISCORD_EMBED_BUTTONS).map((button, index) => ({
+    label: text(button?.label, 80),
+    url: url(button?.url, `Discord button ${index + 1} URL`)
+  })).filter((button) => button.label && button.url);
+  const components = renderedButtons.length
+    ? [{ type: 1, components: renderedButtons.map((button) => ({ type: 2, style: 5, label: button.label, url: button.url })) }]
+    : [];
   return { embed, components };
 }
 
@@ -697,6 +725,7 @@ module.exports = {
   MAX_HOLD_SECONDS,
   MAX_ACTION_DELAY_SECONDS,
   MAX_DISCORD_EMBED_FIELDS,
+  MAX_DISCORD_EMBED_BUTTONS,
   createEventSubReactionManager,
   renderEventTemplate,
   numericEventValue,
