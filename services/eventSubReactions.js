@@ -1,3 +1,4 @@
+const { randomUUID } = require('node:crypto');
 const context = require('./reliability/context');
 const delivery = require('./reliability/delivery');
 const { httpDeliveryError } = require('./reliability/twitchDelivery');
@@ -7,6 +8,7 @@ const { MAX_AUTOMATION_SPACING_SECONDS } = require('./automationSpacing');
 const { beginEventReaction, endEventReaction, getEventReactionHoldStatus } = require('./eventReactionHold');
 const { getStoredAuth } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
+const secretBox = require('./secretBox');
 
 const EVENT_TYPES = [
   { type: 'channel.subscribe', label: 'Subscription', threshold: null },
@@ -34,7 +36,8 @@ const EVENT_TYPES = [
   { type: 'channel.ad_break.begin', label: 'Ad Break Start', threshold: 'Duration Seconds' }
 ];
 const EVENT_TYPE_SET = new Set(EVENT_TYPES.map((item) => item.type));
-const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_announcement', 'twitch_shoutout']);
+const ACTION_TYPES = new Set(['chat_message', 'custom_command', 'twitch_announcement', 'twitch_shoutout', 'discord_notification']);
+const DISCORD_MENTION_MODES = new Set(['none', 'everyone', 'roles', 'all']);
 const ANNOUNCEMENT_COLORS = new Set(['primary', 'blue', 'green', 'orange', 'purple']);
 const MAX_ACTIONS = 12;
 const MAX_HOLD_SECONDS = MAX_AUTOMATION_SPACING_SECONDS;
@@ -42,6 +45,39 @@ const MAX_ACTION_DELAY_SECONDS = 300;
 
 function sleep(ms) { return context.sleep(ms); }
 function cleanText(value, max = 500) { return Array.from(String(value || '').trim()).slice(0, max).join(''); }
+
+function normalizeDiscordWebhookUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let url;
+  try { url = new URL(raw); } catch (_) { throw new Error('Discord Webhook URL is not a valid URL.'); }
+  const host = String(url.hostname || '').toLowerCase();
+  const allowedHosts = new Set(['discord.com', 'www.discord.com', 'discordapp.com', 'www.discordapp.com', 'canary.discord.com', 'ptb.discord.com']);
+  if (url.protocol !== 'https:' || !allowedHosts.has(host) || url.username || url.password || url.port) {
+    throw new Error('Discord Webhook URL must be an official https://discord.com/api/webhooks/... URL.');
+  }
+  const match = url.pathname.match(/^\/api\/webhooks\/(\d+)\/([A-Za-z0-9._-]+)\/?$/);
+  if (!match) throw new Error('Discord Webhook URL must look like https://discord.com/api/webhooks/ID/TOKEN.');
+  url.hash = '';
+  return url.toString();
+}
+
+function discordAllowedMentions(mode) {
+  const normalized = DISCORD_MENTION_MODES.has(String(mode || '')) ? String(mode) : 'none';
+  const parse = [];
+  if (normalized === 'everyone' || normalized === 'all') parse.push('everyone');
+  if (normalized === 'roles' || normalized === 'all') parse.push('roles');
+  return { parse };
+}
+
+function discordWebhookConfigured(action = {}) {
+  return Boolean(String(action.discordWebhookId || '').trim() && action.discordWebhookSecret?.data);
+}
+
+function decryptDiscordWebhook(action = {}) {
+  if (!discordWebhookConfigured(action)) throw new Error('Discord Notification does not have a saved webhook URL.');
+  return normalizeDiscordWebhookUrl(secretBox.decrypt(action.discordWebhookSecret, action.discordWebhookId));
+}
 
 function eventActor(event = {}, type = '') {
   if (type === 'channel.raid') {
@@ -135,14 +171,19 @@ function reactionToClient(item, automationSpacingSeconds = 0) {
       value: String(action.value || ''),
       color: ANNOUNCEMENT_COLORS.has(String(action.color || '').toLowerCase()) ? String(action.color).toLowerCase() : 'primary',
       delaySeconds: Number(action.delaySeconds || 0),
-      enabled: action.enabled !== false
+      enabled: action.enabled !== false,
+      ...(action.type === 'discord_notification' ? {
+        discordWebhookId: String(action.discordWebhookId || ''),
+        discordWebhookConfigured: discordWebhookConfigured(action),
+        discordMentionMode: DISCORD_MENTION_MODES.has(String(action.discordMentionMode || '')) ? String(action.discordMentionMode) : 'none'
+      } : {})
     })) : [],
     createdAt: item.createdAt || null,
     updatedAt: item.updatedAt || null
   };
 }
 
-function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
+function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingReaction = null) {
   const name = cleanText(input.name, 80);
   if (!name) throw new Error('Name is required.');
   const eventType = String(input.eventType || '').trim();
@@ -162,6 +203,13 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
   const rawActions = Array.isArray(input.actions) ? input.actions : [];
   if (!rawActions.length) throw new Error('Add at least one action.');
   if (rawActions.length > MAX_ACTIONS) throw new Error(`A reaction can have at most ${MAX_ACTIONS} actions.`);
+
+  const existingDiscordById = new Map(
+    (Array.isArray(existingReaction?.actions) ? existingReaction.actions : [])
+      .filter((action) => action?.type === 'discord_notification' && String(action.discordWebhookId || '').trim())
+      .map((action) => [String(action.discordWebhookId).trim(), action])
+  );
+
   const actions = rawActions.map((raw) => {
     const type = String(raw.type || '').trim();
     if (!ACTION_TYPES.has(type)) throw new Error('Choose a supported reaction action.');
@@ -169,14 +217,32 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0) {
     if (!Number.isFinite(delaySeconds) || delaySeconds < 0 || delaySeconds > MAX_ACTION_DELAY_SECONDS) {
       throw new Error(`Action delay must be between 0 and ${MAX_ACTION_DELAY_SECONDS} seconds.`);
     }
-    const value = cleanText(raw.value, 500);
-    if ((type === 'chat_message' || type === 'custom_command' || type === 'twitch_announcement') && !value) {
+    const value = cleanText(raw.value, type === 'discord_notification' ? 2000 : 500);
+    if ((type === 'chat_message' || type === 'custom_command' || type === 'twitch_announcement' || type === 'discord_notification') && !value) {
       if (type === 'chat_message') throw new Error('Chat Message needs text.');
       if (type === 'twitch_announcement') throw new Error('Twitch Announcement needs text.');
+      if (type === 'discord_notification') throw new Error('Discord Notification needs message text.');
       throw new Error('Custom Command needs a command such as !so $(raider).');
     }
     const color = ANNOUNCEMENT_COLORS.has(String(raw.color || '').toLowerCase()) ? String(raw.color).toLowerCase() : 'primary';
-    return { type, value, color, delaySeconds, enabled: raw.enabled !== false };
+    const base = { type, value, color, delaySeconds, enabled: raw.enabled !== false };
+    if (type !== 'discord_notification') return base;
+
+    const requestedWebhookId = cleanText(raw.discordWebhookId, 80);
+    const existingAction = requestedWebhookId ? existingDiscordById.get(requestedWebhookId) : null;
+    const enteredWebhookUrl = String(raw.discordWebhookUrl || '').trim();
+    const mentionMode = DISCORD_MENTION_MODES.has(String(raw.discordMentionMode || '')) ? String(raw.discordMentionMode) : 'none';
+    let discordWebhookId = existingAction ? requestedWebhookId : randomUUID();
+    let discordWebhookSecret;
+    if (enteredWebhookUrl) {
+      const normalizedUrl = normalizeDiscordWebhookUrl(enteredWebhookUrl);
+      discordWebhookSecret = secretBox.encrypt(normalizedUrl, discordWebhookId);
+    } else if (existingAction && discordWebhookConfigured(existingAction)) {
+      discordWebhookSecret = existingAction.discordWebhookSecret;
+    } else {
+      throw new Error('Discord Notification needs a Webhook URL. Paste it once; saved webhook URLs are hidden when you reopen the reaction.');
+    }
+    return { ...base, discordWebhookId, discordWebhookSecret, discordMentionMode: mentionMode };
   });
   return {
     name,
@@ -245,8 +311,10 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
   }
 
   async function saveReaction(input = {}) {
-    const normalized = normalizeReaction(input, currentAutomationSpacingSeconds());
     const id = String(input.id || '').trim();
+    const existing = id ? await EventSubReaction.findOne({ _id: id, channelName: normalizedChannel }).lean() : null;
+    if (id && !existing) throw new Error('Reaction was not found.');
+    const normalized = normalizeReaction(input, currentAutomationSpacingSeconds(), existing);
     let saved;
     if (id) {
       saved = await EventSubReaction.findOneAndUpdate({ _id: id, channelName: normalizedChannel }, { $set: normalized }, { new: true, runValidators: true }).lean();
@@ -269,6 +337,48 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     if (!saved) throw new Error('Reaction was not found.');
     await refreshCache();
     return reactionToClient(saved, currentAutomationSpacingSeconds());
+  }
+
+  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none') {
+    const url = normalizeDiscordWebhookUrl(webhookUrl);
+    const message = cleanText(content, 2000);
+    if (!message) throw new Error('Discord Notification message is empty.');
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: message, allowed_mentions: discordAllowedMentions(mentionMode) })
+    });
+    if (!response.ok) {
+      let detail = '';
+      try {
+        const payload = await response.json();
+        detail = String(payload?.message || payload?.error || '').trim();
+      } catch (_) {}
+      throw httpDeliveryError('Discord webhook', response, detail);
+    }
+    return { status: response.status };
+  }
+
+  function findDiscordActionByWebhookId(webhookId) {
+    const id = String(webhookId || '').trim();
+    if (!id) return null;
+    for (const reaction of cache) {
+      const action = (reaction.actions || []).find((item) => item?.type === 'discord_notification' && String(item.discordWebhookId || '') === id);
+      if (action) return action;
+    }
+    return null;
+  }
+
+  async function testDiscordNotification({ webhookUrl = '', webhookId = '' } = {}) {
+    let targetUrl = String(webhookUrl || '').trim();
+    if (targetUrl) targetUrl = normalizeDiscordWebhookUrl(targetUrl);
+    else {
+      const action = findDiscordActionByWebhookId(webhookId);
+      if (!action) throw new Error('Saved Discord webhook was not found. Save the reaction first or paste a webhook URL.');
+      targetUrl = decryptDiscordWebhook(action);
+    }
+    await postDiscordWebhook(targetUrl, 'QwertBot Discord notification test ✅', 'none');
+    return { success: true };
   }
 
   async function sendTwitchShoutout(type, event) {
@@ -335,6 +445,23 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       if (!result?.matched) throw new Error(`Custom command did not match: ${rawMessage}`);
       if (!result?.responded) throw new Error(`Custom command matched but did not respond (${result?.reason || 'unknown reason'}).`);
       if (typeof noteAutomationSend === 'function') await noteAutomationSend('eventsub');
+      return;
+    }
+    if (action.type === 'discord_notification') {
+      const message = renderEventTemplate(action.value, type, event).trim();
+      if (!message) return;
+      const mentionMode = DISCORD_MENTION_MODES.has(String(action.discordMentionMode || '')) ? String(action.discordMentionMode) : 'none';
+      const key = context.nextDeliveryKey('discord-notification');
+      if (key) {
+        await delivery.deliver({
+          key,
+          kind: 'event-discord-notification',
+          payload: { content: message, mentionMode, webhookId: String(action.discordWebhookId || '') },
+          send: (saved) => postDiscordWebhook(decryptDiscordWebhook(action), saved.content, saved.mentionMode)
+        });
+      } else {
+        await postDiscordWebhook(decryptDiscordWebhook(action), message, mentionMode);
+      }
       return;
     }
     if (action.type === 'twitch_shoutout') {
@@ -406,10 +533,12 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     saveReaction,
     deleteReaction,
     setEnabled,
+    testDiscordNotification,
     handleEvent, planEvent,
     refreshCache,
     getHoldStatus: getEventReactionHoldStatus,
     getAutomationSpacingSeconds: currentAutomationSpacingSeconds,
+    getDiscordSecretStatus: secretBox.status,
     eventTypes: EVENT_TYPES
   };
 }
@@ -421,5 +550,7 @@ module.exports = {
   MAX_ACTION_DELAY_SECONDS,
   createEventSubReactionManager,
   renderEventTemplate,
-  numericEventValue
+  numericEventValue,
+  normalizeDiscordWebhookUrl,
+  discordAllowedMentions
 };

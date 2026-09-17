@@ -3,6 +3,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
   let eventTypes = [];
   let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300 };
   let automationSpacingSeconds = 0;
+  let discordWebhookStorage = { ready: false, preferredSource: null, usingFallback: false };
   const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
   const maxPersistentPinMessages = Number(config.maxPersistentPinMessages || 10);
   const defaultPersistentPinRotationSeconds = Number(config.defaultPersistentPinRotationSeconds || 180);
@@ -283,12 +284,15 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     if (type === 'custom_command') return 'Run Custom Command';
     if (type === 'twitch_announcement') return 'Twitch Announcement';
     if (type === 'twitch_shoutout') return 'Twitch Shoutout';
+    if (type === 'discord_notification') return 'Send Discord Notification';
     return type;
   }
 
   function actionRow(action = { type: 'chat_message', value: '', delaySeconds: 0, enabled: true }) {
     const row = document.createElement('div');
     row.className = 'event-reaction-action-row';
+    row.dataset.discordWebhookId = String(action.discordWebhookId || '');
+    row.dataset.discordWebhookConfigured = action.discordWebhookConfigured ? '1' : '0';
     row.innerHTML = `
       <label class="inline-check event-action-enabled"><input class="event-action-enabled-input" type="checkbox" ${action.enabled === false ? '' : 'checked'}> Use</label>
       <label>Action
@@ -297,13 +301,16 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
           <option value="custom_command">Run Custom Command</option>
           <option value="twitch_announcement">Twitch Announcement</option>
           <option value="twitch_shoutout">Twitch Shoutout</option>
+          <option value="discord_notification">Send Discord Notification</option>
         </select>
       </label>
       <label>Delay
         <div class="duration-field"><input class="event-action-delay" type="number" min="0" max="${limits.maxActionDelaySeconds}" step="0.1" value="${Number(action.delaySeconds || 0)}"><span class="duration-unit">seconds</span></div>
       </label>
-      <label class="event-action-value-wrap">Value
-        <input class="event-action-value" maxlength="500" value="${esc(action.value || '')}">
+      <div class="event-action-value-wrap">
+        <label class="event-action-value-label">Value
+          <input class="event-action-value" maxlength="500" value="${esc(action.value || '')}">
+        </label>
         <select class="event-action-color" aria-label="Announcement color">
           <option value="primary">Primary</option>
           <option value="purple">Purple</option>
@@ -311,7 +318,24 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
           <option value="green">Green</option>
           <option value="orange">Orange</option>
         </select>
-      </label>
+        <div class="event-action-discord-options" hidden>
+          <label>Discord Webhook URL
+            <div class="event-action-discord-webhook-line">
+              <input class="event-action-discord-webhook" type="password" autocomplete="new-password" spellcheck="false" placeholder="https://discord.com/api/webhooks/ID/TOKEN">
+              <button class="secondary event-action-discord-test" type="button">Test</button>
+            </div>
+          </label>
+          <label>Discord Mentions
+            <select class="event-action-discord-mentions">
+              <option value="none">No pings</option>
+              <option value="everyone">Allow @everyone / @here</option>
+              <option value="roles">Allow role pings</option>
+              <option value="all">Allow @everyone/@here + roles</option>
+            </select>
+          </label>
+          <div class="detail event-action-discord-help"></div>
+        </div>
+      </div>
       <div class="event-action-order-buttons">
         <button class="secondary event-action-up" type="button" title="Move up">↑</button>
         <button class="secondary event-action-down" type="button" title="Move down">↓</button>
@@ -321,17 +345,59 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const valueWrap = row.querySelector('.event-action-value-wrap');
     const valueEl = row.querySelector('.event-action-value');
     const colorEl = row.querySelector('.event-action-color');
+    const discordOptions = row.querySelector('.event-action-discord-options');
+    const webhookEl = row.querySelector('.event-action-discord-webhook');
+    const mentionEl = row.querySelector('.event-action-discord-mentions');
+    const discordHelp = row.querySelector('.event-action-discord-help');
+    const testBtn = row.querySelector('.event-action-discord-test');
     typeEl.value = action.type || 'chat_message';
     colorEl.value = action.color || 'primary';
+    mentionEl.value = ['none', 'everyone', 'roles', 'all'].includes(action.discordMentionMode) ? action.discordMentionMode : 'none';
+    const updateDiscordHelp = (extra = '') => {
+      const configured = row.dataset.discordWebhookConfigured === '1';
+      const base = configured
+        ? 'Saved webhook configured. Leave URL blank to keep it; pasting a new URL replaces it.'
+        : (discordWebhookStorage.ready
+          ? 'Paste a Discord webhook URL. It is encrypted server-side and hidden after save.'
+          : 'Webhook encryption is not configured. Set CONFIG_ENCRYPTION_KEY once, or keep an existing QWERT_OAUTH_LINK_SECRET / TWITCH_CLIENT_SECRET configured.');
+      const mentionHelp = ' @everyone/@here ping only when allowed above. Role ping syntax: <@&ROLE_ID>.';
+      discordHelp.textContent = `${extra ? `${extra} ` : ''}${base}${mentionHelp}`;
+      discordHelp.classList.toggle('bad', !discordWebhookStorage.ready && !configured);
+    };
     const update = () => {
       const type = typeEl.value;
       valueWrap.hidden = type === 'twitch_shoutout';
       colorEl.hidden = type !== 'twitch_announcement';
+      discordOptions.hidden = type !== 'discord_notification';
+      valueEl.maxLength = type === 'discord_notification' ? 2000 : 500;
       if (type === 'chat_message') valueEl.placeholder = 'Example: Thanks for the raid, $(raider)!';
       else if (type === 'twitch_announcement') valueEl.placeholder = 'Example: Welcome in, $(raider)!';
       else if (type === 'custom_command') valueEl.placeholder = 'Example: !so $(raider)';
+      else if (type === 'discord_notification') valueEl.placeholder = 'Example: 🚨 $(raider) raided with $(viewers) viewers!';
+      if (type === 'discord_notification') {
+        webhookEl.placeholder = row.dataset.discordWebhookConfigured === '1'
+          ? 'Saved webhook — leave blank to keep'
+          : 'https://discord.com/api/webhooks/ID/TOKEN';
+        updateDiscordHelp();
+      }
     };
     typeEl.addEventListener('change', update);
+    testBtn.onclick = async () => {
+      const webhookUrl = webhookEl.value.trim();
+      const webhookId = row.dataset.discordWebhookId || '';
+      if (!webhookUrl && !webhookId) return updateDiscordHelp('Paste a webhook URL before testing.');
+      testBtn.disabled = true;
+      updateDiscordHelp('Sending a no-ping test...');
+      try {
+        const d = await postJson('/eventsub-reactions/test-discord', { webhookUrl, webhookId });
+        if (!d.success) throw new Error(d.error || 'Discord webhook test failed.');
+        updateDiscordHelp('Test sent successfully.');
+      } catch (err) {
+        updateDiscordHelp(`Test failed: ${err.message || err}`);
+      } finally {
+        testBtn.disabled = false;
+      }
+    };
     row.querySelector('.event-action-up').onclick = () => { const prev=row.previousElementSibling; if (prev) actionsEl.insertBefore(row, prev); };
     row.querySelector('.event-action-down').onclick = () => { const next=row.nextElementSibling; if (next) actionsEl.insertBefore(next, row); };
     row.querySelector('.event-action-remove').onclick = () => { row.remove(); updateAddActionState(); };
@@ -352,7 +418,10 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       value: row.querySelector('.event-action-value').value.trim(),
       color: row.querySelector('.event-action-color').value || 'primary',
       delaySeconds: Number(row.querySelector('.event-action-delay').value || 0),
-      enabled: row.querySelector('.event-action-enabled-input').checked
+      enabled: row.querySelector('.event-action-enabled-input').checked,
+      discordWebhookId: row.dataset.discordWebhookId || '',
+      discordWebhookUrl: row.querySelector('.event-action-discord-webhook').value.trim(),
+      discordMentionMode: row.querySelector('.event-action-discord-mentions').value || 'none'
     }));
   }
 
@@ -488,6 +557,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     eventTypes = d.eventTypes || [];
     limits = { ...limits, ...(d.limits||{}) };
     automationSpacingSeconds = Math.max(0, Number(d.automationSpacingSeconds) || 0);
+    discordWebhookStorage = { ...discordWebhookStorage, ...(d.discordWebhookStorage || {}) };
     renderTypeOptions();
     updateHoldUi();
     loaded = true;

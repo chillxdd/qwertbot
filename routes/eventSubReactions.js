@@ -10,7 +10,15 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
       const reactions = await manager.listReactions();
       const persistentPinManager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
       const persistentPin = persistentPinManager?.getConfig?.() || null;
-      return res.json({ success: true, reactions, persistentPin, eventTypes: EVENT_TYPES, automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0), limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS } });
+      return res.json({
+        success: true,
+        reactions,
+        persistentPin,
+        eventTypes: EVENT_TYPES,
+        automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0),
+        discordWebhookStorage: manager.getDiscordSecretStatus?.() || { ready: false, preferredSource: null, usingFallback: false },
+        limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS }
+      });
     } catch (err) {
       return res.status(500).json({ success: false, error: err.message || 'Could not load EventSub reactions.' });
     }
@@ -24,6 +32,21 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
     try { return res.json({ success: true, persistentPin: await manager.saveConfig(req.body || {}) }); }
     catch (err) { return res.status(400).json({ success: false, error: err.message || 'Could not save Rotating Pinned Banners.' }); }
   });
+
+  app.post('/eventsub-reactions/test-discord', requireModSession, async (req, res) => {
+    const manager = getEventSubReactionManager();
+    if (!getDatabaseConnected() || !manager) return unavailable(res);
+    try {
+      await manager.testDiscordNotification({
+        webhookUrl: String(req.body?.webhookUrl || ''),
+        webhookId: String(req.body?.webhookId || '')
+      });
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(400).json({ success: false, error: err.message || 'Could not send Discord webhook test.' });
+    }
+  });
+
   app.post('/eventsub-reactions/save', requireModSession, async (req, res) => {
     const manager = getEventSubReactionManager();
     if (!getDatabaseConnected() || !manager) return unavailable(res);

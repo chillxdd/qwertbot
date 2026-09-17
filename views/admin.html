@@ -620,7 +620,7 @@
               <strong>Actions</strong>
             </div>
             <div id="eventReactionActionHelp" class="detail"></div>
-            <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Value</span><span>Order</span></div>
+            <div class="event-reaction-actions-head detail"><span>Use</span><span>Action</span><span>Delay</span><span>Message / Settings</span><span>Order</span></div>
             <div id="eventReactionActions" class="event-reaction-actions"></div>
             <div class="custom-response-bottom-actions">
               <button id="showEventReactionVariablesBtn" class="secondary" type="button">Variables</button>
@@ -662,7 +662,7 @@
             <div class="custom-variable-row"><code>$(duration)</code><div class="detail">Ad-break duration in seconds.</div></div>
             <div class="custom-variable-row"><code>$(status)</code><div class="detail">Event status when Twitch supplies one.</div></div>
             <div class="custom-variable-row"><code>$(automatic)</code><div class="detail"><code>yes</code> for an automatic ad break, otherwise <code>no</code>.</div></div>
-            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, and Run Custom Command values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div>
+            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, Run Custom Command, and Discord Notification values. Event-specific numeric variables resolve to <code>0</code> when that EventSub payload does not provide them.</div><div class="custom-variable-note detail">Discord mentions: type <code>@everyone</code> or <code>@here</code> directly and choose a mention mode that allows them. For a role, use Discord mention syntax <code>&lt;@&amp;ROLE_ID&gt;</code> and allow role pings. The Test button always suppresses mentions.</div>
           </div>
         </dialog>
       </div>

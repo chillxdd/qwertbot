@@ -201,6 +201,15 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
 .event-action-order-buttons{display:flex;gap:5px;align-items:center;justify-content:flex-end;padding-bottom:1px}
 .event-action-order-buttons button{margin:0;padding:8px 9px;min-width:36px}
 .event-action-order-buttons .event-action-remove{padding-left:10px;padding-right:10px}
+.event-action-value-wrap{min-width:0}
+.event-action-value-label{display:block}
+.event-action-discord-options{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(180px,.8fr);gap:8px 10px;margin-top:9px;padding:9px;border:1px solid #34343d;border-radius:6px;background:#121218}
+.event-action-discord-options[hidden]{display:none!important}
+.event-action-discord-webhook-line{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;align-items:end}
+.event-action-discord-webhook-line .event-action-discord-webhook{min-width:0}
+.event-action-discord-webhook-line .event-action-discord-test{width:auto;margin:5px 0 0;padding:8px 11px;white-space:nowrap}
+.event-action-discord-help{grid-column:1/-1;line-height:1.45}
+.event-action-discord-help.bad{color:#ff7b7b}
 .event-reaction-vars{margin-top:10px;line-height:1.7}
 .event-reaction-vars code{white-space:nowrap}
 @media(max-width:900px){
@@ -214,6 +223,8 @@ select{width:100%;box-sizing:border-box;background:#0e0e10;color:#fff;border:1px
   .event-reaction-basics-grid{grid-template-columns:1fr}
   .event-reaction-action-row{grid-template-columns:1fr;grid-template-areas:"enabled" "type" "delay" "value" "order"}
   .event-action-order-buttons{justify-content:flex-start}
+  .event-action-discord-options{grid-template-columns:1fr}
+  .event-action-discord-help{grid-column:1}
 }
 
 .automation-spacing-card[hidden]{display:none}
