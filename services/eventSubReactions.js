@@ -460,6 +460,16 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     const streamLive = status.streamLive !== undefined ? Boolean(status.streamLive) : Boolean(status.live);
     const currentStreamTitle = String(status.currentStreamTitle || status.title || '').trim();
     const currentStreamCategory = String(status.currentStreamCategory || status.category || '').trim();
+    const twitchThumbnail = String(status.currentStreamThumbnailUrl || status.thumbnailUrl || '').trim();
+    const thumbnailBase = twitchThumbnail || `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(normalizedChannel)}-1280x720.jpg`;
+    let thumbnailUrl = thumbnailBase;
+    try {
+      const parsed = new URL(thumbnailBase);
+      // Discord proxies/cache images by URL. Give every rendered notification a
+      // fresh URL so an offline/test placeholder cannot poison the next live card.
+      parsed.searchParams.set('qwertbot', `${String(status.currentStreamId || status.streamId || event.id || 'stream').trim() || 'stream'}-${Date.now()}`);
+      thumbnailUrl = parsed.toString();
+    } catch (_) {}
     return {
       channelName: String(event.broadcaster_user_name || event.broadcaster_user_login || normalizedChannel).trim(),
       // Explicit current-broadcast source metadata. Event-specific $(title) no
@@ -472,7 +482,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       streamTitleVariable: streamLive ? (currentStreamTitle || STREAM_LIVE_TITLE_FALLBACK) : STREAM_OFFLINE_TITLE,
       streamCategoryVariable: streamLive ? (currentStreamCategory || STREAM_LIVE_CATEGORY_FALLBACK) : STREAM_OFFLINE_CATEGORY,
       streamUrl: `https://twitch.tv/${normalizedChannel}`,
-      thumbnail: `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(normalizedChannel)}-1280x720.jpg`,
+      thumbnail: thumbnailUrl,
       startedAt: startedMs > 0 ? new Date(startedMs).toISOString() : String(event.started_at || '')
     };
   }

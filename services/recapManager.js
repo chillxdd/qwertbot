@@ -240,6 +240,7 @@ function createRecapManager({
   let currentStreamCategory = '';
   let currentStreamGameId = '';
   let currentViewerCount = 0;
+  let currentStreamThumbnailUrl = '';
   let currentStreamId = '';
   let recapMessages = [];
   let messageSequence = 0;
@@ -458,6 +459,7 @@ function createRecapManager({
     const newCategory = String(status?.category || '').trim();
     const newGameId = String(status?.gameId || '').trim();
     currentViewerCount = Math.max(0, Number(status?.viewerCount || 0) || 0);
+    currentStreamThumbnailUrl = String(status?.thumbnailUrl || '').trim();
 
     const changed =
       newTitle !== currentStreamTitle ||
@@ -529,7 +531,11 @@ function createRecapManager({
       title: stream?.title || '',
       category: stream?.game_name || '',
       gameId: stream?.game_id || '',
-      viewerCount: Number(stream?.viewer_count || 0) || 0
+      viewerCount: Number(stream?.viewer_count || 0) || 0,
+      thumbnailUrl: String(stream?.thumbnail_url || '')
+        .replace('{width}', '1280')
+        .replace('{height}', '720')
+        .trim()
     };
   }
 
@@ -1042,6 +1048,7 @@ function createRecapManager({
     currentStreamCategory = String(status?.category || '').trim();
     currentStreamGameId = String(status?.gameId || '').trim();
     currentViewerCount = Math.max(0, Number(status?.viewerCount || 0) || 0);
+    currentStreamThumbnailUrl = String(status?.thumbnailUrl || '').trim();
 
     if (status?.startedAt) {
       const parsed = Date.parse(status.startedAt);
@@ -1256,7 +1263,7 @@ function createRecapManager({
     });
     if (pendingEnd !== ending) return;
     currentStreamId = ''; currentStreamTitle = ''; currentStreamCategory = ''; currentStreamGameId = '';
-    currentViewerCount = 0; recapMessages = []; streamContexts = []; twitchEvents = [];
+    currentViewerCount = 0; currentStreamThumbnailUrl = ''; recapMessages = []; streamContexts = []; twitchEvents = [];
     messageSequence = 0; contextSequence = 0; eventSequence = 0;
     pendingLearning = null; clearLearningTimer();
     firstRecapSent = false; recapInProgress = false; recapPaused = false; collectionPaused = false;
@@ -2324,6 +2331,7 @@ function createRecapManager({
       currentStreamTitle: currentStreamTitle || null,
       currentStreamCategory: currentStreamCategory || null,
       currentStreamGameId: currentStreamGameId || null,
+      currentStreamThumbnailUrl: currentStreamThumbnailUrl || null,
       currentViewerCount,
       recapPaused,
       collectionPaused,
