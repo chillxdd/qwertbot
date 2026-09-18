@@ -40,11 +40,32 @@ const LIGHT_CHAT_EXPANSION_THRESHOLD = 300;
 const LIGHT_CHAT_TARGET_MIN = 330;
 const LIGHT_CHAT_ACCEPTABLE_MIN = 300;
 const ACTIVE_CHAT_MESSAGE_THRESHOLD = 100;
-const ACTIVE_CHAT_EXPANSION_THRESHOLD = 430;
-const ACTIVE_CHAT_TARGET_MIN = 440;
-const ACTIVE_CHAT_ACCEPTABLE_MIN = 420;
+const BUSY_CHAT_MESSAGE_THRESHOLD = 300;
+const HEAVY_CHAT_MESSAGE_THRESHOLD = 600;
+
+// Recaps are capped at roughly 486 characters by Twitch, so coverage guards
+// use both characters and words instead of unrealistic long-form word targets.
+const ACTIVE_CHAT_EXPANSION_THRESHOLD = 410;
+const ACTIVE_CHAT_TARGET_MIN = 430;
+const ACTIVE_CHAT_ACCEPTABLE_MIN = 400;
+const ACTIVE_CHAT_MIN_WORDS = 50;
+const ACTIVE_CHAT_EDITOR_MIN_RETENTION = 0.70;
+
+const BUSY_CHAT_EXPANSION_THRESHOLD = 430;
+const BUSY_CHAT_TARGET_MIN = 450;
+const BUSY_CHAT_ACCEPTABLE_MIN = 420;
+const BUSY_CHAT_MIN_WORDS = 60;
+const BUSY_CHAT_EDITOR_MIN_RETENTION = 0.78;
+
+const HEAVY_CHAT_EXPANSION_THRESHOLD = 445;
+const HEAVY_CHAT_TARGET_MIN = 460;
+const HEAVY_CHAT_ACCEPTABLE_MIN = 435;
+const HEAVY_CHAT_MIN_WORDS = 68;
+const HEAVY_CHAT_EDITOR_MIN_RETENTION = 0.82;
+
 const NORMAL_CHAT_TARGET_MIN = 400;
-const NORMAL_CHAT_ACCEPTABLE_MIN = 380;
+const NORMAL_CHAT_ACCEPTABLE_MIN = 360;
+const NORMAL_CHAT_MIN_WORDS = 42;
 const MAX_EXPANSION_ATTEMPTS = 2;
 const MAX_FINAL_RECOVERY_ATTEMPTS = 2;
 const SAFE_RECAP_FALLBACK = 'Chat kept things lively this hour with plenty of back-and-forth.';
@@ -252,6 +273,11 @@ function getRecapSourceStats(chatRecords = [], twitchEvents = []) {
   };
 }
 
+function countRecapWords(text = '') {
+  const words = String(text || '').trim().match(/[\p{L}\p{N}][\p{L}\p{N}'’_-]*/gu);
+  return words ? words.length : 0;
+}
+
 function getRecapLengthPlan(chatRecords = [], twitchEvents = []) {
   const stats = getRecapSourceStats(chatRecords, twitchEvents);
   const base = {
@@ -261,9 +287,44 @@ function getRecapLengthPlan(chatRecords = [], twitchEvents = []) {
     expansionThreshold: 0,
     targetMin: 0,
     acceptableMin: 0,
+    minWords: 0,
+    minDistinctMoments: 0,
+    editorMinRetentionRatio: 0,
     initialAttempts: 0,
     finalRecoveryAttempts: 0
   };
+
+  if (stats.viewerMessageCount >= HEAVY_CHAT_MESSAGE_THRESHOLD) {
+    return {
+      ...base,
+      eligible: true,
+      activityLabel: 'very high-volume chat window',
+      expansionThreshold: HEAVY_CHAT_EXPANSION_THRESHOLD,
+      targetMin: HEAVY_CHAT_TARGET_MIN,
+      acceptableMin: HEAVY_CHAT_ACCEPTABLE_MIN,
+      minWords: HEAVY_CHAT_MIN_WORDS,
+      minDistinctMoments: 4,
+      editorMinRetentionRatio: HEAVY_CHAT_EDITOR_MIN_RETENTION,
+      initialAttempts: MAX_EXPANSION_ATTEMPTS,
+      finalRecoveryAttempts: MAX_FINAL_RECOVERY_ATTEMPTS
+    };
+  }
+
+  if (stats.viewerMessageCount >= BUSY_CHAT_MESSAGE_THRESHOLD) {
+    return {
+      ...base,
+      eligible: true,
+      activityLabel: 'high-volume chat window',
+      expansionThreshold: BUSY_CHAT_EXPANSION_THRESHOLD,
+      targetMin: BUSY_CHAT_TARGET_MIN,
+      acceptableMin: BUSY_CHAT_ACCEPTABLE_MIN,
+      minWords: BUSY_CHAT_MIN_WORDS,
+      minDistinctMoments: 3,
+      editorMinRetentionRatio: BUSY_CHAT_EDITOR_MIN_RETENTION,
+      initialAttempts: MAX_EXPANSION_ATTEMPTS,
+      finalRecoveryAttempts: MAX_FINAL_RECOVERY_ATTEMPTS
+    };
+  }
 
   if (stats.viewerMessageCount >= ACTIVE_CHAT_MESSAGE_THRESHOLD) {
     return {
@@ -273,6 +334,9 @@ function getRecapLengthPlan(chatRecords = [], twitchEvents = []) {
       expansionThreshold: ACTIVE_CHAT_EXPANSION_THRESHOLD,
       targetMin: ACTIVE_CHAT_TARGET_MIN,
       acceptableMin: ACTIVE_CHAT_ACCEPTABLE_MIN,
+      minWords: ACTIVE_CHAT_MIN_WORDS,
+      minDistinctMoments: 2,
+      editorMinRetentionRatio: ACTIVE_CHAT_EDITOR_MIN_RETENTION,
       initialAttempts: MAX_EXPANSION_ATTEMPTS,
       finalRecoveryAttempts: MAX_FINAL_RECOVERY_ATTEMPTS
     };
@@ -286,6 +350,9 @@ function getRecapLengthPlan(chatRecords = [], twitchEvents = []) {
       expansionThreshold: RECAP_EXPANSION_THRESHOLD,
       targetMin: NORMAL_CHAT_TARGET_MIN,
       acceptableMin: NORMAL_CHAT_ACCEPTABLE_MIN,
+      minWords: NORMAL_CHAT_MIN_WORDS,
+      minDistinctMoments: 2,
+      editorMinRetentionRatio: 0,
       initialAttempts: MAX_EXPANSION_ATTEMPTS,
       finalRecoveryAttempts: MAX_FINAL_RECOVERY_ATTEMPTS
     };
@@ -299,12 +366,46 @@ function getRecapLengthPlan(chatRecords = [], twitchEvents = []) {
       expansionThreshold: LIGHT_CHAT_EXPANSION_THRESHOLD,
       targetMin: LIGHT_CHAT_TARGET_MIN,
       acceptableMin: LIGHT_CHAT_ACCEPTABLE_MIN,
+      minWords: 0,
+      minDistinctMoments: 1,
+      editorMinRetentionRatio: 0,
       initialAttempts: 1,
       finalRecoveryAttempts: 1
     };
   }
 
   return base;
+}
+
+function isRecapCoverageSufficient(summary = '', lengthPlan = {}) {
+  if (!lengthPlan?.eligible) return true;
+  const text = String(summary || '').trim();
+  if (!text) return false;
+  const words = countRecapWords(text);
+  return text.length >= Number(lengthPlan.acceptableMin || 0) &&
+    words >= Number(lengthPlan.minWords || 0);
+}
+
+function shouldExpandRecap(summary = '', lengthPlan = {}) {
+  if (!lengthPlan?.eligible) return false;
+  const text = String(summary || '').trim();
+  const words = countRecapWords(text);
+  return text.length < Number(lengthPlan.expansionThreshold || 0) ||
+    words < Number(lengthPlan.minWords || 0);
+}
+
+function formatRecapVolumeGuidance(chatRecords = [], twitchEvents = []) {
+  const plan = getRecapLengthPlan(chatRecords, twitchEvents);
+  const count = plan.viewerMessageCount;
+  if (!plan.eligible) {
+    return `SOURCE VOLUME / COVERAGE CONTEXT:\n- This window contains ${count} viewer/mod source message(s).\n- The window is quiet enough that no special coverage minimum is required. Select only genuinely worthwhile material.`;
+  }
+
+  const momentRule = plan.minDistinctMoments > 0
+    ? `- When the source genuinely supports it, actively look for about ${plan.minDistinctMoments} distinct worthwhile moments/themes before deciding the recap is complete.`
+    : '';
+
+  return `SOURCE VOLUME / COVERAGE CONTEXT:\n- This window contains ${count} viewer/mod source messages from ${plan.uniqueViewerCount} distinct viewer identities.\n- Treat this as a ${plan.activityLabel}.\n${momentRule}\n- This is a coverage goal, not a quota. If most messages are filler, repetition, or one genuinely dominant topic, do not invent variety.\n- A recap under roughly ${plan.acceptableMin} characters or ${plan.minWords || 0} words is suspiciously thin for this volume and should be expanded when additional worthwhile supported material exists.`;
 }
 
 function formatStreamLore(streamLore = '') {
@@ -492,6 +593,7 @@ function buildPrimaryPrompt(chatLogs, streamContexts, twitchEvents = [], previou
   const streamLoreContext = formatStreamLore(streamLore);
   const streamTimingContext = formatStreamTiming(streamTiming);
   const editableInstructions = String(primaryInstructions || '').trim();
+  const volumeGuidance = formatRecapVolumeGuidance(chatLogs, twitchEvents);
 
   return `You are generating an hourly Twitch recap for Qwert.
 
@@ -518,6 +620,8 @@ ${streamTimingContext}
 ${formatBotContextRules(botUsername)}
 
 ${formatSharedChatRules(chatLogs)}
+
+${volumeGuidance}
 
 NON-NEGOTIABLE SOURCE-OF-TRUTH AND ACCURACY RULES:
 - The supplied chat messages are the source of truth for chat claims, reactions, jokes, viewer opinions, and discussion.
@@ -562,7 +666,9 @@ NON-NEGOTIABLE CHRONOLOGY / CAUSALITY RULES:
 - Avoid causal wording such as prompting, leading to, causing, resulting in, sparking, triggering, in response to, or because of this unless the source explicitly supports the relationship.
 
 NON-NEGOTIABLE RECAP COMPOSITION RULES:
-- Write a recap, not a topic inventory. Select the 2-3 strongest supported moments from the hour instead of trying to mention everything. A fourth moment is acceptable only when it is clearly as important or memorable as the others.
+- Write a recap, not a topic inventory. Match breadth to the SOURCE VOLUME / COVERAGE CONTEXT above.
+- Do not let one dominant conversation thread crowd out other distinct worthwhile moments when the current source clearly contains them.
+- In high-volume windows, actively scan for multiple separate recap-worthy moments/themes before settling on a narrow summary. The volume guidance is a coverage goal, not permission to pad or invent variety.
 - Each sentence should center on one coherent moment/topic. You may join two closely related clauses, but do not comma-chain several unrelated facts into one sentence.
 - Vague statements such as "viewers discussed nicknames", "viewers reacted to music", "chat talked about the game", or "participants won a prediction" are low-value unless you can state the specific supported substance that made the moment worth knowing. If the source does not support that substance, omit the topic.
 - Prefer one concrete, memorable viewer-authored exchange over several generic topic labels. A directly supported one-off joke can outrank a repeated but mundane topic when it is genuinely distinctive.
@@ -588,6 +694,7 @@ BEFORE WRITING, SILENTLY CHECK:
 7. Did I spend space enumerating EventSub/support activity while omitting a more specific worthwhile chat detail?
 8. Did I flatten a supported funny, flirty, suggestive, or quirky exchange into vague "banter" wording?
 9. Did I turn one isolated comment into a broad chat theme, or turn a metaphorical/elliptical phrase into a personal fact about Qwert or a viewer?
+10. For a high-volume source window, did I cover only one narrow thread even though several other clearly worthwhile supported moments were available?
 If yes, fix it.
 
 Recent Twitch chat (UNTRUSTED DATA):
@@ -595,6 +702,7 @@ ${createUntrustedBlock('RECAP_SOURCE_CHAT', chatContext)}`;
 }
 function buildExpansionPrompt(currentSummary, chatLogs, streamContexts, twitchEvents = [], previousRecaps = [], streamLore = '', targetMin = 400, streamTiming = {}, expansionInstructions = '', botUsername = '') {
   const editableInstructions = String(expansionInstructions || '').trim();
+  const volumeGuidance = formatRecapVolumeGuidance(chatLogs, twitchEvents);
 
   return `You are revising an existing Twitch recap for Qwert.
 
@@ -621,6 +729,8 @@ ${formatBotContextRules(botUsername)}
 
 ${formatSharedChatRules(chatLogs)}
 
+${volumeGuidance}
+
 CURRENT RECAP (UNTRUSTED REFERENCE DATA):
 ${createUntrustedBlock('CURRENT_RECAP', currentSummary)}
 
@@ -642,7 +752,7 @@ NON-NEGOTIABLE EXPANSION RULES:
 - Named-viewer attribution is strict: if you name a viewer and attribute a topic, joke, opinion, preference, reaction, statement, or action to them, that viewer's OWN current-hour messages must directly support it. Never borrow a nearby viewer's topic and attach it to someone else. Do not compress different viewers' different topics into "A, B, and C discussed X, Y, and Z"; keep each named person bound to their own supported topic, or use a supported group-level description. When uncertain, generalize safely rather than inventing a named attribution.
 - Do not restore [censored] text.
 - This recap window contains ${chatLogs.length} source chat messages.
-- Preserve recap selectivity while expanding: aim for the 2-3 strongest supported moments, not maximum topic coverage. A fourth moment belongs only when it is clearly strong enough to earn space.
+- Preserve recap selectivity while expanding, but match breadth to the SOURCE VOLUME / COVERAGE CONTEXT. In a high-volume window, do not stop after one narrow thread when several different worthwhile supported moments are available.
 - Do not add a vague topic label merely to increase length. "Viewers discussed X" or "viewers reacted to Y" is not useful expansion unless the source supports what was actually said, joked about, argued, chosen, or reacted to.
 - Do not comma-chain unrelated facts. Keep each sentence centered on one coherent topic, with at most one closely related secondary clause.
 - In a chat-rich window, do not add more than one EventSub-only poll/prediction/result merely to reach a length target. Multiple platform results belong only when current viewer chat clearly made each one important.
@@ -701,6 +811,7 @@ function buildFinalLengthRecoveryPrompt({
 }) {
   const editableInstructions = String(expansionInstructions || '').trim();
   const stats = getRecapSourceStats(chatLogs, twitchEvents);
+  const volumeGuidance = formatRecapVolumeGuidance(chatLogs, twitchEvents);
   const retryRules = attempt > 1
     ? `\nFINAL RECOVERY RETRY:\n- The previous recovery candidate did not remain long enough after attribution and bot-role audits.\n- Keep the audited recap below intact and look for a DIFFERENT omitted source-supported detail.\n- Do not reintroduce a claim that a prior audit may have removed.\n- Prefer a concrete group-level description over a risky named-person attribution.\n`
     : '';
@@ -735,6 +846,8 @@ ${formatBotContextRules(botUsername)}
 
 ${formatSharedChatRules(chatLogs)}
 
+${volumeGuidance}
+
 CURRENT AUDITED RECAP (UNTRUSTED REFERENCE DATA):
 ${createUntrustedBlock('FINAL_RECOVERY_CURRENT_RECAP', currentSummary)}
 
@@ -746,7 +859,7 @@ NON-NEGOTIABLE FINAL RECOVERY RULES:
 - Add one or more DISTINCT omitted details only when current viewer/mod chat or NOTEWORTHY VERIFIED TWITCH EVENTS directly support them.
 - This window contains ${stats.viewerMessageCount} viewer/mod messages from ${stats.uniqueViewerCount || 'an unknown number of'} distinct viewer identities and ${stats.noteworthyEventCount} noteworthy verified Twitch event(s).
 - Target ${targetMin}-${SUMMARY_TEXT_LIMIT} characters when enough worthwhile material exists. Treat ${acceptableMin} as a soft goal, not a quota: never sacrifice selectivity or natural prose to reach it.
-- Keep the final recap focused on the 2-3 strongest supported moments. Add a fourth only when it is genuinely comparable in importance or memorability.
+- Keep the final recap selective, but match breadth to the SOURCE VOLUME / COVERAGE CONTEXT. High-volume windows should recover multiple distinct worthwhile moments when the source supports them rather than remaining stuck on one narrow thread.
 - Prefer specific supported jokes, questions, arguments, unusual suggestions, flirty/suggestive exchanges, recurring bits, concrete reactions, and memorable side conversations.
 - Do NOT pad with generic statements such as "viewers discussed run progress", "chat talked about game features", "the conversation continued", "viewers reacted to music", "participants won the prediction", or similar vague filler when the source does not support a more concrete description.
 - Do not turn recovery into a comma-separated inventory of unrelated facts. Keep each sentence centered on one coherent moment/topic.
@@ -929,6 +1042,7 @@ function buildRecapCompositionRepairPrompt({
   issues = []
 } = {}) {
   const chatLines = normalizeChatRecords(chatLogs).map((record) => renderChatRecord(record));
+  const volumeGuidance = formatRecapVolumeGuidance(chatLogs, twitchEvents);
   return `You are performing a FINAL EDITORIAL COMPOSITION REPAIR on an already source-audited Twitch hourly recap for Qwert.
 
 HIGHEST-PRIORITY SECURITY / SOURCE RULES:
@@ -944,13 +1058,13 @@ WHY THIS REPAIR RAN:
 ${issues.length ? issues.map((issue) => `- ${issue}`).join('\n') : '- The recap read too much like a topic checklist instead of a useful stream recap.'}
 
 EDITORIAL GOAL:
-- Rebuild the recap around the 2-3 strongest supported moments. Do NOT maximize topic coverage.
+- Rebuild the recap around the strongest supported moments while respecting the SOURCE VOLUME / COVERAGE CONTEXT below. Do not collapse a busy hour into one narrow thread when several worthwhile moments are supported.
 - Keep one coherent main topic per sentence. At most one closely related secondary clause may share a sentence.
 - Prefer specific, memorable details over labels like \"viewers discussed nicknames\" or \"viewers reacted to music\". If the source does not support the substance of a topic, omit it.
 - A memorable directly supported one-off joke may be worth keeping. Repetition is not required for a narrowly attributed one-off.
 - Poll/prediction/EventSub results are optional. In a chat-rich window, keep at most one EventSub-only result unless viewer chat clearly makes multiple results important.
 - Do not use \"participants won the prediction\" or similarly mechanical telemetry prose when a clearer supported description is possible. Do not invent who benefited if the event does not say.
-- Natural, specific 2-3 sentence prose is preferred. A shorter strong recap is better than a longer laundry list.
+- Prefer natural, specific prose with enough compact sentences to preserve the volume-guided coverage. Do not shorten a busy recap merely to make it look cleaner.
 - Preserve any unusually strong supported wording/detail from the current recap when it still earns a place.
 - NEVER exceed ${SUMMARY_TEXT_LIMIT} characters. Do not prepend \"Hourly Recap:\".
 - Output only the repaired recap.
@@ -968,6 +1082,8 @@ ${formatStreamTiming(streamTiming)}
 ${formatBotContextRules(botUsername)}
 
 ${formatSharedChatRules(chatLogs)}
+
+${volumeGuidance}
 
 CURRENT RECAP (UNTRUSTED REFERENCE DATA):
 ${createUntrustedBlock('COMPOSITION_CURRENT_RECAP', currentSummary)}
@@ -988,6 +1104,7 @@ async function repairRecapComposition({
   botUsername = ''
 } = {}) {
   const original = normalizeRecap(summary || '');
+  const lengthPlan = getRecapLengthPlan(chatLogs, twitchEvents);
   const beforeIssues = getRecapCompositionIssues(original);
   if (!original || !beforeIssues.length) return original;
 
@@ -1029,6 +1146,18 @@ async function repairRecapComposition({
       console.warn('[Recap Composition] Repair became too thin after auditing; keeping the fully audited original recap.');
       return original;
     }
+    if (isRecapCoverageSufficient(original, lengthPlan) && !isRecapCoverageSufficient(repaired, lengthPlan)) {
+      console.warn('[Recap Composition] Repair would drop a sufficiently covered recap below its volume-based coverage floor; keeping the fully audited original recap.');
+      return original;
+    }
+    if (lengthPlan.editorMinRetentionRatio > 0) {
+      const minChars = Math.floor(original.length * lengthPlan.editorMinRetentionRatio);
+      const minWords = Math.floor(countRecapWords(original) * lengthPlan.editorMinRetentionRatio);
+      if (repaired.length < minChars || countRecapWords(repaired) < minWords) {
+        console.warn(`[Recap Composition] Repair over-compressed a ${lengthPlan.activityLabel}; keeping the original (${original.length} chars/${countRecapWords(original)} words -> ${repaired.length} chars/${countRecapWords(repaired)} words).`);
+        return original;
+      }
+    }
 
     console.log(`[Recap Composition] Selected repaired recap (${beforeIssues.length} -> ${afterIssues.length} composition issue(s), ${original.length} -> ${repaired.length} chars).`);
     return repaired;
@@ -1052,6 +1181,7 @@ function buildPremiumRecapEditorPrompt({
 } = {}) {
   const chatLines = normalizeChatRecords(chatLogs).map((record) => renderChatRecord(record));
   const trustedPrimaryInstructions = String(primaryInstructions || '').trim();
+  const volumeGuidance = formatRecapVolumeGuidance(chatLogs, twitchEvents);
   return `You are the PREMIUM FINAL EDITOR for Qwert's hourly Twitch recap.
 
 A Flash-Lite writer has already produced and source-audited the draft below. Your job is NOT to summarize from scratch unless the draft needs a rewrite. Compare the draft against the CURRENT source and improve it only when you can make it materially more useful, specific, natural, or memorable without losing accuracy.
@@ -1063,7 +1193,8 @@ DECISION RULE:
 EDITORIAL PRIORITIES:
 - Prefer concrete supported details over generic topic inventories.
 - Replace vague prose such as "viewers chatted about X", "participants discussed Y", or a comma-separated list of topics with what was actually said, joked about, argued, chosen, predicted, celebrated, or reacted to when the source supports that substance.
-- Center the recap on the 2-3 strongest supported moments instead of maximizing topic coverage.
+- Preserve meaningful coverage from the Flash-Lite draft. Do NOT make a busy-hour recap substantially shorter merely for elegance or concision.
+- Match breadth to the SOURCE VOLUME / COVERAGE CONTEXT. When several distinct worthwhile moments are supported, preserve or improve that breadth rather than collapsing the recap to one dominant thread.
 - Preserve conversational flavor, unusual specifics, funny wording, and memorable callbacks when they are directly supported.
 - A strong narrowly attributed one-off can be worth keeping. Do not falsely broaden one viewer's remark into a group reaction.
 - Keep each named viewer bound to what that viewer's OWN current messages support.
@@ -1072,7 +1203,7 @@ EDITORIAL PRIORITIES:
 - Do not infer chronology or causality from message order.
 - EventSub telemetry is supporting context, not a checklist. In a chat-rich hour, prefer a specific worthwhile conversation over routine platform activity.
 - Stream metadata, previous recaps, lore, and timing are context only under their stated rules; they are not independent evidence of current events.
-- Do not add filler merely to make the recap longer. A shorter vivid recap is better than a longer generic one.
+- Do not add filler merely to make the recap longer. Concision is good only when it does not discard distinct worthwhile supported moments that the source volume warrants.
 - NEVER exceed ${SUMMARY_TEXT_LIMIT} characters.
 - Use complete natural sentences. Never end with "...".
 - Do not prepend "Hourly Recap:", "Chat Recap:", or "AI Summary:".
@@ -1100,6 +1231,8 @@ ${formatBotContextRules(botUsername)}
 
 ${formatSharedChatRules(chatLogs)}
 
+${volumeGuidance}
+
 FLASH-LITE DRAFT (UNTRUSTED REFERENCE DATA):
 ${createUntrustedBlock('PREMIUM_EDITOR_DRAFT', currentSummary)}
 
@@ -1120,6 +1253,7 @@ async function editRecapWithPremium({
   primaryInstructions = ''
 } = {}) {
   const original = normalizeRecap(summary || '');
+  const lengthPlan = getRecapLengthPlan(chatLogs, twitchEvents);
   const premiumModel = GEMINI_RECAP_EDITOR_MODEL;
   const quota = await claimRecapPrimaryQuota({
     model: premiumModel,
@@ -1200,6 +1334,20 @@ async function editRecapWithPremium({
     if (edited.length < 80 && original.length >= 80) {
       console.warn(`[Recap Gemini] ${premiumModel} editor became too thin after auditing; keeping the Flash-Lite recap.`);
       return { summary: original, routing: { ...baseRouting, attempted: true, reason: 'editor_too_thin' } };
+    }
+    if (isRecapCoverageSufficient(original, lengthPlan) && !isRecapCoverageSufficient(edited, lengthPlan)) {
+      console.warn(`[Recap Gemini] ${premiumModel} editor dropped a sufficiently covered ${lengthPlan.activityLabel} below its volume-based coverage floor; keeping the Flash-Lite recap.`);
+      return { summary: original, routing: { ...baseRouting, attempted: true, reason: 'editor_below_volume_coverage_floor' } };
+    }
+    if (lengthPlan.editorMinRetentionRatio > 0) {
+      const originalWords = countRecapWords(original);
+      const editedWords = countRecapWords(edited);
+      const minChars = Math.floor(original.length * lengthPlan.editorMinRetentionRatio);
+      const minWords = Math.floor(originalWords * lengthPlan.editorMinRetentionRatio);
+      if (edited.length < minChars || editedWords < minWords) {
+        console.warn(`[Recap Gemini] ${premiumModel} editor over-compressed a ${lengthPlan.activityLabel}; keeping Lite (${original.length} chars/${originalWords} words -> ${edited.length} chars/${editedWords} words; retention floor ${(lengthPlan.editorMinRetentionRatio * 100).toFixed(0)}%).`);
+        return { summary: original, routing: { ...baseRouting, attempted: true, reason: 'editor_overcompressed_high_volume' } };
+      }
     }
     if (edited === original) {
       console.log(`[Recap Gemini] ${premiumModel} editor returned an unchanged recap; retaining the Flash-Lite draft.`);
@@ -1420,12 +1568,10 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
 
   const lengthPlan = getRecapLengthPlan(sanitization.records, twitchEvents);
   const sourceMessageCount = lengthPlan.viewerMessageCount;
-  const shouldExpand =
-    lengthPlan.eligible &&
-    summary.length < lengthPlan.expansionThreshold;
+  const shouldExpand = shouldExpandRecap(summary, lengthPlan);
 
   if (shouldExpand) {
-    console.log(`[Recap Gemini] Recap is under ${lengthPlan.expansionThreshold} chars with ${sourceMessageCount} viewer/mod source messages from ${lengthPlan.uniqueViewerCount} identities (${lengthPlan.activityLabel}). Up to ${lengthPlan.initialAttempts} expansion attempt(s) will target ${lengthPlan.targetMin}-${SUMMARY_TEXT_LIMIT} chars; outputs under ${lengthPlan.acceptableMin} chars are considered too short when supported material exists.`);
+    console.log(`[Recap Gemini] Recap is under the volume-based coverage target with ${sourceMessageCount} viewer/mod source messages from ${lengthPlan.uniqueViewerCount} identities (${lengthPlan.activityLabel}): ${summary.length}/${lengthPlan.expansionThreshold} chars, ${countRecapWords(summary)}/${lengthPlan.minWords || 0} words. Up to ${lengthPlan.initialAttempts} expansion attempt(s) will target ${lengthPlan.targetMin}-${SUMMARY_TEXT_LIMIT} chars; ${lengthPlan.acceptableMin}+ chars and ${lengthPlan.minWords || 0}+ words are treated as sufficient when supported material exists.`);
 
     let longestSummary = summary;
 
@@ -1469,22 +1615,23 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
           expandedSummary = expansionAttributionAudit.summary;
         }
         console.log(`[Recap Gemini] Expanded recap attempt ${attempt}:`, expandedSummary);
-        console.log(`[Recap Gemini] Expanded length attempt ${attempt}: ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT}`);
+        console.log(`[Recap Gemini] Expanded length attempt ${attempt}: ${expandedSummary.length}/${SUMMARY_TEXT_LIMIT} chars, ${countRecapWords(expandedSummary)} words`);
 
-        if (expandedSummary.length > longestSummary.length) {
+        if (expandedSummary.length > longestSummary.length ||
+            (countRecapWords(expandedSummary) > countRecapWords(longestSummary) && expandedSummary.length >= longestSummary.length * 0.92)) {
           longestSummary = expandedSummary;
-          console.log(`[Recap Gemini] Expansion attempt ${attempt} is the new longest valid recap.`);
+          console.log(`[Recap Gemini] Expansion attempt ${attempt} is the new best coverage candidate.`);
         } else {
-          console.log(`[Recap Gemini] Expansion attempt ${attempt} was not longer than the best recap so far.`);
+          console.log(`[Recap Gemini] Expansion attempt ${attempt} did not improve the best coverage candidate.`);
         }
 
-        if (longestSummary.length >= lengthPlan.acceptableMin) {
-          console.log(`[Recap Gemini] Recap reached the acceptable minimum of ${lengthPlan.acceptableMin} chars; no further expansion retry is needed.`);
+        if (isRecapCoverageSufficient(longestSummary, lengthPlan)) {
+          console.log(`[Recap Gemini] Recap reached the volume-based coverage floor (${lengthPlan.acceptableMin}+ chars and ${lengthPlan.minWords || 0}+ words); no further expansion retry is needed.`);
           break;
         }
 
         if (attempt < lengthPlan.initialAttempts) {
-          console.log(`[Recap Gemini] Best recap is still only ${longestSummary.length} chars. Retrying expansion with a stricter length instruction.`);
+          console.log(`[Recap Gemini] Best recap is still below the volume-based coverage floor at ${longestSummary.length} chars/${countRecapWords(longestSummary)} words. Retrying expansion with a stricter instruction.`);
         }
       } catch (err) {
         console.error(`[Recap Gemini] Expansion error attempt ${attempt}:`, err);
@@ -1494,9 +1641,12 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
       }
     }
 
-    if (longestSummary.length > summary.length) {
+    if (longestSummary !== summary && (
+      longestSummary.length > summary.length ||
+      countRecapWords(longestSummary) > countRecapWords(summary)
+    )) {
       summary = longestSummary;
-      console.log('[Recap Gemini] Longest expanded recap selected.');
+      console.log('[Recap Gemini] Best expanded coverage candidate selected.');
     } else {
       console.log('[Recap Gemini] No expansion improved the primary recap. Keeping primary recap.');
     }
@@ -1518,8 +1668,8 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
   // sentences after the normal expansion pass. If that leaves an otherwise
   // active recap too short, make one final source-grounded recovery pass and
   // audit the recovered candidate before it can be selected.
-  if (lengthPlan.eligible && summary.length < lengthPlan.acceptableMin) {
-    console.log(`[Recap Gemini] Final audits left the recap at ${summary.length} chars, below the ${lengthPlan.acceptableMin}-char safe target for this ${lengthPlan.activityLabel}. Starting final source-grounded length recovery.`);
+  if (lengthPlan.eligible && !isRecapCoverageSufficient(summary, lengthPlan)) {
+    console.log(`[Recap Gemini] Final audits left the recap below the volume-based coverage floor at ${summary.length} chars/${countRecapWords(summary)} words (target ${lengthPlan.acceptableMin}+ chars and ${lengthPlan.minWords || 0}+ words for this ${lengthPlan.activityLabel}). Starting final source-grounded length recovery.`);
     let longestFinalSummary = summary;
 
     for (let attempt = 1; attempt <= lengthPlan.finalRecoveryAttempts; attempt++) {
@@ -1561,17 +1711,18 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
         }
 
         console.log(`[Recap Gemini] Final recovered recap attempt ${attempt}:`, recoveredSummary);
-        console.log(`[Recap Gemini] Final recovered length attempt ${attempt}: ${recoveredSummary.length}/${SUMMARY_TEXT_LIMIT}`);
+        console.log(`[Recap Gemini] Final recovered length attempt ${attempt}: ${recoveredSummary.length}/${SUMMARY_TEXT_LIMIT} chars, ${countRecapWords(recoveredSummary)} words`);
 
-        if (recoveredSummary.length > longestFinalSummary.length) {
+        if (recoveredSummary.length > longestFinalSummary.length ||
+            (countRecapWords(recoveredSummary) > countRecapWords(longestFinalSummary) && recoveredSummary.length >= longestFinalSummary.length * 0.92)) {
           longestFinalSummary = recoveredSummary;
-          console.log(`[Recap Gemini] Final recovery attempt ${attempt} is the new longest fully audited recap.`);
+          console.log(`[Recap Gemini] Final recovery attempt ${attempt} is the new best fully audited coverage candidate.`);
         } else {
-          console.log(`[Recap Gemini] Final recovery attempt ${attempt} was not longer than the best fully audited recap.`);
+          console.log(`[Recap Gemini] Final recovery attempt ${attempt} did not improve the best fully audited coverage candidate.`);
         }
 
-        if (longestFinalSummary.length >= lengthPlan.acceptableMin) {
-          console.log(`[Recap Gemini] Final recap recovered to the ${lengthPlan.acceptableMin}-char acceptable minimum.`);
+        if (isRecapCoverageSufficient(longestFinalSummary, lengthPlan)) {
+          console.log(`[Recap Gemini] Final recap recovered to the volume-based coverage floor.`);
           break;
         }
       } catch (err) {
@@ -1618,7 +1769,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
 
   summary = enforceSummaryLimit(summary);
   console.log('[Recap Gemini] Final recap:', summary);
-  console.log(`[Recap Gemini] Final length: ${summary.length}/${SUMMARY_TEXT_LIMIT}`);
+  console.log(`[Recap Gemini] Final length: ${summary.length}/${SUMMARY_TEXT_LIMIT} chars, ${countRecapWords(summary)} words (${lengthPlan.activityLabel}; source messages=${sourceMessageCount})`);
 
   return { summary, sanitization, primaryRouting, editorRouting };
 }
@@ -1642,6 +1793,10 @@ module.exports = {
   numericEventValue,
   getRecapSourceStats,
   getRecapLengthPlan,
+  countRecapWords,
+  isRecapCoverageSufficient,
+  shouldExpandRecap,
+  formatRecapVolumeGuidance,
   buildFinalLengthRecoveryPrompt,
   getRecapCompositionIssues,
   buildRecapCompositionRepairPrompt
