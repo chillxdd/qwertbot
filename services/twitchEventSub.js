@@ -94,14 +94,83 @@ function definitionScopeAvailable(definition, actualScopes) {
   return accepted.some((scope) => granted.has(scope));
 }
 
-async function createSubscription(definition, appAccessToken) {
-  const response = await fetch(EVENTSUB_URL, {
-    method: 'POST',
+async function eventSubFetch(url, options, appAccessToken) {
+  const response = await fetch(url, {
+    ...options,
     headers: {
       Authorization: `Bearer ${appAccessToken}`,
       'Client-Id': getClientId(),
-      'Content-Type': 'application/json'
-    },
+      ...(options?.headers || {})
+    }
+  });
+
+  let data = {};
+  if (response.status !== 204) {
+    try { data = await response.json(); } catch (_) {}
+  }
+  return { response, data };
+}
+
+async function listSubscriptions(appAccessToken) {
+  const subscriptions = [];
+  let cursor = '';
+  do {
+    const params = new URLSearchParams({ first: '100' });
+    if (cursor) params.set('after', cursor);
+    const { response, data } = await eventSubFetch(`${EVENTSUB_URL}?${params.toString()}`, { method: 'GET' }, appAccessToken);
+    if (!response.ok) {
+      const detail = data?.message || JSON.stringify(data || {});
+      throw new Error(`Could not list EventSub subscriptions: HTTP ${response.status}: ${detail}`);
+    }
+    if (Array.isArray(data?.data)) subscriptions.push(...data.data);
+    cursor = String(data?.pagination?.cursor || '');
+  } while (cursor);
+  return subscriptions;
+}
+
+function normalizedCondition(value) {
+  return Object.fromEntries(Object.entries(value || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => [key, String(item ?? '')]));
+}
+
+function conditionsEqual(left, right) {
+  return JSON.stringify(normalizedCondition(left)) === JSON.stringify(normalizedCondition(right));
+}
+
+function subscriptionUsesCallback(subscription) {
+  return subscription?.transport?.method === 'webhook' && String(subscription?.transport?.callback || '') === CALLBACK_URL;
+}
+
+function subscriptionReferencesBroadcaster(subscription, broadcasterUserId) {
+  const wanted = String(broadcasterUserId || '');
+  return wanted && Object.values(subscription?.condition || {}).some((value) => String(value || '') === wanted);
+}
+
+function subscriptionMatchesDefinition(subscription, definition) {
+  return subscriptionUsesCallback(subscription) &&
+    String(subscription?.type || '') === definition.type &&
+    String(subscription?.version || '') === definition.version &&
+    conditionsEqual(subscription?.condition, definition.condition);
+}
+
+function subscriptionIsUsable(subscription) {
+  return ['enabled', 'webhook_callback_verification_pending'].includes(String(subscription?.status || ''));
+}
+
+async function deleteSubscription(subscriptionId, appAccessToken) {
+  const params = new URLSearchParams({ id: String(subscriptionId || '') });
+  const { response, data } = await eventSubFetch(`${EVENTSUB_URL}?${params.toString()}`, { method: 'DELETE' }, appAccessToken);
+  if (!response.ok) {
+    const detail = data?.message || JSON.stringify(data || {});
+    throw new Error(`delete ${subscriptionId}: HTTP ${response.status}: ${detail}`);
+  }
+}
+
+async function createSubscription(definition, appAccessToken) {
+  const { response, data } = await eventSubFetch(EVENTSUB_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       type: definition.type,
       version: definition.version,
@@ -112,17 +181,10 @@ async function createSubscription(definition, appAccessToken) {
         secret: getEventSubSecret()
       }
     })
-  });
-
-  let data = {};
-  try {
-    data = await response.json();
-  } catch (err) {
-    // Use status text below.
-  }
+  }, appAccessToken);
 
   if (response.status === 409) {
-    return { type: definition.type, status: 'already_exists' };
+    return { type: definition.type, status: 'already_exists', optional: definition.optional === true };
   }
 
   if (!response.ok) {
@@ -130,10 +192,77 @@ async function createSubscription(definition, appAccessToken) {
     throw new Error(`${definition.type}: HTTP ${response.status}: ${detail}`);
   }
 
+  const created = Array.isArray(data.data) ? data.data[0] : null;
   return {
     type: definition.type,
-    status: Array.isArray(data.data) && data.data[0]?.status ? data.data[0].status : 'created'
+    status: created?.status || 'created',
+    subscriptionId: created?.id || null,
+    optional: definition.optional === true
   };
+}
+
+async function reconcileDefinition(definition, broadcasterUserId, actualScopes, existingSubscriptions, appAccessToken) {
+  if (!definitionScopeAvailable(definition, actualScopes)) {
+    return {
+      type: definition.type,
+      status: 'skipped_missing_scope',
+      optional: definition.optional === true,
+      requiredAnyScope: [...(definition.anyScopes || [])]
+    };
+  }
+
+  // Only touch subscriptions owned by this QwertBot callback, of this event
+  // type, and targeting this broadcaster. Other apps/callbacks/broadcasters are
+  // intentionally out of scope even though the app access token can list them.
+  const managed = existingSubscriptions.filter((subscription) =>
+    subscriptionUsesCallback(subscription) &&
+    String(subscription?.type || '') === definition.type &&
+    subscriptionReferencesBroadcaster(subscription, broadcasterUserId)
+  );
+  const exact = managed.filter((subscription) => subscriptionMatchesDefinition(subscription, definition));
+  const usable = exact
+    .filter(subscriptionIsUsable)
+    .sort((a, b) => {
+      const aRank = a.status === 'enabled' ? 0 : 1;
+      const bRank = b.status === 'enabled' ? 0 : 1;
+      if (aRank !== bRank) return aRank - bRank;
+      return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+  const keep = usable[0] || null;
+  const toDelete = managed.filter((subscription) => !keep || String(subscription.id) !== String(keep.id));
+
+  let removed = 0;
+  for (const subscription of toDelete) {
+    try {
+      await deleteSubscription(subscription.id, appAccessToken);
+      removed += 1;
+    } catch (err) {
+      return {
+        type: definition.type,
+        status: 'error',
+        optional: definition.optional === true,
+        error: `${definition.type}: could not remove stale/duplicate subscription: ${err.message || err}`
+      };
+    }
+  }
+
+  if (keep) {
+    return {
+      type: definition.type,
+      status: 'existing',
+      twitchStatus: keep.status,
+      subscriptionId: keep.id || null,
+      removedDuplicates: removed,
+      optional: definition.optional === true
+    };
+  }
+
+  try {
+    const created = await createSubscription(definition, appAccessToken);
+    return { ...created, removedDuplicates: removed };
+  } catch (err) {
+    return { type: definition.type, status: 'error', optional: definition.optional === true, error: err.message || String(err) };
+  }
 }
 
 async function ensureEventSubSubscriptions() {
@@ -144,36 +273,43 @@ async function ensureEventSubSubscriptions() {
 
   const appAccessToken = await getAppAccessToken();
   const definitions = getSubscriptionDefinitions(auth.twitchUserId);
-  const results = await Promise.all(definitions.map(async (definition) => {
-    if (!definitionScopeAvailable(definition, auth.scopes)) {
-      return {
-        type: definition.type,
-        status: 'skipped_missing_scope',
-        optional: definition.optional === true,
-        requiredAnyScope: [...(definition.anyScopes || [])]
-      };
-    }
-    try {
-      return await createSubscription(definition, appAccessToken);
-    } catch (err) {
-      return { type: definition.type, status: 'error', error: err.message || String(err) };
-    }
-  }));
+  const existingSubscriptions = await listSubscriptions(appAccessToken);
+  const results = [];
+
+  for (const definition of definitions) {
+    results.push(await reconcileDefinition(
+      definition,
+      auth.twitchUserId,
+      auth.scopes,
+      existingSubscriptions,
+      appAccessToken
+    ));
+  }
 
   lastEnsureAt = new Date();
   lastEnsureResults = results;
   const failures = results.filter((item) => item.status === 'error');
   const skipped = results.filter((item) => item.status === 'skipped_missing_scope');
-  lastEnsureError = failures.length ? failures.map((item) => item.error).join(' | ') : null;
+  const requiredSkipped = skipped.filter((item) => item.optional !== true);
+  const healthErrors = [
+    ...failures.map((item) => item.error),
+    ...requiredSkipped.map((item) => `${item.type}: missing required broadcaster scope (${(item.requiredAnyScope || []).join(' or ')})`)
+  ].filter(Boolean);
+  lastEnsureError = healthErrors.length ? healthErrors.join(' | ') : null;
 
   if (failures.length) {
-    console.warn('[EventSub] Some subscriptions could not be created:', lastEnsureError);
+    console.warn('[EventSub] Some subscriptions could not be reconciled:', failures.map((item) => item.error).join(' | '));
   }
-  if (skipped.length) {
-    console.log(`[EventSub] ${skipped.length} subscription(s) skipped because their broadcaster scope is not granted yet: ${skipped.map((item) => item.type).join(', ')}`);
+  if (requiredSkipped.length) {
+    console.warn(`[EventSub] ${requiredSkipped.length} required subscription(s) are waiting on broadcaster scope: ${requiredSkipped.map((item) => item.type).join(', ')}`);
   }
-  const active = results.length - skipped.length - failures.length;
-  console.log(`[EventSub] Ensure complete: ${active} created/already present, ${skipped.length} waiting on scope, ${failures.length} error(s).`);
+  const optionalSkipped = skipped.filter((item) => item.optional === true);
+  if (optionalSkipped.length) {
+    console.log(`[EventSub] ${optionalSkipped.length} optional subscription(s) skipped because their broadcaster scope is not granted; this does not make EventSub unhealthy: ${optionalSkipped.map((item) => item.type).join(', ')}`);
+  }
+  const removed = results.reduce((sum, item) => sum + Number(item.removedDuplicates || 0), 0);
+  const active = results.filter((item) => !['error', 'skipped_missing_scope'].includes(item.status)).length;
+  console.log(`[EventSub] Reconcile complete: ${active} active/present, ${optionalSkipped.length} optional scope skip(s), ${requiredSkipped.length} required scope skip(s), ${failures.length} error(s), ${removed} stale/duplicate removed.`);
 
   return results;
 }

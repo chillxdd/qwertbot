@@ -1,5 +1,4 @@
 export function initRenderLogsSection({ $, postJson }) {
-  let logs = [];
   let timer = null;
   let sectionOpen = false;
 
@@ -165,31 +164,7 @@ export function initRenderLogsSection({ $, postJson }) {
     );
   }
 
-  function renderLogs() {
-    const filter = $('logFilter').value.trim().toLowerCase();
-    const visible = filter
-      ? logs.filter((line) => `${line.timestamp || ''} ${line.level || ''} ${line.type || ''} ${line.message || ''}`.toLowerCase().includes(filter))
-      : logs;
-
-    const consoleEl = $('renderLogConsole');
-    consoleEl.replaceChildren();
-    for (const entry of visible) {
-      const row = document.createElement('div');
-      const level = String(entry.level || 'info').toLowerCase();
-      const message = String(entry.message || '');
-      const explicitlyZeroErrors = /\b0\s+error(?:\(s\)|s?)\b/i.test(message);
-      const isError = (level.includes('error') || level.includes('critical')) && !explicitlyZeroErrors;
-      row.className = `log-line ${isError ? 'log-error' : level.includes('warn') ? 'log-warning' : 'log-info'}`;
-      const stamp = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : '--:--:--';
-      const levelText = entry.level ? ` [${entry.level}]` : '';
-      row.textContent = `${stamp}${levelText} ${entry.message || ''}`;
-      consoleEl.appendChild(row);
-    }
-    consoleEl.scrollTop = consoleEl.scrollHeight;
-  }
-
   let diagnosticsRefreshing = false;
-  let logsRefreshing = false;
 
   async function refreshDiagnostics() {
     if (!sectionOpen || diagnosticsRefreshing) return;
@@ -215,46 +190,23 @@ export function initRenderLogsSection({ $, postJson }) {
     }
   }
 
-  async function refreshRenderLogs() {
-    if (!sectionOpen || logsRefreshing) return;
-    logsRefreshing = true;
-    $('renderLogsMsg').textContent = 'Loading recent Render logs...';
-    try {
-      const d = await postJson('/render-logs', {});
-      if (!d.success) {
-        $('renderLogsMsg').textContent = d.error || 'Could not load recent Render logs.';
-        return;
-      }
-      logs = Array.isArray(d.logs) ? d.logs : [];
-      if (d.logsError) {
-        $('renderLogsMsg').textContent = `Recent Render logs unavailable: ${d.logsError}`;
-      } else {
-        $('renderLogsMsg').textContent = `${d.serviceName || 'Render service'} — ${logs.length} recent log line(s)${d.hasMore ? ' (more available in Render)' : ''}.`;
-      }
-      renderLogs();
-    } catch (err) {
-      $('renderLogsMsg').textContent = err?.message || 'Could not load recent Render logs.';
-    } finally {
-      logsRefreshing = false;
-    }
-  }
-
   async function refreshAll() {
     if (!sectionOpen) return;
-    $('refreshLogsBtn').disabled = true;
+    const button = $('refreshLogsBtn');
+    if (button) button.disabled = true;
     try {
-      await Promise.allSettled([refreshDiagnostics(), refreshRenderLogs()]);
+      await refreshDiagnostics();
     } finally {
-      $('refreshLogsBtn').disabled = false;
+      if (button) button.disabled = false;
     }
   }
 
   function syncTimer() {
     if (timer) clearInterval(timer);
     timer = null;
-    if (sectionOpen && $('autoRefreshLogs').checked) {
-      // Auto-refresh only local process health. Render logs call an external API
-      // and are intentionally refreshed only when opening the panel or manually.
+    const autoRefresh = $('autoRefreshLogs');
+    if (sectionOpen && (!autoRefresh || autoRefresh.checked)) {
+      // Local diagnostics only: no Render API or other external log request.
       timer = setInterval(refreshDiagnostics, 10000);
     }
   }
@@ -262,12 +214,13 @@ export function initRenderLogsSection({ $, postJson }) {
   function onVisibilityChange(open) {
     sectionOpen = open;
     syncTimer();
-    if (open) refreshAll();
+    if (open) void refreshAll();
   }
 
-  $('refreshLogsBtn').onclick = refreshAll;
-  $('autoRefreshLogs').onchange = syncTimer;
-  $('logFilter').oninput = renderLogs;
+  const refreshButton = $('refreshLogsBtn');
+  const autoRefresh = $('autoRefreshLogs');
+  if (refreshButton) refreshButton.onclick = refreshAll;
+  if (autoRefresh) autoRefresh.onchange = syncTimer;
 
   return { onVisibilityChange };
 }

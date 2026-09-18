@@ -17,13 +17,12 @@ const {
   MAX_START_DELAY_SECONDS, MAX_JITTER_SECONDS, MAX_MINIMUM_CHAT_MESSAGES, MAX_MINIMUM_VIEWERS
 } = require('../services/chatTimers');
 const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
-const { getRecentRenderLogs, getRenderLogsConfigStatus } = require('../services/renderLogs');
 const { getRuntimeDiagnostics } = require('../services/runtimeDiagnostics');
 const { getGeminiClientStatus } = require('../services/geminiClient');
 const { getRecapPrimaryQuotaStatus } = require('../services/geminiRecapQuota');
 const { getAuthStatus } = require('../services/twitchAuth');
 const { getBroadcasterAuthStatus } = require('../services/twitchBroadcasterAuth');
-const { getChatApiReadiness } = require('../services/twitchChat');
+const { REQUIRED_BOT_APP_SCOPES, REQUIRED_BROADCASTER_APP_SCOPES } = require('../services/twitchChat');
 const { REQUIRED_EVENTSUB_SCOPES, getEventSubStatus } = require('../services/twitchEventSub');
 
 function registerDashboardRoutes(app, options) {
@@ -47,6 +46,55 @@ function registerDashboardRoutes(app, options) {
     viewsDir,
     adminPath
   } = options;
+
+  // The dashboard polls /status regularly. Keep authorization/readiness data in
+  // a short-lived in-process cache so an open browser tab does not repeatedly
+  // read the same two OAuth documents from Atlas.
+  const STATUS_AUTH_CACHE_MS = 60 * 1000;
+  let statusAuthCache = null;
+  let statusAuthCacheExpiresAt = 0;
+  let statusAuthCachePromise = null;
+
+  function emptyAuthSnapshot() {
+    return {
+      authStatus: { stored: false, username: null, twitchUserId: null, scopes: [], updatedAt: null },
+      broadcasterAuthStatus: { stored: false, username: null, twitchUserId: null, scopes: [], updatedAt: null },
+      chatApiStatus: { ready: false, botMissingScopes: [...REQUIRED_BOT_APP_SCOPES], broadcasterMissingScopes: [...REQUIRED_BROADCASTER_APP_SCOPES] }
+    };
+  }
+
+  function chatReadinessFromAuth(authStatus, broadcasterAuthStatus) {
+    const botMissingScopes = REQUIRED_BOT_APP_SCOPES.filter((scope) => !(authStatus.scopes || []).includes(scope));
+    const broadcasterMissingScopes = REQUIRED_BROADCASTER_APP_SCOPES.filter((scope) => !(broadcasterAuthStatus.scopes || []).includes(scope));
+    return {
+      ready: Boolean(authStatus.twitchUserId && broadcasterAuthStatus.twitchUserId && !botMissingScopes.length && !broadcasterMissingScopes.length),
+      botMissingScopes,
+      broadcasterMissingScopes
+    };
+  }
+
+  async function getCachedStatusAuthSnapshot() {
+    if (!getDatabaseConnected()) return emptyAuthSnapshot();
+    const now = Date.now();
+    if (statusAuthCache && statusAuthCacheExpiresAt > now) return statusAuthCache;
+    if (statusAuthCachePromise) return statusAuthCachePromise;
+
+    statusAuthCachePromise = (async () => {
+      const [authStatus, broadcasterAuthStatus] = await Promise.all([
+        getAuthStatus(), getBroadcasterAuthStatus()
+      ]);
+      const snapshot = {
+        authStatus,
+        broadcasterAuthStatus,
+        chatApiStatus: chatReadinessFromAuth(authStatus, broadcasterAuthStatus)
+      };
+      statusAuthCache = snapshot;
+      statusAuthCacheExpiresAt = Date.now() + STATUS_AUTH_CACHE_MS;
+      return snapshot;
+    })().finally(() => { statusAuthCachePromise = null; });
+
+    return statusAuthCachePromise;
+  }
 
   app.get('/webui-config', (req, res) => {
     res.json({
@@ -111,18 +159,14 @@ function registerDashboardRoutes(app, options) {
       pausedRemainingMs: null
     };
 
-    let authStatus = { stored: false, username: null, twitchUserId: null, scopes: [], updatedAt: null };
-    let broadcasterAuthStatus = { stored: false, username: null, twitchUserId: null, scopes: [], updatedAt: null };
-    let chatApiStatus = { ready: false, botMissingScopes: ['user:write:chat', 'user:bot'], broadcasterMissingScopes: ['channel:bot'] };
+    let { authStatus, broadcasterAuthStatus, chatApiStatus } = emptyAuthSnapshot();
     const eventSubStatus = getEventSubStatus();
     let botMissingAllScopes = [...botScopes];
     let broadcasterMissingAllScopes = [...broadcasterScopes];
 
     try {
       if (getDatabaseConnected()) {
-        [authStatus, broadcasterAuthStatus, chatApiStatus] = await Promise.all([
-          getAuthStatus(), getBroadcasterAuthStatus(), getChatApiReadiness()
-        ]);
+        ({ authStatus, broadcasterAuthStatus, chatApiStatus } = await getCachedStatusAuthSnapshot());
         botMissingAllScopes = botScopes.filter((scope) => !(authStatus.scopes || []).includes(scope));
         broadcasterMissingAllScopes = broadcasterScopes.filter((scope) => !(broadcasterAuthStatus.scopes || []).includes(scope));
       }
@@ -262,43 +306,6 @@ function registerDashboardRoutes(app, options) {
     }
   });
 
-  app.post('/render-logs', requireModSession, async (req, res) => {
-    // Keep Render's external API completely separate from the local runtime
-    // health endpoint. A Render API outage/timeout must never leave the health
-    // cards stuck on "Checking...".
-    const config = getRenderLogsConfigStatus();
-    if (!config.configured) {
-      return res.json({
-        success: true,
-        configured: false,
-        serviceName: process.env.RENDER_SERVICE_NAME || 'Render service',
-        logs: [],
-        hasMore: false,
-        logsError: config.error
-      });
-    }
-
-    try {
-      const result = await getRecentRenderLogs({ limit: 100 });
-      return res.json({
-        success: true,
-        configured: true,
-        serviceName: result.serviceName,
-        logs: result.logs,
-        hasMore: result.hasMore
-      });
-    } catch (err) {
-      console.error('[Render Diagnostics] Could not load Render logs:', err.message || err);
-      return res.json({
-        success: true,
-        configured: true,
-        serviceName: process.env.RENDER_SERVICE_NAME || 'Render service',
-        logs: [],
-        hasMore: false,
-        logsError: err.message || 'Could not load Render logs.'
-      });
-    }
-  });
 
   app.get('/', (req, res) => res.redirect(302, '/commands'));
 

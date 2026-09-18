@@ -47,7 +47,8 @@ const RECURRING_RECAP_DELAY = 60 * 60 * 1000;
 const RECAP_FAILURE_RETRY_DELAY = 5 * 60 * 1000;
 const POST_RECAP_LEARNING_DELAY_MS = 75 * 1000;
 const RECAP_COMMAND_COOLDOWN = 5 * 60 * 1000;
-const STREAM_STATUS_POLL_INTERVAL = 30 * 1000;
+const STREAM_STATUS_LIVE_POLL_INTERVAL = 30 * 1000;
+const STREAM_STATUS_OFFLINE_POLL_INTERVAL = 5 * 60 * 1000;
 const TOKEN_VALIDATION_INTERVAL = 60 * 60 * 1000;
 const ACTIVE_STATE_CHECKPOINT_INTERVAL = 30 * 1000;
 const PERSISTENCE_TELEMETRY_INTERVAL_MS = 10 * 60 * 1000;
@@ -264,6 +265,7 @@ function createRecapManager({
   let recapTimer = null;
   let learningTimer = null;
   let streamPollTimer = null;
+  let streamStatusPollRequested = false;
   let tokenValidationTimer = null;
   let activeStateCheckpointTimer = null;
   let activeStateDirty = false;
@@ -753,7 +755,7 @@ function createRecapManager({
     persistenceTelemetry.maxLogicalBytes = Math.max(persistenceTelemetry.maxLogicalBytes, bytes);
 
     // Full checkpoints should now be exceptional (initial state/resync). Log
-    // them immediately so Render logs make an accidental full-write loop obvious.
+    // them immediately so service logs make an accidental full-write loop obvious.
     if (mode === 'full') {
       console.log(`[Recap Persistence] FULL checkpoint logical payload ${(bytes / 1024).toFixed(1)} KiB.`);
     }
@@ -1331,11 +1333,30 @@ function createRecapManager({
       }
     });
     if (type === 'stream.online') await checkStreamStatus();
+    else if (type === 'stream.offline') scheduleNextStreamStatusPoll(STREAM_STATUS_OFFLINE_POLL_INTERVAL);
+  }
+
+  function scheduleNextStreamStatusPoll(delayMs = null) {
+    if (streamPollTimer) clearTimeout(streamPollTimer);
+    streamPollTimer = null;
+    if (managerStopping || !started || !operationContext.isActive()) return;
+    const interval = delayMs == null
+      ? ((streamLive || !streamStateInitialized) ? STREAM_STATUS_LIVE_POLL_INTERVAL : STREAM_STATUS_OFFLINE_POLL_INTERVAL)
+      : Math.max(1000, Number(delayMs) || 0);
+    streamPollTimer = operationContext.detached(() => setTimeout(() => {
+      streamPollTimer = null;
+      void checkStreamStatus();
+    }, interval));
   }
 
   async function checkStreamStatus() {
     if (managerStopping || !operationContext.isActive()) return;
-    if (pollInFlight) return pollInFlight;
+    if (pollInFlight) {
+      // Coalesce concurrent requests, but make sure an EventSub wake that lands
+      // during an older poll gets a fresh status lookup immediately afterward.
+      streamStatusPollRequested = true;
+      return pollInFlight;
+    }
     const revision = lifecycleRevision;
     pollInFlight = (async () => {
       try {
@@ -1375,7 +1396,19 @@ function createRecapManager({
         // Network/auth errors are unknown, never evidence of an ended stream.
         offlineChecks = 0;
         console.error('[Recap] Stream status check failed:', err.message || err);
-      } finally { pollInFlight = null; }
+      } finally {
+        pollInFlight = null;
+        if (streamStatusPollRequested && !managerStopping && operationContext.isActive()) {
+          streamStatusPollRequested = false;
+          void checkStreamStatus();
+        } else {
+          // EventSub handles normal online/offline transitions immediately. This
+          // poll is primarily metadata refresh while live and a slow recovery
+          // fallback while a known-offline stream is idle. Unknown startup state
+          // stays on the 30-second cadence until it is confirmed.
+          scheduleNextStreamStatusPoll();
+        }
+      }
     })();
     return pollInFlight;
   }
@@ -2397,7 +2430,6 @@ function createRecapManager({
       try { await validateStoredToken(); }
       catch (err) { console.warn('[Recap] Initial token check failed; polling will retry after authorization:', err.message || err); }
       if (managerStopping) return;
-      streamPollTimer = operationContext.detached(() => setInterval(() => { void checkStreamStatus(); }, STREAM_STATUS_POLL_INTERVAL));
       activeStateCheckpointTimer = operationContext.detached(() => setInterval(() => {
         if (!managerStopping && operationContext.isActive()) void persistActiveState().catch(() => {});
       }, ACTIVE_STATE_CHECKPOINT_INTERVAL));
@@ -2416,8 +2448,8 @@ function createRecapManager({
     clearRecapTimer();
     clearLearningTimer();
     for (const streamId of [...finalLearningRetryTimers.keys()]) clearFinalLearningRetryTimer(streamId);
-    clearInterval(streamPollTimer); clearInterval(tokenValidationTimer); clearInterval(activeStateCheckpointTimer);
-    streamPollTimer = null; tokenValidationTimer = null; activeStateCheckpointTimer = null;
+    clearTimeout(streamPollTimer); clearInterval(tokenValidationTimer); clearInterval(activeStateCheckpointTimer);
+    streamPollTimer = null; streamStatusPollRequested = false; tokenValidationTimer = null; activeStateCheckpointTimer = null;
     cancelTasks();
     recapInProgress = false;
     started = false;

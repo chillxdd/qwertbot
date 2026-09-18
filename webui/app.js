@@ -111,7 +111,7 @@ async function status() {
           : 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
         : (!botReady || !broadcasterReady
           ? singleAccountMode ? 'Complete the combined OAuth grant in OAuth Management' : 'Complete both OAuth grants in OAuth Management'
-          : 'OAuth grants are present, but Twitch Chat API is not ready. Check Render Diagnostics.'))
+          : 'OAuth grants are present, but Twitch Chat API is not ready. Check Diagnostics.'))
       : '';
 
     if (loggedIn) {

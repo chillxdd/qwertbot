@@ -37,7 +37,7 @@
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
-      <button id="renderLogsTab" class="secondary" type="button">Render Diagnostics</button>
+      <button id="renderLogsTab" class="secondary" type="button">Diagnostics</button>
     </div>
 
     <div id="messagingPanel" class="section-panel">
@@ -1203,8 +1203,8 @@
 
     <div id="renderLogsPanel" class="section-panel">
       <div class="section-intro">
-        <h3>Render Diagnostics</h3>
-        <div class="detail">Live process health and recent Render service logs. Runtime diagnostics come directly from the bot and do not require the Render API.</div>
+        <h3>Diagnostics</h3>
+        <div class="detail">Local process health from QwertBot. This panel does not call the Render API or fetch Render logs.</div>
       </div>
 
       <div id="runtimeDiagnosticsMsg" class="detail">Open this section to load runtime health.</div>
@@ -1221,18 +1221,10 @@
         <div class="box"><div class="label">Core Services</div><div id="diagServices" class="value warn">Checking...</div><div id="diagServicesDetail" class="detail"></div></div>
       </div>
 
-      <div class="render-log-heading">
-        <div>
-          <div class="recap-card-title">Recent Render Logs</div>
-          <div id="renderLogsMsg" class="detail">Open this section to load diagnostics and recent service logs.</div>
-        </div>
-      </div>
       <div class="render-log-toolbar">
-        <button id="refreshLogsBtn" type="button">Refresh Now</button>
-        <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh health every 10s</label>
-        <input id="logFilter" class="log-filter" placeholder="Filter loaded logs...">
+        <button id="refreshLogsBtn" type="button">Refresh Diagnostics</button>
+        <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh every 10s</label>
       </div>
-      <div id="renderLogConsole" class="render-log-console" aria-live="polite"></div>
     </div>
   </div>
 

@@ -122,7 +122,7 @@ function registerAuthRoutes(app, options) {
           const skipped = eventSubResults.filter((item) => item.status === 'skipped_missing_scope');
           const active = eventSubResults.length - failures.length - skipped.length;
           eventSubNote = failures.length
-            ? `Broadcaster OAuth succeeded. ${active} EventSub subscription(s) are active; ${failures.length} need a retry. Check Render logs.`
+            ? `Broadcaster OAuth succeeded. ${active} EventSub subscription(s) are active; ${failures.length} need a retry. Check Diagnostics.`
             : skipped.length
               ? `Broadcaster OAuth succeeded. ${active} EventSub subscription(s) are active and ${skipped.length} optional subscription(s) are still waiting on permission.`
               : `Broadcaster OAuth succeeded and ${active} Twitch EventSub subscriptions were created or already existed.`;

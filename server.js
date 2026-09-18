@@ -741,9 +741,11 @@ async function activateBot() {
 }
 
 function eventSubEnsureHealthy(results) {
-  return Array.isArray(results) && results.length > 0 && results.every((item) =>
-    item && item.status !== 'error' && item.status !== 'skipped_missing_scope'
-  );
+  return Array.isArray(results) && results.length > 0 && results.every((item) => {
+    if (!item || item.status === 'error') return false;
+    if (item.status === 'skipped_missing_scope') return item.optional === true;
+    return true;
+  });
 }
 
 async function runEventSubEnsure() {
@@ -770,9 +772,9 @@ async function maintainBot() {
     }
   }
 
-  // Healthy EventSub subscriptions only need a periodic self-heal check. If any
-  // subscription is missing, errored, or waiting on broadcaster scope/auth, retry
-  // every five minutes until the full set is healthy again.
+  // Healthy EventSub subscriptions only need a periodic reconciliation. Missing
+  // optional scopes are expected and do not trigger the five-minute retry loop;
+  // actual errors or missing required scopes do.
   const ensureInterval = maintainBot.lastEnsureHealthy
     ? EVENTSUB_HEALTHY_ENSURE_INTERVAL
     : EVENTSUB_RETRY_ENSURE_INTERVAL;

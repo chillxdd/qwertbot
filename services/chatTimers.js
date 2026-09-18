@@ -587,7 +587,10 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (tickBusy || stopping || !context.isActive()) return;
     tickBusy = true;
     try {
-      await context.assertOperation();
+      // The scheduler wakes once per second so due timers stay responsive, but
+      // an idle/offline tick must remain network-silent. Ownership is asserted
+      // immediately before any durable state change/send by the downstream
+      // reservation/persistence/delivery paths.
       const status = streamStatus();
       if (!status.live || !status.streamId) {
         lastSeenStreamId = '';
