@@ -68,6 +68,7 @@ const NORMAL_CHAT_ACCEPTABLE_MIN = 360;
 const NORMAL_CHAT_MIN_WORDS = 42;
 const MAX_EXPANSION_ATTEMPTS = 2;
 const MAX_FINAL_RECOVERY_ATTEMPTS = 2;
+const MAX_COMPOSITION_REPAIR_ATTEMPTS = 2;
 const SAFE_RECAP_FALLBACK = 'Chat kept things lively this hour with plenty of back-and-forth.';
 
 const sensitivePatterns = [
@@ -247,7 +248,7 @@ function formatTwitchEvents(twitchEvents = []) {
     return `- [${when}] ${renderEventRecord(event, { includeSourceId: true, index })}`;
   });
 
-  return `NOTEWORTHY VERIFIED TWITCH EVENTS DURING THIS RECAP WINDOW:\n${lines.join('\n')}\n\nTWITCH EVENT PRIORITY RULES:\n- This list has already been filtered for significance. It is supporting context, not a checklist of items that must appear.\n- Viewer-authored chat is the primary recap material. Spend most recap space on specific conversations, jokes, arguments, unusual suggestions, memorable reactions, and recurring bits.\n- Omit an eligible EventSub event when it adds less value than a more specific supported chat detail.\n- Do not invent a reaction to an event unless chat supports it, and do not infer that an event caused a separate topic merely because they occurred near each other.\n- Routine individual subscriptions, resubs, small gift batches, follows, cheers below 1,000 Bits, poll/prediction progress, ad breaks, Hype Train starts, and stream lifecycle notices are intentionally absent. Do not reconstruct or mention them from background assumptions.\n- A subscription-wave event must be summarized once and without enumerating subscriber names.\n- A single gift of 10 or more subscriptions, a cheer of 1,000 or more Bits, a raid, or an achieved goal may be named briefly when useful. Do not turn support activity into a roll call.\n- Channel Points redemptions are filtered upstream. If a noteworthy burst appears, describe the burst once rather than listing individual redeems.\n- Poll and prediction final results may be included when the result itself or viewer reaction materially mattered; starts and progress are intentionally excluded.\n- Twitch goal starts, ordinary progress, near-completion, and unachieved endings are intentionally excluded. Only an achieved goal may appear as a platform event.`;
+  return `NOTEWORTHY VERIFIED TWITCH EVENTS DURING THIS RECAP WINDOW:\n${lines.join('\n')}\n\nTWITCH EVENT PRIORITY RULES:\n- This list has already been filtered for significance. It is supporting context, not a checklist of items that must appear.\n- Viewer-authored chat is the primary recap material. Spend most recap space on specific conversations, jokes, arguments, unusual suggestions, memorable reactions, and recurring bits.\n- Omit an eligible EventSub event when it adds less value than a more specific supported chat detail.\n- Do not invent a reaction to an event unless chat supports it, and do not infer that an event caused a separate topic merely because they occurred near each other.\n- Routine individual subscriptions, resubs, small gift batches, follows, cheers below 1,000 Bits, poll/prediction progress, ad breaks, Hype Train starts, and stream lifecycle notices are intentionally absent. Do not reconstruct or mention them from background assumptions.\n- A subscription-wave event must be summarized once and without enumerating subscriber names.\n- A single gift of 10 or more subscriptions, a cheer of 1,000 or more Bits, a raid, or an achieved goal may be named briefly when useful. Do not turn support activity into a roll call.\n- A raid arrival by itself is usually background context, not the main story of a chat-rich hour. Do not spend a full sentence on routine greetings/welcomes, and do not lead with the raid unless the post-raid conversation itself became distinctive or the raid materially shaped the hour.\n- Channel Points redemptions are filtered upstream. If a noteworthy burst appears, describe the burst once rather than listing individual redeems.\n- Poll and prediction final results may be included when the result itself or viewer reaction materially mattered; starts and progress are intentionally excluded.\n- Twitch goal starts, ordinary progress, near-completion, and unachieved endings are intentionally excluded. Only an achieved goal may appear as a platform event.`;
 }
 
 
@@ -671,8 +672,9 @@ NON-NEGOTIABLE RECAP COMPOSITION RULES:
 - In high-volume windows, actively scan for multiple separate recap-worthy moments/themes before settling on a narrow summary. The volume guidance is a coverage goal, not permission to pad or invent variety.
 - Each sentence should center on one coherent moment/topic. You may join two closely related clauses, but do not comma-chain several unrelated facts into one sentence.
 - Vague statements such as "viewers discussed nicknames", "viewers reacted to music", "chat talked about the game", or "participants won a prediction" are low-value unless you can state the specific supported substance that made the moment worth knowing. If the source does not support that substance, omit the topic.
+- Do not use catch-all wording such as "various topics", "several things", "multiple questions", "various stat spreads", or similar vague baskets as a substitute for a concrete detail. Name the specific supported substance that made the topic recap-worthy or omit it.
 - Prefer one concrete, memorable viewer-authored exchange over several generic topic labels. A directly supported one-off joke can outrank a repeated but mundane topic when it is genuinely distinctive.
-- Poll/prediction/other EventSub results must earn recap space. In a chat-rich window, include at most ONE EventSub-only result unless current viewer chat directly makes multiple results important. Never add a poll or prediction result merely because it exists in the verified event list.
+- Poll/prediction/raid/other EventSub results must earn recap space. A raid may be mentioned briefly when useful, but routine arrival/welcome chatter is not a recap highlight by itself. In a chat-rich window, do not lead with a raid unless the resulting conversation was itself distinctive or the raid materially shaped the hour. Include at most ONE EventSub-only result unless current viewer chat directly makes multiple results important.
 - Natural prose matters after accuracy: avoid repeating "viewers discussed...", "viewers reacted...", "chat discussed...", or similar sentence templates.
 - If only 1-2 moments are genuinely worth recapping, a shorter strong recap is better than padding to cover weak topics.
 
@@ -740,8 +742,9 @@ ${createUntrustedBlock('EXPANSION_SOURCE_CHAT', chatLogs.join('\n'))}
 NON-NEGOTIABLE EXPANSION RULES:
 - Chat and NOTEWORTHY VERIFIED TWITCH EVENTS are the only sources of truth for current-hour events and claims. Stream metadata, previous recaps, and lore are context only. STREAM UPTIME is authoritative only for exact elapsed stream time.
 - CHAT-FIRST PRIORITY: EventSub records are supporting context, not a checklist. Do not add platform activity merely to make the recap longer when a specific worthwhile viewer conversation, joke, argument, reaction, or recurring bit is available.
-- Never enumerate routine subscriber/supporter names. Keep a subscription wave aggregated and unnamed; mention a qualifying large gift, large cheer, raid, or achieved goal at most briefly when it materially improves the recap.
+- Never enumerate routine subscriber/supporter names. Keep a subscription wave aggregated and unnamed; mention a qualifying large gift, large cheer, raid, or achieved goal at most briefly when it materially improves the recap. Routine raid arrival/welcome chatter is background context, not a full recap beat, unless the aftermath itself became distinctive.
 - Prefer concrete supported details of funny, flirty, suggestive, quirky, or memorable chat over generic "banter" language and over EventSub filler.
+- Never expand with catch-all phrases such as "various topics", "several things", "multiple questions", "various stat spreads", or similar vague baskets. Replace them with the specific supported substance that made the moment notable, or use a different worthwhile moment.
 - Routine Twitch goal progress is not recap-worthy. Do not add or preserve goal-progress filler such as "as goals progressed". Treat a goal as a platform event only when NOTEWORTHY VERIFIED TWITCH EVENTS explicitly show it was achieved. Viewer chat may still support a genuine discussion about the goal itself.
 - Lore may clarify a current reference but cannot prove that a lore event happened again now.
 - Preserve ambiguity and exact labels. Do not infer what left/middle/right, first/second/third, colors, numbers, or other vague choices represent unless the current source says so.
@@ -995,18 +998,41 @@ function normalizeRecap(summary) {
   return cleaned;
 }
 
-function getRecapCompositionIssues(summary = '') {
+function getRecapCompositionIssues(summary = '', lengthPlan = {}) {
   const text = normalizeRecap(String(summary || ''));
   if (!text) return [];
 
   const issues = [];
-  const genericTopicPattern = /\b(?:viewers?|chat|participants?|people)\s+(?:discussed|talked\s+about|reacted\s+to|mentioned|covered|weighed\s+in\s+on|chatted\s+about)\b/gi;
+  const genericTopicPattern = /\b(?:(?:multiple|several|some)\s+)?(?:viewers?|chat|participants?|people)\s+(?:also\s+)?(?:discussed|talked\s+about|reacted\s+to|mentioned|covered|weighed\s+in\s+on|chatted\s+about|examined|reviewed|looked\s+at)\b/gi;
   const genericTopicMatches = text.match(genericTopicPattern) || [];
   if (genericTopicMatches.length >= 2) {
     issues.push(`repeats ${genericTopicMatches.length} generic topic-summary phrases`);
   }
 
+  const vagueBasketPattern = /\b(?:various|several|multiple|different|assorted)\s+(?:topics?|subjects?|things?|questions?|ideas?|details?|examples?|stats?|stat\s+spreads?|moves?|movesets?|pokemon|pokémon|games?|mechanics?|features?|items?|options?|designs?)\b/gi;
+  const vagueBasketMatches = text.match(vagueBasketPattern) || [];
+  if (vagueBasketMatches.length) {
+    issues.push(`uses ${vagueBasketMatches.length} vague catch-all topic phrase(s) instead of concrete substance`);
+  }
+
   const sentences = splitRecapSentences(text);
+  const sourceMessages = Number(lengthPlan?.viewerMessageCount || 0);
+  if (sourceMessages >= BUSY_CHAT_MESSAGE_THRESHOLD && sentences.length < 3) {
+    issues.push(`covers a ${sourceMessages}-message high-volume window in only ${sentences.length} sentence(s)`);
+  } else if (sourceMessages >= ACTIVE_CHAT_MESSAGE_THRESHOLD && sentences.length < 2) {
+    issues.push(`covers a ${sourceMessages}-message active window in only ${sentences.length} sentence`);
+  }
+
+  const routineRaidWelcomePattern = /\b(?:raid(?:ed)?|raiders?)\b[^.!?]{0,90}\b(?:warm\s+welcomes?|welcom(?:e|es|ed|ing)|greet(?:ed|ing)|said\s+hello)\b|\b(?:warm\s+welcomes?|welcom(?:e|es|ed|ing)|greet(?:ed|ing))\b[^.!?]{0,90}\b(?:raid(?:ed)?|raiders?)\b/i;
+  if (routineRaidWelcomePattern.test(text) && sourceMessages >= ACTIVE_CHAT_MESSAGE_THRESHOLD) {
+    issues.push('spends scarce recap space on routine raid arrival/welcome context during an active chat window');
+  }
+
+  const firstSentence = String(sentences[0] || '');
+  if (sourceMessages >= BUSY_CHAT_MESSAGE_THRESHOLD && /\braid(?:ed|ers?)?\b/i.test(firstSentence) && sentences.length <= 3) {
+    issues.push('leads a high-volume recap with a raid/support event instead of a stronger viewer-authored moment');
+  }
+
   const actionPattern = /\b(?:joked|discussed|talked|reacted|mentioned|asked|suggested|argued|debated|celebrated|won|lost|voted|picked|chose|predicted|shared|recommended)\b/gi;
   sentences.forEach((sentence, index) => {
     const commaCount = (sentence.match(/,/g) || []).length;
@@ -1020,7 +1046,8 @@ function getRecapCompositionIssues(summary = '') {
     /\bviewers? discussed [^.!?]{1,45}(?:[.!?]|$)/i,
     /\bviewers? reacted to [^.!?]{1,45}(?:[.!?]|$)/i,
     /\bchat (?:discussed|talked about) [^.!?]{1,45}(?:[.!?]|$)/i,
-    /\bparticipants? won (?:the |a )?[^.!?]{0,30}prediction\b/i
+    /\bparticipants? won (?:the |a )?[^.!?]{0,30}prediction\b/i,
+    /\b(?:examining|reviewing|looking at|going over|covering)\s+(?:various|several|multiple|different)\b/i
   ];
   const vagueCount = vagueStandalonePatterns.reduce((count, pattern) => count + (pattern.test(text) ? 1 : 0), 0);
   if (vagueCount >= 2) {
@@ -1061,8 +1088,10 @@ EDITORIAL GOAL:
 - Rebuild the recap around the strongest supported moments while respecting the SOURCE VOLUME / COVERAGE CONTEXT below. Do not collapse a busy hour into one narrow thread when several worthwhile moments are supported.
 - Keep one coherent main topic per sentence. At most one closely related secondary clause may share a sentence.
 - Prefer specific, memorable details over labels like \"viewers discussed nicknames\" or \"viewers reacted to music\". If the source does not support the substance of a topic, omit it.
+- Replace vague baskets such as \"various topics\", \"several things\", \"multiple questions\", or \"various stat spreads\" with the specific supported point, comparison, joke, conclusion, or disagreement that made the topic worth recapping. If no such substance is supported, omit that topic.
 - A memorable directly supported one-off joke may be worth keeping. Repetition is not required for a narrowly attributed one-off.
-- Poll/prediction/EventSub results are optional. In a chat-rich window, keep at most one EventSub-only result unless viewer chat clearly makes multiple results important.
+- Poll/prediction/EventSub results are optional. A raid arrival/welcome is usually context, not the main story: keep it to a short clause or omit it unless the post-raid chat itself became distinctive. In a chat-rich window, do not lead with the raid merely because it happened, and keep at most one EventSub-only result unless viewer chat clearly makes multiple results important.
+- For a high-volume source, normally use at least three compact sentences when the source contains three genuinely distinct worthwhile moments; do not satisfy this by splitting one topic into artificial fragments.
 - Do not use \"participants won the prediction\" or similarly mechanical telemetry prose when a clearer supported description is possible. Do not invent who benefited if the event does not say.
 - Prefer natural, specific prose with enough compact sentences to preserve the volume-guided coverage. Do not shorten a busy recap merely to make it look cleaner.
 - Preserve any unusually strong supported wording/detail from the current recap when it still earns a place.
@@ -1105,66 +1134,77 @@ async function repairRecapComposition({
 } = {}) {
   const original = normalizeRecap(summary || '');
   const lengthPlan = getRecapLengthPlan(chatLogs, twitchEvents);
-  const beforeIssues = getRecapCompositionIssues(original);
-  if (!original || !beforeIssues.length) return original;
+  let bestSummary = original;
+  let bestIssues = getRecapCompositionIssues(bestSummary, lengthPlan);
+  if (!bestSummary || !bestIssues.length) return bestSummary;
 
-  console.warn(`[Recap Composition] Final recap triggered editorial repair: ${beforeIssues.join('; ')}.`);
-  try {
-    const data = await sendGeminiPrompt(buildRecapCompositionRepairPrompt({
-      currentSummary: original,
-      chatLogs,
-      streamContexts,
-      twitchEvents,
-      previousRecaps,
-      streamLore,
-      streamTiming,
-      botUsername,
-      issues: beforeIssues
-    }), { label: 'hourly-recap-composition-repair', maxRetries: 0 });
+  console.warn(`[Recap Composition] Final recap triggered editorial repair: ${bestIssues.join('; ')}.`);
 
-    let repaired = normalizeRecap(extractGeminiText(data));
-    if (!repaired) return original;
+  for (let attempt = 1; attempt <= MAX_COMPOSITION_REPAIR_ATTEMPTS && bestIssues.length; attempt++) {
+    try {
+      const data = await sendGeminiPrompt(buildRecapCompositionRepairPrompt({
+        currentSummary: bestSummary,
+        chatLogs,
+        streamContexts,
+        twitchEvents,
+        previousRecaps,
+        streamLore,
+        streamTiming,
+        botUsername,
+        issues: bestIssues
+      }), { label: `hourly-recap-composition-repair-${attempt}`, maxRetries: 0 });
 
-    repaired = await finalizeRecapCandidate({
-      summary: repaired,
-      chatRecords: chatLogs,
-      twitchEvents,
-      recapChannelName,
-      botUsername,
-      label: 'hourly-recap-composition-repair-audit',
-      auditBeforeBotRepair: true,
-      emptyFallback: ''
-    });
-    if (!repaired) return original;
+      let repaired = normalizeRecap(extractGeminiText(data));
+      if (!repaired) continue;
 
-    const afterIssues = getRecapCompositionIssues(repaired);
-    if (afterIssues.length >= beforeIssues.length) {
-      console.warn(`[Recap Composition] Repair did not reduce checklist-style issues (${beforeIssues.length} -> ${afterIssues.length}); keeping the fully audited original recap.`);
-      return original;
-    }
-    if (repaired.length < 80 && original.length >= 80) {
-      console.warn('[Recap Composition] Repair became too thin after auditing; keeping the fully audited original recap.');
-      return original;
-    }
-    if (isRecapCoverageSufficient(original, lengthPlan) && !isRecapCoverageSufficient(repaired, lengthPlan)) {
-      console.warn('[Recap Composition] Repair would drop a sufficiently covered recap below its volume-based coverage floor; keeping the fully audited original recap.');
-      return original;
-    }
-    if (lengthPlan.editorMinRetentionRatio > 0) {
-      const minChars = Math.floor(original.length * lengthPlan.editorMinRetentionRatio);
-      const minWords = Math.floor(countRecapWords(original) * lengthPlan.editorMinRetentionRatio);
-      if (repaired.length < minChars || countRecapWords(repaired) < minWords) {
-        console.warn(`[Recap Composition] Repair over-compressed a ${lengthPlan.activityLabel}; keeping the original (${original.length} chars/${countRecapWords(original)} words -> ${repaired.length} chars/${countRecapWords(repaired)} words).`);
-        return original;
+      repaired = await finalizeRecapCandidate({
+        summary: repaired,
+        chatRecords: chatLogs,
+        twitchEvents,
+        recapChannelName,
+        botUsername,
+        label: `hourly-recap-composition-repair-audit-${attempt}`,
+        auditBeforeBotRepair: true,
+        emptyFallback: ''
+      });
+      if (!repaired) continue;
+
+      const afterIssues = getRecapCompositionIssues(repaired, lengthPlan);
+      if (afterIssues.length >= bestIssues.length) {
+        console.warn(`[Recap Composition] Repair attempt ${attempt} did not reduce composition/specificity issues (${bestIssues.length} -> ${afterIssues.length}); keeping the better current candidate.`);
+        continue;
       }
-    }
+      if (repaired.length < 80 && original.length >= 80) {
+        console.warn(`[Recap Composition] Repair attempt ${attempt} became too thin after auditing; keeping the better current candidate.`);
+        continue;
+      }
+      if (isRecapCoverageSufficient(original, lengthPlan) && !isRecapCoverageSufficient(repaired, lengthPlan)) {
+        console.warn(`[Recap Composition] Repair attempt ${attempt} would drop a sufficiently covered recap below its volume-based coverage floor; keeping the better current candidate.`);
+        continue;
+      }
+      if (lengthPlan.editorMinRetentionRatio > 0) {
+        const minChars = Math.floor(original.length * lengthPlan.editorMinRetentionRatio);
+        const minWords = Math.floor(countRecapWords(original) * lengthPlan.editorMinRetentionRatio);
+        if (repaired.length < minChars || countRecapWords(repaired) < minWords) {
+          console.warn(`[Recap Composition] Repair attempt ${attempt} over-compressed a ${lengthPlan.activityLabel}; keeping the better current candidate (${original.length} chars/${countRecapWords(original)} words -> ${repaired.length} chars/${countRecapWords(repaired)} words).`);
+          continue;
+        }
+      }
 
-    console.log(`[Recap Composition] Selected repaired recap (${beforeIssues.length} -> ${afterIssues.length} composition issue(s), ${original.length} -> ${repaired.length} chars).`);
-    return repaired;
-  } catch (err) {
-    console.warn(`[Recap Composition] Editorial repair failed; keeping the fully audited original recap: ${err?.message || err}`);
-    return original;
+      console.log(`[Recap Composition] Repair attempt ${attempt} improved issues (${bestIssues.length} -> ${afterIssues.length}, ${bestSummary.length} -> ${repaired.length} chars).`);
+      bestSummary = repaired;
+      bestIssues = afterIssues;
+    } catch (err) {
+      console.warn(`[Recap Composition] Editorial repair attempt ${attempt} failed; keeping the better current candidate: ${err?.message || err}`);
+    }
   }
+
+  if (bestSummary !== original) {
+    console.log(`[Recap Composition] Selected repaired recap with ${bestIssues.length} remaining composition/specificity issue(s).`);
+  } else {
+    console.warn(`[Recap Composition] No repair candidate improved the original ${getRecapCompositionIssues(original, lengthPlan).length} issue(s); keeping the fully audited original recap.`);
+  }
+  return bestSummary;
 }
 
 
@@ -1192,7 +1232,8 @@ DECISION RULE:
 
 EDITORIAL PRIORITIES:
 - Prefer concrete supported details over generic topic inventories.
-- Replace vague prose such as "viewers chatted about X", "participants discussed Y", or a comma-separated list of topics with what was actually said, joked about, argued, chosen, predicted, celebrated, or reacted to when the source supports that substance.
+- Replace vague prose such as "viewers chatted about X", "participants discussed Y", "various stat spreads", "several topics", or a comma-separated list of topics with what was actually said, joked about, argued, chosen, predicted, celebrated, or reacted to when the source supports that substance.
+- Treat raid arrivals and routine welcomes as low-priority context. In a chat-rich hour, do not lead with a raid merely because it happened; mention it briefly only when it materially helps explain the hour or the post-raid conversation itself was notable.
 - Preserve meaningful coverage from the Flash-Lite draft. Do NOT make a busy-hour recap substantially shorter merely for elegance or concision.
 - Match breadth to the SOURCE VOLUME / COVERAGE CONTEXT. When several distinct worthwhile moments are supported, preserve or improve that breadth rather than collapsing the recap to one dominant thread.
 - Preserve conversational flavor, unusual specifics, funny wording, and memorable callbacks when they are directly supported.
@@ -1325,8 +1366,8 @@ async function editRecapWithPremium({
       return { summary: original, routing: { ...baseRouting, attempted: true, reason: 'editor_rewrite_failed_audit' } };
     }
 
-    const beforeIssues = getRecapCompositionIssues(original);
-    const afterIssues = getRecapCompositionIssues(edited);
+    const beforeIssues = getRecapCompositionIssues(original, lengthPlan);
+    const afterIssues = getRecapCompositionIssues(edited, lengthPlan);
     if (afterIssues.length > beforeIssues.length) {
       console.warn(`[Recap Gemini] ${premiumModel} editor increased checklist-style composition issues (${beforeIssues.length} -> ${afterIssues.length}); keeping the Flash-Lite recap.`);
       return { summary: original, routing: { ...baseRouting, attempted: true, reason: 'editor_worse_composition' } };

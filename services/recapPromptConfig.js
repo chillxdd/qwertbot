@@ -32,6 +32,7 @@ OVERALL PICTURE:
 - Do not force unrelated topics into one story.
 - Do not let one dominant conversation thread crowd out other distinct worthwhile moments from the same recap window.
 - When several unrelated noteworthy things happened, represent several of them rather than compressing the entire hour into the most obvious topic.
+- Treat raids and routine raid welcomes as background context unless the post-raid conversation itself became distinctive or the raid materially shaped the hour. A raid does not automatically deserve the lead sentence.
 
 SEXUAL / SUGGESTIVE CHAT:
 - Sexual jokes, innuendo, suggestive humor, horny jokes, or mildly NSFW fake commands may be included when recap-worthy.
@@ -46,6 +47,7 @@ WORDING VARIETY:
 - Avoid repetitive stock recap language.
 - Do not overuse "banter," "chaos," "chaotic," "vibes," "meanwhile," "discussion," or "debate."
 - Avoid generic topic-inventory wording such as "viewers discussed X, Y, and Z" when the source supports more concrete descriptions of what actually happened.
+- Avoid vague catch-all phrases such as "various topics", "several things", "multiple questions", or "various stat spreads". State the specific supported substance that made the moment worth knowing, or omit it.
 - Prefer concrete verbs such as "joked," "suggested," "argued," "questioned," "celebrated," or "reacted" only when supported.
 - Prefer describing the memorable substance of a conversation rather than merely naming its general subject.
 - Do not introduce unsupported meaning merely for variety.
@@ -89,6 +91,8 @@ REVISION RULES:
 - If several messages belong to the same topic, summarize that topic once and use remaining space for a different noteworthy topic when one exists.
 - Do not allow one dominant topic to consume most of the recap when the source contains several other clearly recap-worthy moments.
 - Prefer concrete supported details over generic wording such as "viewers discussed several topics."
+- Do not add vague catch-all phrases such as "various topics", "several things", "multiple questions", or "various stat spreads" merely to broaden the recap. Name the specific supported substance or choose a different worthwhile moment.
+- Treat raids and routine raid welcomes as background context unless the post-raid conversation itself became distinctive; do not spend a full sentence on generic welcomes just to fill space.
 - Preserve usernames only when they are useful to understanding a memorable moment.
 - Preserve moderator announcements as intentional moderator/broadcaster statements when relevant without inventing implications beyond their text.
 - Do not remove useful supported details merely to make the recap shorter or more elegant.
