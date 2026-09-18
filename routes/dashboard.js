@@ -209,7 +209,7 @@ function registerDashboardRoutes(app, options) {
     return res.json({ success: true });
   });
 
-  app.post('/render-logs', requireModSession, async (req, res) => {
+  async function buildRuntimeDiagnostics() {
     const recapManager = getRecapManager();
     const recapStatus = recapManager?.getStatus?.() || {};
     const taggedStatus = getBotPersonalityManager?.()?.getRecapCollisionStatus?.() || {};
@@ -219,7 +219,8 @@ function registerDashboardRoutes(app, options) {
       model: gemini.recapPrimaryModel,
       limit: gemini.recapPrimaryDailyLimit
     });
-    const diagnostics = {
+
+    return {
       runtime,
       gemini,
       recapPrimaryQuota,
@@ -246,7 +247,25 @@ function registerDashboardRoutes(app, options) {
         streamStateKnown: Boolean(recapStatus.streamStateInitialized)
       }
     };
+  }
 
+  app.post('/runtime-diagnostics', requireModSession, async (req, res) => {
+    try {
+      const diagnostics = await buildRuntimeDiagnostics();
+      return res.json({ success: true, diagnostics });
+    } catch (err) {
+      console.error('[Runtime Diagnostics] Could not collect runtime diagnostics:', err.message || err);
+      return res.status(500).json({
+        success: false,
+        error: err.message || 'Could not collect runtime diagnostics.'
+      });
+    }
+  });
+
+  app.post('/render-logs', requireModSession, async (req, res) => {
+    // Keep Render's external API completely separate from the local runtime
+    // health endpoint. A Render API outage/timeout must never leave the health
+    // cards stuck on "Checking...".
     const config = getRenderLogsConfigStatus();
     if (!config.configured) {
       return res.json({
@@ -255,14 +274,19 @@ function registerDashboardRoutes(app, options) {
         serviceName: process.env.RENDER_SERVICE_NAME || 'Render service',
         logs: [],
         hasMore: false,
-        logsError: config.error,
-        diagnostics
+        logsError: config.error
       });
     }
 
     try {
       const result = await getRecentRenderLogs({ limit: 100 });
-      return res.json({ success: true, configured: true, serviceName: result.serviceName, logs: result.logs, hasMore: result.hasMore, diagnostics });
+      return res.json({
+        success: true,
+        configured: true,
+        serviceName: result.serviceName,
+        logs: result.logs,
+        hasMore: result.hasMore
+      });
     } catch (err) {
       console.error('[Render Diagnostics] Could not load Render logs:', err.message || err);
       return res.json({
@@ -271,8 +295,7 @@ function registerDashboardRoutes(app, options) {
         serviceName: process.env.RENDER_SERVICE_NAME || 'Render service',
         logs: [],
         hasMore: false,
-        logsError: err.message || 'Could not load Render logs.',
-        diagnostics
+        logsError: err.message || 'Could not load Render logs.'
       });
     }
   });

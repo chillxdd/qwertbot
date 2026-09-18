@@ -30,10 +30,23 @@ export function initRenderLogsSection({ $, postJson }) {
   function setDiagnostic(id, text, detail, state = '') {
     const valueEl = $(id);
     const detailEl = $(`${id}Detail`);
+    // Be tolerant of a stale dashboard page during/after a deploy. A missing
+    // card must not prevent the rest of the diagnostics from rendering.
+    if (!valueEl) return;
     valueEl.textContent = text;
     valueEl.classList.remove('good', 'warn', 'bad');
     if (state) valueEl.classList.add(state);
     if (detailEl) detailEl.textContent = detail || '';
+  }
+
+  function markDiagnosticsUnavailable(message) {
+    const detail = message || 'Could not load runtime diagnostics.';
+    for (const id of [
+      'diagMemory', 'diagHeap', 'diagEventLoop', 'diagUptime', 'diagGemini',
+      'diagGeminiRequests', 'diagRecapFlash', 'diagTagged', 'diagRecap', 'diagServices'
+    ]) {
+      setDiagnostic(id, 'Unavailable', detail, 'bad');
+    }
   }
 
   function renderDiagnostics(diag) {
@@ -175,26 +188,62 @@ export function initRenderLogsSection({ $, postJson }) {
     consoleEl.scrollTop = consoleEl.scrollHeight;
   }
 
-  async function refresh() {
-    if (!sectionOpen) return;
-    $('refreshLogsBtn').disabled = true;
-    $('renderLogsMsg').textContent = 'Loading Render diagnostics...';
+  let diagnosticsRefreshing = false;
+  let logsRefreshing = false;
+
+  async function refreshDiagnostics() {
+    if (!sectionOpen || diagnosticsRefreshing) return;
+    diagnosticsRefreshing = true;
+    const msg = $('runtimeDiagnosticsMsg');
+    if (msg) msg.textContent = 'Refreshing local runtime health...';
     try {
-      const d = await postJson('/render-logs', {});
+      const d = await postJson('/runtime-diagnostics', {});
       if (!d.success) {
-        $('renderLogsMsg').textContent = d.error || 'Could not load Render diagnostics.';
+        const error = d.error || 'Could not load runtime diagnostics.';
+        markDiagnosticsUnavailable(error);
+        if (msg) msg.textContent = error;
         return;
       }
       renderDiagnostics(d.diagnostics || {});
+      if (msg) msg.textContent = `Runtime health updated ${new Date().toLocaleTimeString()}.`;
+    } catch (err) {
+      const error = err?.message || 'Could not load runtime diagnostics.';
+      markDiagnosticsUnavailable(error);
+      if (msg) msg.textContent = error;
+    } finally {
+      diagnosticsRefreshing = false;
+    }
+  }
+
+  async function refreshRenderLogs() {
+    if (!sectionOpen || logsRefreshing) return;
+    logsRefreshing = true;
+    $('renderLogsMsg').textContent = 'Loading recent Render logs...';
+    try {
+      const d = await postJson('/render-logs', {});
+      if (!d.success) {
+        $('renderLogsMsg').textContent = d.error || 'Could not load recent Render logs.';
+        return;
+      }
       logs = Array.isArray(d.logs) ? d.logs : [];
       if (d.logsError) {
-        $('renderLogsMsg').textContent = `Runtime diagnostics are live. Recent Render logs unavailable: ${d.logsError}`;
+        $('renderLogsMsg').textContent = `Recent Render logs unavailable: ${d.logsError}`;
       } else {
-        $('renderLogsMsg').textContent = `${d.serviceName || 'Render service'} — ${logs.length} recent log line(s)${d.hasMore ? ' (more available in Render)' : ''}. Diagnostics refresh with this panel.`;
+        $('renderLogsMsg').textContent = `${d.serviceName || 'Render service'} — ${logs.length} recent log line(s)${d.hasMore ? ' (more available in Render)' : ''}.`;
       }
       renderLogs();
-    } catch (_) {
-      $('renderLogsMsg').textContent = 'Could not load Render diagnostics.';
+    } catch (err) {
+      $('renderLogsMsg').textContent = err?.message || 'Could not load recent Render logs.';
+    } finally {
+      logsRefreshing = false;
+    }
+  }
+
+  async function refreshAll() {
+    if (!sectionOpen) return;
+    $('refreshLogsBtn').disabled = true;
+    try {
+      await Promise.allSettled([refreshDiagnostics(), refreshRenderLogs()]);
     } finally {
       $('refreshLogsBtn').disabled = false;
     }
@@ -204,17 +253,19 @@ export function initRenderLogsSection({ $, postJson }) {
     if (timer) clearInterval(timer);
     timer = null;
     if (sectionOpen && $('autoRefreshLogs').checked) {
-      timer = setInterval(refresh, 10000);
+      // Auto-refresh only local process health. Render logs call an external API
+      // and are intentionally refreshed only when opening the panel or manually.
+      timer = setInterval(refreshDiagnostics, 10000);
     }
   }
 
   function onVisibilityChange(open) {
     sectionOpen = open;
     syncTimer();
-    if (open) refresh();
+    if (open) refreshAll();
   }
 
-  $('refreshLogsBtn').onclick = refresh;
+  $('refreshLogsBtn').onclick = refreshAll;
   $('autoRefreshLogs').onchange = syncTimer;
   $('logFilter').oninput = renderLogs;
 

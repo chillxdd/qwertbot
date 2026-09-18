@@ -1207,6 +1207,7 @@
         <div class="detail">Live process health and recent Render service logs. Runtime diagnostics come directly from the bot and do not require the Render API.</div>
       </div>
 
+      <div id="runtimeDiagnosticsMsg" class="detail">Open this section to load runtime health.</div>
       <div class="runtime-diagnostics-grid" aria-label="Runtime diagnostics">
         <div class="box"><div class="label">Process Memory</div><div id="diagMemory" class="value warn">Checking...</div><div id="diagMemoryDetail" class="detail"></div></div>
         <div class="box"><div class="label">Node Heap</div><div id="diagHeap" class="value warn">Checking...</div><div id="diagHeapDetail" class="detail"></div></div>
@@ -1227,8 +1228,8 @@
         </div>
       </div>
       <div class="render-log-toolbar">
-        <button id="refreshLogsBtn" type="button">Refresh Diagnostics</button>
-        <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh every 10s</label>
+        <button id="refreshLogsBtn" type="button">Refresh Now</button>
+        <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh health every 10s</label>
         <input id="logFilter" class="log-filter" placeholder="Filter loaded logs...">
       </div>
       <div id="renderLogConsole" class="render-log-console" aria-live="polite"></div>
