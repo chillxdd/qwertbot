@@ -5,11 +5,44 @@ const context = require('./context');
 const delivery = require('./delivery');
 const idFor = (namespace, id) => `event:${createHash('sha256').update(`${namespace}:${id}`).digest('hex')}`;
 function createInbox({ namespace, processJob, getCollection = collection, concurrency = 4,
-  isReady = () => context.isActive(), maxAgeMs = 15 * 60000 } = {}) {
-  let timer = null;
+  isReady = () => context.isActive(), maxAgeMs = 15 * 60000, safetyPollMs = 30000 } = {}) {
+  let safetyTimer = null;
+  let wakeHandle = null;
+  let retryWakeTimer = null;
+  let retryWakeAt = 0;
   let acceptingWork = false;
   let polling = false;
+  let wakeRequested = false;
   const running = new Map();
+
+  function logPollError(err) { console.error('[EventSub Inbox] Poll failed:', err.message); }
+  function scheduleWake() {
+    if (!acceptingWork || wakeHandle) return;
+    wakeHandle = context.detached(() => setImmediate(async () => {
+      wakeHandle = null;
+      if (!acceptingWork) return;
+      if (polling) return; // poll() will reschedule because wakeRequested stays true.
+      wakeRequested = false;
+      try { await poll(); } catch (err) { logPollError(err); }
+      if (wakeRequested) scheduleWake();
+    }));
+  }
+  function requestPoll() {
+    if (!acceptingWork) return;
+    wakeRequested = true;
+    scheduleWake();
+  }
+  function scheduleRetryWake(when) {
+    if (!acceptingWork) return;
+    const at = new Date(when || 0).getTime();
+    if (!Number.isFinite(at) || at <= Date.now()) { requestPoll(); return; }
+    if (retryWakeTimer && retryWakeAt <= at) return;
+    if (retryWakeTimer) clearTimeout(retryWakeTimer);
+    retryWakeAt = at;
+    retryWakeTimer = context.detached(() => setTimeout(() => {
+      retryWakeTimer = null; retryWakeAt = 0; requestPoll();
+    }, Math.max(0, at - Date.now())));
+  }
   async function accept(messageId, payload) {
     if (!messageId || String(messageId).length > 256) throw new Error('Missing or invalid EventSub message ID.');
     const db = getCollection();
@@ -24,6 +57,10 @@ function createInbox({ namespace, processJob, getCollection = collection, concur
         createdAt: new Date(), availableAt: new Date(), attempts: 0, steps: {} },
       { ...WRITE_OPTIONS, maxTimeMS: 3000, writeConcern: { w: 'majority', wtimeoutMS: 3000 } });
     } catch (err) { if (isDuplicate(err)) return { duplicate: true }; throw err; }
+    // Normal path: once the webhook is durably stored, wake the worker immediately.
+    // This is intentionally not awaited so Twitch acknowledgement is not delayed by
+    // reaction execution. The periodic poll below is only a recovery safety net.
+    requestPoll();
     return { duplicate: false };
   }
   async function step(job, name, fn) {
@@ -74,6 +111,7 @@ function createInbox({ namespace, processJob, getCollection = collection, concur
       $set: { ...patch, state, completedAt: state === 'done' ? new Date() : null, updatedAt: new Date() },
       $unset: { claimId: '', claimUntil: '' }
     }, WRITE_OPTIONS);
+    if (state === 'pending' && patch.availableAt) scheduleRetryWake(patch.availableAt);
   }
   async function poll() {
     if (polling || !acceptingWork || !isReady()) return;
@@ -99,17 +137,33 @@ function createInbox({ namespace, processJob, getCollection = collection, concur
         const promise = context.runOperation(() => execute(row, controller), { signal: controller.signal });
         running.set(row._id, { controller, promise });
         promise.catch((err) => console.error('[EventSub Inbox] Job checkpoint failed:', err.message))
-          .finally(() => { running.delete(row._id); });
+          .finally(() => {
+            running.delete(row._id);
+            // Refill a freed concurrency slot immediately if more work is queued.
+            requestPoll();
+          });
       }
-    } finally { polling = false; }
+    } finally {
+      polling = false;
+      if (wakeRequested) scheduleWake();
+    }
   }
   function start() {
     acceptingWork = true;
-    if (!timer) timer = context.detached(() => setInterval(() => { poll().catch((err) => console.error('[EventSub Inbox] Poll failed:', err.message)); }, 500));
+    if (!safetyTimer) {
+      const interval = Math.max(1000, Number(safetyPollMs) || 30000);
+      safetyTimer = context.detached(() => setInterval(requestPoll, interval));
+      console.log(`[EventSub Inbox] Immediate wake enabled; ${Math.round(interval / 1000)}s safety reconciliation poll.`);
+    }
+    // Startup reconciliation catches work left pending by a crash or deploy.
+    requestPoll();
   }
   function quiesce() {
     acceptingWork = false;
-    if (timer) clearInterval(timer); timer = null;
+    wakeRequested = false;
+    if (safetyTimer) clearInterval(safetyTimer); safetyTimer = null;
+    if (wakeHandle) clearImmediate(wakeHandle); wakeHandle = null;
+    if (retryWakeTimer) clearTimeout(retryWakeTimer); retryWakeTimer = null; retryWakeAt = 0;
     for (const { controller } of running.values()) controller.abort();
   }
   async function stop() { quiesce(); await Promise.allSettled([...running.values()].map((job) => job.promise)); }
@@ -125,6 +179,7 @@ function createInbox({ namespace, processJob, getCollection = collection, concur
       $set: { state: 'pending', availableAt: new Date(Date.now() + 1000), lastError: '' }
     }, WRITE_OPTIONS);
     if (updated.matchedCount !== 1) throw new Error('The old receipt was reviewed, but the event changed. Refresh its status.');
+    scheduleRetryWake(Date.now() + 1000);
   }
   async function retryFailed(messageId) {
     await context.assertOperation();
@@ -132,6 +187,7 @@ function createInbox({ namespace, processJob, getCollection = collection, concur
       $set: { state: 'pending', failureCount: 0, availableAt: new Date(), lastError: '' }
     }, WRITE_OPTIONS);
     if (result.matchedCount !== 1) throw new Error('This event is not in the failed state. Refresh its status.');
+    requestPoll();
   }
   return { accept, start, stop, quiesce, poll, resolveReview, retryFailed, get pendingInProcess() { return running.size; } };
 }
