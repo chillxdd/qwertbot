@@ -642,7 +642,7 @@
             <div class="custom-variable-row"><code>$(level)</code><div class="detail">Hype Train level when supplied by the event.</div></div>
             <div class="custom-variable-row"><code>$(months)</code><div class="detail">Cumulative subscription months in a Resub Message event.</div></div>
             <div class="custom-variable-row"><code>$(event)</code><div class="detail">Friendly name of the EventSub event that fired, such as <code>Raid</code>, <code>Poll End</code>, or <code>Ad Break Start</code>.</div></div>
-            <div class="custom-variable-row"><code>$(title)</code><div class="detail">Poll/prediction title, reward title, or goal description when supplied.</div></div>
+            <div class="custom-variable-row"><code>$(title)</code><div class="detail">Event-specific title/name such as a poll, prediction, reward, or goal. Stream Online keeps its legacy stream-title behavior for compatibility; prefer <code>$(streamtitle)</code> for the active broadcast title.</div></div>
             <div class="custom-variable-row"><code>$(choices)</code><div class="detail">Poll choices or prediction outcomes joined with <code>/</code>.</div></div>
             <div class="custom-variable-row"><code>$(votes)</code><div class="detail">Total poll votes when supplied.</div></div>
             <div class="custom-variable-row"><code>$(points)</code><div class="detail">Total Channel Points in a prediction when supplied.</div></div>
@@ -655,11 +655,13 @@
             <div class="custom-variable-row"><code>$(status)</code><div class="detail">Event status when Twitch supplies one.</div></div>
             <div class="custom-variable-row"><code>$(automatic)</code><div class="detail"><code>yes</code> for an automatic ad break, otherwise <code>no</code>.</div></div>
             <div class="custom-variable-row"><code>$(channel)</code><div class="detail">QwertBot's configured Twitch channel name.</div></div>
-            <div class="custom-variable-row"><code>$(game)</code><div class="detail">Current Twitch category/game from stream status. Especially useful for Stream Online embeds.</div></div>
+            <div class="custom-variable-row"><code>$(streamtitle)</code><div class="detail">Current live broadcast title. Resolves to <code>Stream is offline</code> when the channel is not live.</div></div>
+            <div class="custom-variable-row"><code>$(streamcategory)</code><div class="detail">Current live broadcast category. Resolves to <code>No active category</code> when the channel is not live.</div></div>
+            <div class="custom-variable-row"><code>$(game)</code><div class="detail">Existing EventSub stream-category variable, retained for backward compatibility. Prefer <code>$(streamcategory)</code> when you explicitly mean the active broadcast.</div></div>
             <div class="custom-variable-row"><code>$(url)</code><div class="detail">Direct Twitch channel URL, such as <code>https://twitch.tv/generalqwert</code>.</div></div>
             <div class="custom-variable-row"><code>$(thumbnail)</code><div class="detail">Live Twitch preview image URL. Useful as a Discord embed Large Image URL.</div></div>
             <div class="custom-variable-row"><code>$(started)</code><div class="detail">Current stream start timestamp when available.</div></div>
-            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, Run Custom Command, Discord Notification values, and Discord embed fields. For Stream Online, <code>$(title)</code> resolves to the current stream title and <code>$(game)</code> to the current category after QwertBot refreshes Twitch stream status.</div><div class="custom-variable-note detail">Discord mentions: type <code>@everyone</code> or <code>@here</code> directly and choose a mention mode that allows them. For a role, use Discord mention syntax <code>&lt;@&amp;ROLE_ID&gt;</code> and allow role pings. The Test button always suppresses mentions.</div>
+            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, Run Custom Command, Discord Notification values, and Discord embed fields. When you explicitly mean the active broadcast, prefer <code>$(streamtitle)</code> and <code>$(streamcategory)</code>. Existing <code>$(title)</code> / <code>$(game)</code> behavior is retained for backward compatibility.</div><div class="custom-variable-note detail">Discord mentions: type <code>@everyone</code> or <code>@here</code> directly and choose a mention mode that allows them. For a role, use Discord mention syntax <code>&lt;@&amp;ROLE_ID&gt;</code> and allow role pings. The Test button always suppresses mentions.</div>
           </div>
         </dialog>
       </div>

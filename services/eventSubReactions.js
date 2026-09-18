@@ -45,6 +45,10 @@ const MAX_ACTION_DELAY_SECONDS = 300;
 const MAX_DISCORD_EMBED_FIELDS = 10;
 const MAX_DISCORD_EMBED_BUTTONS = 5;
 const DEFAULT_DISCORD_EMBED_COLOR = '#9146FF';
+const STREAM_OFFLINE_TITLE = 'Stream is offline';
+const STREAM_OFFLINE_CATEGORY = 'No active category';
+const STREAM_LIVE_TITLE_FALLBACK = 'Untitled stream';
+const STREAM_LIVE_CATEGORY_FALLBACK = 'No category set';
 
 function sleep(ms) { return context.sleep(ms); }
 function cleanText(value, max = 500) { return Array.from(String(value || '').trim()).slice(0, max).join(''); }
@@ -359,6 +363,10 @@ function renderEventTemplate(template, type, event = {}, extra = {}) {
   const choices = (Array.isArray(event.choices) ? event.choices : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
   const outcomes = (Array.isArray(event.outcomes) ? event.outcomes : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
   const streamTitle = String(extra.streamTitle || '').trim();
+  const streamCategory = String(extra.game || '').trim();
+  const streamLive = extra.streamLive === true;
+  const explicitStreamTitle = String(extra.streamTitleVariable || (streamLive ? (streamTitle || STREAM_LIVE_TITLE_FALLBACK) : STREAM_OFFLINE_TITLE)).trim();
+  const explicitStreamCategory = String(extra.streamCategoryVariable || (streamLive ? (streamCategory || STREAM_LIVE_CATEGORY_FALLBACK) : STREAM_OFFLINE_CATEGORY)).trim();
   const map = {
     user: actor.name,
     username: actor.login || actor.name,
@@ -382,12 +390,14 @@ function renderEventTemplate(template, type, event = {}, extra = {}) {
     status: String(event.status || '').trim(),
     automatic: event.is_automatic ? 'yes' : 'no',
     channel: String(extra.channelName || event.broadcaster_user_name || event.broadcaster_user_login || '').trim(),
-    game: String(extra.game || '').trim(),
+    game: streamCategory,
+    streamtitle: explicitStreamTitle,
+    streamcategory: explicitStreamCategory,
     url: String(extra.streamUrl || '').trim(),
     thumbnail: String(extra.thumbnail || '').trim(),
     started: String(extra.startedAt || event.started_at || '').trim()
   };
-  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|url|thumbnail|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
+  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|streamtitle|streamcategory|url|thumbnail|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
 function renderDiscordEmbed(raw = {}, type, event = {}, extra = {}) {
@@ -442,10 +452,19 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     let status = {};
     try { status = typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {}; } catch (_) {}
     const startedMs = Number(status.twitchStreamStartedAt || status.streamSessionStartedAt || 0);
+    const streamLive = status.streamLive !== undefined ? Boolean(status.streamLive) : Boolean(status.live);
+    const currentStreamTitle = String(status.currentStreamTitle || status.title || '').trim();
+    const currentStreamCategory = String(status.currentStreamCategory || status.category || '').trim();
     return {
       channelName: String(event.broadcaster_user_name || event.broadcaster_user_login || normalizedChannel).trim(),
-      streamTitle: String(status.currentStreamTitle || status.title || ''),
-      game: String(status.currentStreamCategory || status.category || ''),
+      // Legacy variables retained for backward compatibility.
+      streamTitle: currentStreamTitle,
+      game: currentStreamCategory,
+      // Explicit current-broadcast variables. These never go blank just because
+      // the broadcast is offline or Twitch has not supplied metadata yet.
+      streamLive,
+      streamTitleVariable: streamLive ? (currentStreamTitle || STREAM_LIVE_TITLE_FALLBACK) : STREAM_OFFLINE_TITLE,
+      streamCategoryVariable: streamLive ? (currentStreamCategory || STREAM_LIVE_CATEGORY_FALLBACK) : STREAM_OFFLINE_CATEGORY,
       streamUrl: `https://twitch.tv/${normalizedChannel}`,
       thumbnail: `https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(normalizedChannel)}-1280x720.jpg`,
       startedAt: startedMs > 0 ? new Date(startedMs).toISOString() : String(event.started_at || '')

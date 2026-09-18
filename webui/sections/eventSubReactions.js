@@ -379,7 +379,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
               <input class="event-action-discord-embed-url" maxlength="2048" value="${esc(embed.url || '')}" placeholder="$(url)">
             </label>
             <label class="event-action-discord-embed-description-wrap">Description
-              <textarea class="event-action-discord-embed-description" maxlength="4096" placeholder="Example: $(title)">${esc(embed.description || '')}</textarea>
+              <textarea class="event-action-discord-embed-description" maxlength="4096" placeholder="Example: $(streamtitle)">${esc(embed.description || '')}</textarea>
             </label>
             <label>Accent Color
               <input class="event-action-discord-embed-color" type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(String(embed.color || '')) ? String(embed.color) : '#9146FF')}">
@@ -396,7 +396,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
             <label class="inline-check event-action-discord-embed-timestamp-wrap"><input class="event-action-discord-embed-timestamp" type="checkbox" ${embed.timestamp ? 'checked' : ''}> Include timestamp</label>
           </div>
           <div class="event-action-discord-embed-fields-head">
-            <div><strong>Fields</strong><div class="detail">Optional name/value pairs such as Game → $(game).</div></div>
+            <div><strong>Fields</strong><div class="detail">Optional name/value pairs such as Category → $(streamcategory).</div></div>
             <button class="secondary event-action-discord-add-field" type="button">Add Field</button>
           </div>
           <div class="event-action-discord-embed-fields"></div>
@@ -433,7 +433,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       fieldRow.className = 'event-action-discord-embed-field';
       fieldRow.innerHTML = `
         <label>Name<input class="event-action-discord-embed-field-name" maxlength="256" value="${esc(field.name || '')}" placeholder="Game"></label>
-        <label>Value<input class="event-action-discord-embed-field-value" maxlength="1024" value="${esc(field.value || '')}" placeholder="$(game)"></label>
+        <label>Value<input class="event-action-discord-embed-field-value" maxlength="1024" value="${esc(field.value || '')}" placeholder="$(streamcategory)"></label>
         <label class="inline-check event-action-discord-embed-field-inline-wrap"><input class="event-action-discord-embed-field-inline" type="checkbox" ${field.inline ? 'checked' : ''}> Inline</label>
         <button class="secondary event-action-discord-embed-field-remove" type="button">Remove</button>`;
       fieldRow.querySelector('.event-action-discord-embed-field-remove').onclick = () => { fieldRow.remove(); updateEmbedFieldsState(); };
@@ -478,13 +478,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const applyStreamOnlineDefaults = () => {
       if ($('eventReactionType').value !== 'stream.online' || !embedLooksEmpty()) return;
       row.querySelector('.event-action-discord-embed-title-input').value = '$(channel) is now live on Twitch!';
-      row.querySelector('.event-action-discord-embed-description').value = '$(title)';
+      row.querySelector('.event-action-discord-embed-description').value = '$(streamtitle)';
       row.querySelector('.event-action-discord-embed-url').value = '$(url)';
       row.querySelector('.event-action-discord-embed-image').value = '$(thumbnail)';
       row.querySelector('.event-action-discord-embed-footer').value = 'QwertBot';
       row.querySelector('.event-action-discord-embed-timestamp').checked = true;
       if (!embedButtonsEl.children.length) addEmbedButton({ label: 'Watch Stream', url: '$(url)' });
-      if (!embedFieldsEl.children.length) addEmbedField({ name: 'Game', value: '$(game)', inline: true });
+      if (!embedFieldsEl.children.length) addEmbedField({ name: 'Category', value: '$(streamcategory)', inline: true });
     };
     const updateEmbedUi = ({ applyDefaults = false } = {}) => {
       if (applyDefaults && embedToggle.checked) applyStreamOnlineDefaults();
