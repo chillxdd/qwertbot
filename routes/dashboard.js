@@ -260,8 +260,8 @@ function registerDashboardRoutes(app, options) {
     const runtime = getRuntimeDiagnostics();
     const gemini = getGeminiClientStatus();
     const recapPrimaryQuota = await getRecapPrimaryQuotaStatus({
-      model: gemini.recapPrimaryModel,
-      limit: gemini.recapPrimaryDailyLimit
+      model: gemini.recapEditorModel || gemini.recapPrimaryModel,
+      limit: gemini.recapEditorDailyLimit || gemini.recapPrimaryDailyLimit
     });
 
     return {
@@ -282,7 +282,13 @@ function registerDashboardRoutes(app, options) {
         lastPrimaryPremium: Boolean(recapStatus.lastRecapPrimaryPremium),
         lastPrimaryFallback: Boolean(recapStatus.lastRecapPrimaryFallback),
         lastPrimaryFallbackReason: recapStatus.lastRecapPrimaryFallbackReason || null,
-        lastPrimaryAt: recapStatus.lastRecapPrimaryAt || null
+        lastPrimaryAt: recapStatus.lastRecapPrimaryAt || null,
+        lastEditorModel: recapStatus.lastRecapEditorModel || null,
+        lastEditorAttempted: Boolean(recapStatus.lastRecapEditorAttempted),
+        lastEditorSelected: Boolean(recapStatus.lastRecapEditorSelected),
+        lastEditorFailed: Boolean(recapStatus.lastRecapEditorFailed),
+        lastEditorReason: recapStatus.lastRecapEditorReason || null,
+        lastEditorAt: recapStatus.lastRecapEditorAt || null
       },
       services: {
         databaseConnected: Boolean(getDatabaseConnected()),

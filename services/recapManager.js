@@ -255,6 +255,12 @@ function createRecapManager({
   let lastRecapPrimaryFallback = false;
   let lastRecapPrimaryFallbackReason = '';
   let lastRecapPrimaryAt = 0;
+  let lastRecapEditorModel = '';
+  let lastRecapEditorAttempted = false;
+  let lastRecapEditorSelected = false;
+  let lastRecapEditorFailed = false;
+  let lastRecapEditorReason = '';
+  let lastRecapEditorAt = 0;
   let recapGenerationEpoch = 0;
   let streamSessionStartedAt = 0;
   let twitchStreamStartedAt = 0;
@@ -2157,6 +2163,13 @@ function createRecapManager({
         lastRecapPrimaryFallback = Boolean(routing.fallback);
         lastRecapPrimaryFallbackReason = String(routing.fallbackReason || '');
         lastRecapPrimaryAt = Date.now();
+        const editorRouting = result.editorRouting || {};
+        lastRecapEditorModel = String(editorRouting.model || '');
+        lastRecapEditorAttempted = Boolean(editorRouting.attempted);
+        lastRecapEditorSelected = Boolean(editorRouting.selected);
+        lastRecapEditorFailed = Boolean(editorRouting.failed);
+        lastRecapEditorReason = String(editorRouting.reason || '');
+        lastRecapEditorAt = Date.now();
         twitchMessage = SUMMARY_PREFIX + recapSummaryBody;
       }
 
@@ -2343,6 +2356,12 @@ function createRecapManager({
       lastRecapPrimaryFallback,
       lastRecapPrimaryFallbackReason: lastRecapPrimaryFallbackReason || null,
       lastRecapPrimaryAt: lastRecapPrimaryAt || null,
+      lastRecapEditorModel: lastRecapEditorModel || null,
+      lastRecapEditorAttempted,
+      lastRecapEditorSelected,
+      lastRecapEditorFailed,
+      lastRecapEditorReason: lastRecapEditorReason || null,
+      lastRecapEditorAt: lastRecapEditorAt || null,
       firstRecapSent,
       messagesInWindow: recapMessages.length,
       twitchEventsInWindow: twitchEvents.length,

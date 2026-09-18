@@ -100,7 +100,7 @@ export function initRenderLogsSection({ $, postJson }) {
     setDiagnostic(
       'diagGemini',
       `${queued} queued${gemini.processing ? ' · active' : ''}`,
-      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · Default: ${gemini.model || 'Gemini'} · Recap primary: ${gemini.recapPrimaryModel || 'default'}`,
+      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · Recap writer: ${gemini.recapPrimaryModel || gemini.model || 'Gemini'} · Premium editor: ${gemini.recapEditorModel || 'disabled'}`,
       geminiState
     );
 
@@ -120,19 +120,30 @@ export function initRenderLogsSection({ $, postJson }) {
     );
 
     const premiumUsed = Math.max(0, Number(recapPrimaryQuota.used || 0));
-    const premiumLimit = Math.max(1, Number(recapPrimaryQuota.limit || gemini.recapPrimaryDailyLimit || 20));
+    const premiumLimit = Math.max(1, Number(recapPrimaryQuota.limit || gemini.recapEditorDailyLimit || gemini.recapPrimaryDailyLimit || 20));
     const premiumRemaining = Math.max(0, premiumLimit - premiumUsed);
     const premiumState = premiumUsed >= premiumLimit ? 'warn' : premiumUsed >= Math.ceil(premiumLimit * 0.8) ? 'warn' : 'good';
-    const lastPrimary = recap.lastPrimaryModel
-      ? `Last recap primary: ${recap.lastPrimaryModel}${recap.lastPrimaryFallback ? ' (Lite fallback)' : recap.lastPrimaryPremium ? ' (premium)' : ''}${recap.lastPrimaryAt ? ` at ${new Date(recap.lastPrimaryAt).toLocaleTimeString()}` : ''}.`
-      : 'No recap primary has run since this process started.';
+    let lastEditor = 'No premium recap editor pass has run since this process started.';
+    if (recap.lastEditorAt) {
+      const editorModel = recap.lastEditorModel || gemini.recapEditorModel || 'Gemini Flash';
+      const outcome = recap.lastEditorSelected
+        ? 'rewrite selected'
+        : recap.lastEditorFailed
+          ? 'failed; Lite kept'
+          : recap.lastEditorAttempted
+            ? 'Lite kept'
+            : recap.lastEditorReason === 'premium_daily_cap'
+              ? 'quota exhausted; Lite kept'
+              : 'not attempted';
+      lastEditor = `Last editor: ${editorModel} (${outcome}) at ${new Date(recap.lastEditorAt).toLocaleTimeString()}.`;
+    }
     const quotaSource = recapPrimaryQuota.source && recapPrimaryQuota.source !== 'mongodb'
       ? ` Counter source: ${recapPrimaryQuota.source}.`
       : '';
     setDiagnostic(
       'diagRecapFlash',
-      `${premiumUsed}/${premiumLimit} starts today`,
-      `${premiumRemaining} QwertBot premium start${premiumRemaining === 1 ? '' : 's'} remaining · ${recapPrimaryQuota.model || gemini.recapPrimaryModel || 'Gemini Flash'} · resets at midnight Pacific. ${lastPrimary}${quotaSource}`,
+      `${premiumUsed}/${premiumLimit} editor starts today`,
+      `${premiumRemaining} QwertBot premium editor start${premiumRemaining === 1 ? '' : 's'} remaining · ${recapPrimaryQuota.model || gemini.recapEditorModel || 'Gemini Flash'} · resets at midnight Pacific. ${lastEditor}${quotaSource}`,
       premiumState
     );
 

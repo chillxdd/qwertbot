@@ -912,7 +912,7 @@ process.on('uncaughtException', (err) => { console.error('[Process] Uncaught exc
 server = app.listen(PORT, () => {
   console.log(`[Startup] Web server on ${PORT}; waiting for the Mongo-backed bot lease.`);
   const geminiStatus = getGeminiClientStatus();
-  console.log(`[Startup] Gemini default model: ${geminiStatus.model}; hourly recap primary: ${geminiStatus.recapPrimaryModel} (QwertBot cap ${geminiStatus.recapPrimaryDailyLimit}/day, no premium retry); global ${HARD_MAX_REQUESTS_PER_MINUTE}-RPM pacing enabled (${geminiStatus.requestSpacingMs}ms minimum request spacing).`);
+  console.log(`[Startup] Gemini default/recap writer: ${geminiStatus.model}; hourly recap premium editor: ${geminiStatus.recapEditorModel} (QwertBot cap ${geminiStatus.recapEditorDailyLimit}/day, one editor attempt per recap, no premium retry); global ${HARD_MAX_REQUESTS_PER_MINUTE}-RPM pacing enabled (${geminiStatus.requestSpacingMs}ms minimum request spacing).`);
   console.log('[Startup] Reliability build: durable sends, inbox, graceful shutdown, recap-control split.');
 });
 runtime.start();
