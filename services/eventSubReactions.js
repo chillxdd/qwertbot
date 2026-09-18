@@ -363,7 +363,7 @@ function renderEventTemplate(template, type, event = {}, extra = {}) {
   const choices = (Array.isArray(event.choices) ? event.choices : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
   const outcomes = (Array.isArray(event.outcomes) ? event.outcomes : []).map((item) => String(item?.title || '').trim()).filter(Boolean).join(' / ');
   const streamTitle = String(extra.streamTitle || '').trim();
-  const streamCategory = String(extra.game || '').trim();
+  const streamCategory = String(extra.streamCategory || '').trim();
   const streamLive = extra.streamLive === true;
   const explicitStreamTitle = String(extra.streamTitleVariable || (streamLive ? (streamTitle || STREAM_LIVE_TITLE_FALLBACK) : STREAM_OFFLINE_TITLE)).trim();
   const explicitStreamCategory = String(extra.streamCategoryVariable || (streamLive ? (streamCategory || STREAM_LIVE_CATEGORY_FALLBACK) : STREAM_OFFLINE_CATEGORY)).trim();
@@ -377,7 +377,7 @@ function renderEventTemplate(template, type, event = {}, extra = {}) {
     level: Number(event.level || 0),
     months: Number(event.cumulative_months || 0),
     event: EVENT_TYPES.find((item) => item.type === type)?.label || type,
-    title: type === 'stream.online' && streamTitle ? streamTitle : eventTitle(type, event),
+    title: eventTitle(type, event),
     choices: choices || outcomes,
     votes: sumNumeric(event.choices, 'votes'),
     points: sumNumeric(event.outcomes, 'channel_points'),
@@ -390,14 +390,19 @@ function renderEventTemplate(template, type, event = {}, extra = {}) {
     status: String(event.status || '').trim(),
     automatic: event.is_automatic ? 'yes' : 'no',
     channel: String(extra.channelName || event.broadcaster_user_name || event.broadcaster_user_login || '').trim(),
-    game: streamCategory,
+    // $(game) is intentionally retired from EventSub templates. Keep it in the
+    // matcher below only so old saved templates resolve it to blank instead of
+    // leaking the literal token into chat/Discord. Use $(streamcategory) or
+    // its alias $(streamgame) for the current broadcast category.
+    game: '',
     streamtitle: explicitStreamTitle,
     streamcategory: explicitStreamCategory,
+    streamgame: explicitStreamCategory,
     url: String(extra.streamUrl || '').trim(),
     thumbnail: String(extra.thumbnail || '').trim(),
     started: String(extra.startedAt || event.started_at || '').trim()
   };
-  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|streamtitle|streamcategory|url|thumbnail|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
+  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|streamtitle|streamcategory|streamgame|url|thumbnail|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
 function renderDiscordEmbed(raw = {}, type, event = {}, extra = {}) {
@@ -457,9 +462,10 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     const currentStreamCategory = String(status.currentStreamCategory || status.category || '').trim();
     return {
       channelName: String(event.broadcaster_user_name || event.broadcaster_user_login || normalizedChannel).trim(),
-      // Legacy variables retained for backward compatibility.
+      // Explicit current-broadcast source metadata. Event-specific $(title) no
+      // longer falls back to this stream title, and EventSub $(game) is retired.
       streamTitle: currentStreamTitle,
-      game: currentStreamCategory,
+      streamCategory: currentStreamCategory,
       // Explicit current-broadcast variables. These never go blank just because
       // the broadcast is offline or Twitch has not supplied metadata yet.
       streamLive,
@@ -561,9 +567,16 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       targetUrl = decryptDiscordWebhook(action);
     }
     const type = EVENT_TYPE_SET.has(String(eventType || '')) ? String(eventType) : 'stream.online';
-    const previewEvent = type === 'channel.raid'
-      ? { from_broadcaster_user_name: 'ExampleRaider', from_broadcaster_user_login: 'exampleraider', viewers: 42 }
-      : { user_name: 'ExampleUser', user_login: 'exampleuser', bits: 100, total: 5, cumulative_months: 12, title: 'Example event title', started_at: new Date().toISOString() };
+    let previewEvent;
+    if (type === 'channel.raid') {
+      previewEvent = { from_broadcaster_user_name: 'ExampleRaider', from_broadcaster_user_login: 'exampleraider', viewers: 42 };
+    } else {
+      previewEvent = { user_name: 'ExampleUser', user_login: 'exampleuser', bits: 100, total: 5, cumulative_months: 12, started_at: new Date().toISOString() };
+      if (type.startsWith('channel.poll.') || type.startsWith('channel.prediction.')) previewEvent.title = 'Example event title';
+      if (type === 'channel.channel_points_custom_reward_redemption.add') previewEvent.reward = { title: 'Example reward' };
+      if (type === 'channel.channel_points_automatic_reward_redemption.add') previewEvent.reward = { type: 'example_reward' };
+      if (type.startsWith('channel.goal.')) previewEvent.description = 'Example goal';
+    }
     const extra = eventTemplateContext(previewEvent);
     const normalizedEmbed = discordEmbed ? normalizeDiscordEmbed(discordEmbed) : { enabled: false };
     const rendered = renderDiscordEmbed(normalizedEmbed, type, previewEvent, extra);
