@@ -2,6 +2,7 @@ const { withDistributedLock } = require('./reliability/distributedLock');
 const { WRITE_OPTIONS } = require('./reliability/store');
 const { fetchWithTimeout: fetch } = require('./httpClient');
 const TwitchAuth = require('../models/TwitchAuth');
+const { markAuthorizationChanged } = require('./twitchAuthorizationState');
 
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
@@ -63,7 +64,9 @@ async function saveAuth({
     }
   );
 
-  return doc.toObject();
+  const saved = doc.toObject();
+  markAuthorizationChanged();
+  return saved;
 }
 
 async function validateAccessToken(accessToken) {
@@ -123,6 +126,7 @@ async function syncStoredIdentity(auth, validation) {
   if (needsLogin) update.username = validatedLogin;
 
   await TwitchAuth.updateOne({ provider: 'twitch', accessToken: auth.accessToken }, { $set: update }, WRITE_OPTIONS);
+  markAuthorizationChanged();
 
   if (needsLogin) {
     console.log(`[OAuth Bot] Twitch bot login updated in MongoDB to ${validatedLogin}.`);
@@ -190,10 +194,14 @@ async function refreshStoredToken() {
     ).lean();
     if (!saved) {
       const current = await getStoredAuth();
-      if (current?.accessToken) return current;
+      if (current?.accessToken) {
+        markAuthorizationChanged();
+        return current;
+      }
       throw new Error('Authorization changed while refreshing; please authorize again.');
     }
 
+    markAuthorizationChanged();
     console.log('[OAuth Bot] Twitch access token refreshed and saved to MongoDB.');
     return saved;
   });

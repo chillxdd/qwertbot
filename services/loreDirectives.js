@@ -14,6 +14,7 @@ const {
   isSharedChatGuest
 } = require('./sourceRecords');
 
+const { createOwnResponseTracker } = require('../shared/ownResponseTracker');
 const MAX_RECENT_CONTEXT_MESSAGES = 80;
 const MAX_RECENT_CONTEXT_CHARACTERS = 12000;
 const MAX_SESSION_CONTEXT_CHARACTERS = 14000;
@@ -21,27 +22,7 @@ const MAX_DIRECTIVE_TEXT_LENGTH = 1000;
 const MAX_DIRECTIVE_CONTEXT_LENGTH = 700;
 const MAX_PROPOSED_LORE_LENGTH = 400;
 const TWITCH_SAFE_MESSAGE_LENGTH = 480;
-const OWN_RESPONSE_TTL_MS = 15000;
-const ownResponses = [];
-
-function cleanupOwnResponses() {
-  const cutoff = Date.now() - OWN_RESPONSE_TTL_MS;
-  while (ownResponses.length && ownResponses[0].createdAt < cutoff) ownResponses.shift();
-}
-
-function noteOwnResponse(message) {
-  cleanupOwnResponses();
-  ownResponses.push({ message: String(message || '').trim(), createdAt: Date.now() });
-}
-
-function consumeOwnResponse(message) {
-  cleanupOwnResponses();
-  const normalized = String(message || '').trim();
-  const index = ownResponses.findIndex((entry) => entry.message === normalized);
-  if (index === -1) return false;
-  ownResponses.splice(index, 1);
-  return true;
-}
+const { note: noteOwnResponse, consume: consumeOwnResponse } = createOwnResponseTracker();
 
 function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

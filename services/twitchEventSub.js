@@ -2,9 +2,10 @@ const { fetchWithTimeout: fetch } = require('./httpClient');
 const crypto = require('crypto');
 const { getAppAccessToken } = require('./twitchChat');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
+const { TWITCH_EVENTSUB_CALLBACK_URL } = require('../config/app');
 
 const EVENTSUB_URL = 'https://api.twitch.tv/helix/eventsub/subscriptions';
-const CALLBACK_URL = 'https://sqwertarmybot.onrender.com/eventsub/twitch';
+const CALLBACK_URL = TWITCH_EVENTSUB_CALLBACK_URL;
 
 // Legacy/current EventSub permissions. Missing one no longer blocks unrelated
 // subscriptions; each subscription definition checks only the scope it needs.

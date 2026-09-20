@@ -3,6 +3,7 @@ const operationContext = require('./reliability/context');
 const { fetchWithTimeout: fetch } = require('./httpClient');
 const { getStoredAuth } = require('./twitchAuth');
 const { getStoredBroadcasterAuth } = require('./twitchBroadcasterAuth');
+const { getAuthorizationEpoch } = require('./twitchAuthorizationState');
 
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const TWITCH_SEND_CHAT_URL = 'https://api.twitch.tv/helix/chat/messages';
@@ -18,6 +19,10 @@ let cachedAppAccessToken = '';
 let cachedAppAccessTokenExpiresAt = 0;
 let activePinRestoreTimer = null;
 let activeTemporaryPinMessageId = null;
+
+const AUTHORIZATION_SNAPSHOT_TTL_MS = 60 * 1000;
+let authorizationSnapshotCache = null;
+let authorizationSnapshotInFlight = null;
 
 function getClientId() {
   const value = (process.env.TWITCH_CLIENT_ID || '').trim();
@@ -83,12 +88,44 @@ async function getAppAccessToken({ forceRefresh = false } = {}) {
 }
 
 async function getAuthorizationSnapshot() {
-  const [botAuth, broadcasterAuth] = await Promise.all([
-    getStoredAuth(),
-    getStoredBroadcasterAuth()
-  ]);
+  const epoch = getAuthorizationEpoch();
+  const now = Date.now();
+  if (
+    authorizationSnapshotCache &&
+    authorizationSnapshotCache.epoch === epoch &&
+    authorizationSnapshotCache.expiresAt > now
+  ) {
+    return authorizationSnapshotCache.value;
+  }
 
-  return { botAuth, broadcasterAuth };
+  if (!authorizationSnapshotInFlight) {
+    authorizationSnapshotInFlight = (async () => {
+      // Authorization writes can race a Mongo read. Only publish a snapshot if
+      // the authorization epoch stayed stable for the entire read; otherwise
+      // read again so a just-refreshed/re-authorized token can never be hidden
+      // behind a stale 60-second cache entry.
+      while (true) {
+        const readEpoch = getAuthorizationEpoch();
+        const [botAuth, broadcasterAuth] = await Promise.all([
+          getStoredAuth(),
+          getStoredBroadcasterAuth()
+        ]);
+        if (readEpoch !== getAuthorizationEpoch()) continue;
+
+        const value = { botAuth, broadcasterAuth };
+        authorizationSnapshotCache = {
+          epoch: readEpoch,
+          expiresAt: Date.now() + AUTHORIZATION_SNAPSHOT_TTL_MS,
+          value
+        };
+        return value;
+      }
+    })().finally(() => {
+      authorizationSnapshotInFlight = null;
+    });
+  }
+
+  return authorizationSnapshotInFlight;
 }
 
 async function getChatApiReadiness() {

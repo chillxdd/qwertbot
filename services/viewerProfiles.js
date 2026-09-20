@@ -11,6 +11,10 @@ const {
   isSharedChatGuest
 } = require('./sourceRecords');
 const {
+  buildProfileAliasKeys,
+  questionAliasKeys
+} = require('../features/viewerProfiles/aliasIndex');
+const {
   normalizeConfidence,
   normalizeLearningRelation,
   textsEquivalent,
@@ -86,9 +90,65 @@ async function ensureViewerProfileIndexes() {
     { $unset: { twitchUserId: '' } }
   );
 
+  // Backfill alias lookup keys entirely inside MongoDB. Only the update command/result
+  // crosses the Render/Atlas boundary; profile rows are not downloaded for migration.
+  const aliasBackfill = await collection.updateMany(
+    { profileDataPurgedAt: null, aliasKeyVersion: { $ne: 2 } },
+    [
+      {
+        $set: {
+          aliasKeys: {
+            $reduce: {
+              input: {
+                $concatArrays: [
+                  [
+                    { $ifNull: ['$username', ''] },
+                    { $ifNull: ['$displayName', ''] }
+                  ],
+                  { $cond: [{ $isArray: '$aliases' }, '$aliases', []] }
+                ]
+              },
+              initialValue: [],
+              in: {
+                $let: {
+                  vars: {
+                    rawAlias: { $toLower: { $trim: { input: { $ifNull: ['$$this', ''] } } } }
+                  },
+                  in: {
+                    $setUnion: [
+                      '$$value',
+                      { $cond: [{ $ne: ['$$rawAlias', ''] }, ['$$rawAlias'], []] },
+                      {
+                        $map: {
+                          input: {
+                            $regexFindAll: {
+                              input: '$$rawAlias',
+                              regex: '[\\p{L}\\p{N}_]+'
+                            }
+                          },
+                          as: 'tokenMatch',
+                          in: '$$tokenMatch.match'
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          aliasKeyVersion: 2
+        }
+      }
+    ]
+  );
+
   await collection.createIndex(
     { channelName: 1, username: 1 },
     { unique: true, name: 'channelName_1_username_1' }
+  );
+  await collection.createIndex(
+    { channelName: 1, aliasKeys: 1 },
+    { name: 'channelName_1_aliasKeys_1' }
   );
   await collection.createIndex(
     { channelName: 1, twitchUserId: 1 },
@@ -99,7 +159,7 @@ async function ensureViewerProfileIndexes() {
     }
   );
 
-  console.log('[Viewer Profiles] Identity indexes ready: username unique, Twitch user ID unique only when present.');
+  console.log(`[Viewer Profiles] Identity indexes ready: username unique, alias lookup indexed, Twitch user ID unique only when present${Number(aliasBackfill.modifiedCount || 0) ? `; backfilled ${aliasBackfill.modifiedCount} alias-key profile(s) in MongoDB` : ''}.`);
 }
 
 function normalizeUsername(value) {
@@ -124,6 +184,18 @@ function normalizeAliases(value) {
     if (out.length >= MAX_ALIASES) break;
   }
   return out;
+}
+
+function refreshProfileAliasKeys(profile) {
+  if (!profile) return [];
+  const keys = buildProfileAliasKeys({
+    username: profile.username,
+    displayName: profile.displayName,
+    aliases: profile.aliases
+  });
+  profile.aliasKeys = keys;
+  profile.aliasKeyVersion = 2;
+  return keys;
 }
 
 function mergeIdentityAliases(existingAliases, previousUsername, previousDisplayName, currentUsername, currentDisplayName) {
@@ -173,6 +245,7 @@ function applyViewerIdentity(profile, { username, displayName, twitchUserId, now
   profile.displayName = normalizedDisplayName;
   if (normalizedUserId) profile.twitchUserId = normalizedUserId;
   profile.lastSeenAt = now;
+  refreshProfileAliasKeys(profile);
 
   return {
     changed: renamed || displayChanged || userIdChanged,
@@ -194,6 +267,8 @@ async function syncViewerIdentity(channelName, { username, displayName, twitchUs
     return { synced: false, profileFound: false, reason: 'missing_identity' };
   }
 
+  await purgeExpiredOptedOutProfiles(channel);
+
   const cacheKey = `${channel}:${normalizedUserId}`;
   const nowMs = Date.now();
   const cached = viewerIdentityCache.get(cacheKey) || null;
@@ -206,8 +281,6 @@ async function syncViewerIdentity(channelName, { username, displayName, twitchUs
   if (sameCachedIdentity && (nowMs - Number(cached.checkedAt || 0)) < cacheTtl) {
     return { synced: false, cached: true, profileFound: cached.profileFound === true, renamed: false };
   }
-
-  await purgeExpiredOptedOutProfiles(channel);
 
   // Twitch user ID is the canonical identity. Username is only the current mutable login.
   let profile = await ViewerProfile.findOne({ channelName: channel, twitchUserId: normalizedUserId });
@@ -284,6 +357,7 @@ async function syncViewerIdentity(channelName, { username, displayName, twitchUs
       profile.displayName = normalizedDisplayName;
       profile.twitchUserId = normalizedUserId;
       profile.lastSeenAt = new Date(nowMs);
+      refreshProfileAliasKeys(profile);
       await profile.save();
       console.error(`[Viewer Profiles] Could not rename @${oldUsername} to @${normalizedUsername} because another profile already uses that username${conflictingUserId ? ` (Twitch user ID ${conflictingUserId})` : ''}. Current login was retained as an alias instead.`);
       viewerIdentityCache.set(cacheKey, {
@@ -447,7 +521,7 @@ async function purgeExpiredOptedOutProfiles(channelName, now = new Date()) {
   const cutoff = new Date(new Date(now).getTime() - OPT_OUT_RETENTION_MS);
   const result = await ViewerProfile.updateMany(
     { channelName: channel, optedOut: true, optedOutAt: { $ne: null, $lte: cutoff }, profileDataPurgedAt: null },
-    { $set: { aliases: [], pinnedNotes: '', facts: [], commandUsage: [], profileDataPurgedAt: new Date(now), profileRetainedOnOptOut: false } }
+    { $set: { aliases: [], aliasKeys: [], aliasKeyVersion: 2, pinnedNotes: '', facts: [], commandUsage: [], profileDataPurgedAt: new Date(now), profileRetainedOnOptOut: false } }
   );
   return { purged: Number(result.modifiedCount || 0) };
 }
@@ -475,6 +549,7 @@ async function saveViewerProfile(channelName, value = {}) {
   if (!username) throw new Error('A valid Twitch username is required.');
   const displayName = normalizeDisplayName(value.displayName) || username;
   const aliases = normalizeAliases(value.aliases).filter((alias) => alias.toLowerCase() !== username);
+  const aliasKeys = buildProfileAliasKeys({ username, displayName, aliases });
   const pinnedNotes = String(value.pinnedNotes || '').trim();
   if (pinnedNotes.length > MAX_PINNED_NOTES) throw new Error(`Pinned notes cannot exceed ${MAX_PINNED_NOTES} characters.`);
 
@@ -486,6 +561,8 @@ async function saveViewerProfile(channelName, value = {}) {
     { $set: {
       displayName,
       aliases,
+      aliasKeys,
+      aliasKeyVersion: 2,
       pinnedNotes,
       enabled: value.enabled !== false,
       learningEnabled: value.learningEnabled !== false
@@ -615,7 +692,6 @@ async function recordViewerCommandUsage(channelName, { username, displayName, tw
   const settings = await getViewerProfileSettings(channel);
   if (!settings.automaticLearningEnabled) return { recorded: false };
   await purgeExpiredOptedOutProfiles(channel);
-
   const excludedUsers = new Set([channel, 'sqwertarmybot', 'nightbot', 'streamelements', 'pokemoncommunitygame']);
   if (excludedUsers.has(normalizedUsername)) return { recorded: false };
 
@@ -820,6 +896,8 @@ async function clearAllViewerProfiles(channelName) {
     { channelName: channel, optedOut: true },
     { $set: {
       aliases: [],
+      aliasKeys: [],
+      aliasKeyVersion: 2,
       pinnedNotes: '',
       facts: [],
       commandUsage: [],
@@ -1259,28 +1337,25 @@ async function getRelevantViewerProfiles(channelName, question, limit = 4, optio
   }
 
   const docsById = new Map();
-  if (exactClauses.length) {
-    const exactDocs = await ViewerProfile.find({
+  const aliasCandidates = questionAliasKeys(question);
+  const lookupClauses = [
+    ...exactClauses,
+    ...(aliasCandidates.length ? [{ aliasKeys: { $in: aliasCandidates } }] : [])
+  ];
+
+  if (lookupClauses.length) {
+    const candidates = await ViewerProfile.find({
       channelName: channel,
       enabled: { $ne: false },
       optedOut: { $ne: true },
-      $or: exactClauses
+      $or: lookupClauses
     }).lean();
-    for (const doc of exactDocs) {
-      if (!isExcludedProfile(doc)) docsById.set(String(doc._id), doc);
+    for (const doc of candidates) {
+      const exactRank = profileIdentityRank(doc, exactIdentities);
+      if (!isExcludedProfile(doc) && (exactRank > 0 || profileMatchesQuestion(doc, question))) {
+        docsById.set(String(doc._id), doc);
+      }
     }
-  }
-
-  // Aliases are not indexed, so question-subject matching still needs a bounded
-  // channel scan. Exact requester/recipient records are ranked first and cannot
-  // be displaced by database order or alias collisions.
-  const candidates = await ViewerProfile.find({
-    channelName: channel,
-    enabled: { $ne: false },
-    optedOut: { $ne: true }
-  }).lean();
-  for (const doc of candidates) {
-    if (!isExcludedProfile(doc) && profileMatchesQuestion(doc, question)) docsById.set(String(doc._id), doc);
   }
 
   return [...docsById.values()]

@@ -2,6 +2,7 @@ const { withDistributedLock } = require('./reliability/distributedLock');
 const { WRITE_OPTIONS } = require('./reliability/store');
 const { fetchWithTimeout: fetch } = require('./httpClient');
 const TwitchBroadcasterAuth = require('../models/TwitchBroadcasterAuth');
+const { markAuthorizationChanged } = require('./twitchAuthorizationState');
 
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
@@ -92,7 +93,9 @@ async function saveBroadcasterAuth({
     }
   );
 
-  return doc.toObject();
+  const saved = doc.toObject();
+  markAuthorizationChanged();
+  return saved;
 }
 
 async function exchangeBroadcasterAuthorizationCode({ code, redirectUri }) {
@@ -199,10 +202,14 @@ async function refreshBroadcasterToken() {
     ).lean();
     if (!saved) {
       const current = await getStoredBroadcasterAuth();
-      if (current?.accessToken) return current;
+      if (current?.accessToken) {
+        markAuthorizationChanged();
+        return current;
+      }
       throw new Error('Authorization changed while refreshing; please authorize again.');
     }
 
+    markAuthorizationChanged();
     console.log('[OAuth Broadcaster] Twitch token refreshed and saved to MongoDB.');
     return saved;
   });

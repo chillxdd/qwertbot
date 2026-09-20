@@ -14,15 +14,15 @@ function normalizeChannelName(channelName) {
 async function getRecentStreamRecaps({ streamId, limit = 5 }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   if (!normalizedStreamId) return [];
+  const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
 
+  // Slice in MongoDB so Atlas returns only the recap rows the caller can use.
   const session = await StreamRecapSession.findOne({ streamId: normalizedStreamId })
-    .select({ recaps: 1 })
+    .select({ recaps: { $slice: -safeLimit } })
     .lean();
 
   if (!session || !Array.isArray(session.recaps)) return [];
-  const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
   return session.recaps
-    .slice(-safeLimit)
     .map((entry) => ({ sequence: entry.sequence, text: String(entry.text || '').trim(), createdAt: entry.createdAt || null }))
     .filter((entry) => entry.text);
 }

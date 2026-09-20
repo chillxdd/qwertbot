@@ -5,6 +5,7 @@ const { createSerialExecutor } = require('./reliability/serialWriter');
 const { WRITE_OPTIONS } = require('./reliability/store');
 const PersistentPinConfig = require('../models/PersistentPinConfig');
 
+const { createOwnResponseTracker } = require('../shared/ownResponseTracker');
 const MAX_PERSISTENT_PIN_MESSAGE_LENGTH = 500;
 const MAX_PERSISTENT_PIN_MESSAGES = 10;
 const DEFAULT_PERSISTENT_PIN_ROTATION_SECONDS = 180;
@@ -13,7 +14,6 @@ const MAX_PERSISTENT_PIN_ROTATION_SECONDS = 1800;
 const DEFAULT_PERSISTENT_PIN_HOLD_SECONDS = 10;
 const MAX_PERSISTENT_PIN_HOLD_SECONDS = 3600;
 const PERSISTENT_PIN_MONITOR_INTERVAL_MS = 15000;
-const OWN_RESPONSE_TTL_MS = 15000;
 const MONITOR_ERROR_LOG_INTERVAL_MS = 2 * 60 * 1000;
 const MIN_RESTORE_SECONDS = 30; // Twitch's pin API minimum duration.
 
@@ -169,7 +169,7 @@ function createPersistentPinManager({
   let monitorStreamId = '';
   let displacedByMessageId = '';
   let lastMonitorErrorLogAt = 0;
-  const ownResponses = [];
+  const { note: noteOwnResponse, consume: consumeOwnResponse } = createOwnResponseTracker();
 
   function configuredBanners() {
     const globalSeconds = normalizeRotationSeconds(config.rotationSeconds);
@@ -213,24 +213,6 @@ function createPersistentPinManager({
     return ids[currentIndex()] || String(config.activeMessageId || '').trim();
   }
 
-  function cleanupOwnResponses() {
-    const cutoff = Date.now() - OWN_RESPONSE_TTL_MS;
-    while (ownResponses.length && ownResponses[0].createdAt < cutoff) ownResponses.shift();
-  }
-
-  function noteOwnResponse(message) {
-    cleanupOwnResponses();
-    ownResponses.push({ message: String(message || '').trim(), createdAt: Date.now() });
-  }
-
-  function consumeOwnResponse(message) {
-    cleanupOwnResponses();
-    const normalized = String(message || '').trim();
-    const index = ownResponses.findIndex((entry) => entry.message === normalized);
-    if (index === -1) return false;
-    ownResponses.splice(index, 1);
-    return true;
-  }
 
   function toClient() {
     const banners = configuredBanners();

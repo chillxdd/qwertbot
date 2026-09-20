@@ -6,6 +6,7 @@ const { createSerialExecutor } = require('./reliability/serialWriter');
 const ChatTimer = require('../models/ChatTimer');
 const TimerConfig = require('../models/TimerConfig');
 
+const { createOwnResponseTracker } = require('../shared/ownResponseTracker');
 const MAX_TIMER_NAME_LENGTH = 80;
 const MIN_TIMER_INTERVAL_SECONDS = 30;
 const MAX_TIMER_INTERVAL_SECONDS = 86400;
@@ -22,7 +23,6 @@ const MAX_MINIMUM_VIEWERS = 1000000;
 const DEFAULT_GLOBAL_START_DELAY_SECONDS = 0;
 const SCHEDULER_TICK_MS = 1000;
 const ACTIVITY_CHECKPOINT_MS = 60 * 1000;
-const OWN_RESPONSE_TTL_MS = 15000;
 const RETRY_DELAYS_MS = [10000, 30000, 60000];
 const HISTORY_LIMIT = 10;
 
@@ -255,7 +255,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   let tickBusy = false;
   let lastSeenStreamId = '';
   let activityDirty = false;
-  const ownResponses = [];
+  const { note: noteOwnResponse, consume: consumeOwnResponse } = createOwnResponseTracker();
   const serialize = createSerialExecutor();
   let stopping = false;
   let queuedTick = false;
@@ -302,24 +302,6 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     };
   }
 
-  function cleanupOwnResponses() {
-    const cutoff = Date.now() - OWN_RESPONSE_TTL_MS;
-    while (ownResponses.length && ownResponses[0].createdAt < cutoff) ownResponses.shift();
-  }
-
-  function noteOwnResponse(message) {
-    cleanupOwnResponses();
-    ownResponses.push({ message: String(message || '').trim(), createdAt: Date.now() });
-  }
-
-  function consumeOwnResponse(message) {
-    cleanupOwnResponses();
-    const normalized = String(message || '').trim();
-    const index = ownResponses.findIndex((entry) => entry.message === normalized);
-    if (index === -1) return false;
-    ownResponses.splice(index, 1);
-    return true;
-  }
 
   async function loadSettings() {
     const stored = await TimerConfig.findOne({ channelName: normalizedChannel }).lean();

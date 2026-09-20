@@ -63,6 +63,8 @@ const viewerProfileSchema = new mongoose.Schema({
   preOptOutEnabled: { type: Boolean, default: true },
   preOptOutLearningEnabled: { type: Boolean, default: true },
   aliases: { type: [String], default: [] },
+  aliasKeys: { type: [String], default: [] },
+  aliasKeyVersion: { type: Number, default: 2 },
   pinnedNotes: { type: String, default: '', maxlength: 4000 },
   facts: { type: [viewerFactSchema], default: [] },
   commandUsage: { type: [viewerCommandUsageSchema], default: [] },
@@ -75,6 +77,10 @@ const viewerProfileSchema = new mongoose.Schema({
 viewerProfileSchema.index(
   { channelName: 1, username: 1 },
   { unique: true, name: 'channelName_1_username_1' }
+);
+viewerProfileSchema.index(
+  { channelName: 1, aliasKeys: 1 },
+  { name: 'channelName_1_aliasKeys_1' }
 );
 viewerProfileSchema.index(
   { channelName: 1, twitchUserId: 1 },

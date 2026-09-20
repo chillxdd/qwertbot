@@ -3,6 +3,7 @@ const { parseLoreDirective, tryHandleLoreDirective, consumeOwnResponse: consumeL
 const { detectPromptInjection } = require('./promptSecurity');
 const { identityFromTwitchTags, sharedChatOriginFromTwitchTags, isSharedChatGuest } = require('./sourceRecords');
 
+const { COMMANDS_URL } = require('../config/app');
 const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
@@ -358,7 +359,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
         if (typeof sendMessage === 'function') {
           const text = typeof getNativeCommandResponse === 'function'
             ? await getNativeCommandResponse('commands', 'response', { user: displayName })
-            : 'All SqwertArmyBot commands: https://sqwertarmybot.onrender.com/commands';
+            : `All SqwertArmyBot commands: ${COMMANDS_URL}`;
           if (text) await sendMessage(channel, text);
         }
         return;

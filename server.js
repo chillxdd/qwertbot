@@ -2,17 +2,18 @@
 const { connectDatabase, disconnectDatabase, isDatabaseConnected, initializeDatabaseModels } = require('./services/database');
 
 const express = require('express');
-const tmi = require('tmi.js');
 const path = require('path');
+const { ADMIN_PATH, STREAM_TIME_ZONE, TWITCH_REDIRECT_URI, normalizeChannelName } = require('./config/app');
 
-const { createRecapManager, SUMMARY_PREFIX, TWITCH_MESSAGE_LIMIT } = require('./commands/recap');
+const { createRecapManager, SUMMARY_PREFIX } = require('./commands/recap');
 
 const context = require('./services/reliability/context');
 const delivery = require('./services/reliability/delivery');
-const { initializeStore, collection } = require('./services/reliability/store');
+const { initializeStore } = require('./services/reliability/store');
 const { createRuntime } = require('./services/reliability/runtime');
 const { createRateGate } = require('./services/reliability/rateGate');
 const { canFallbackToIrc, deliveryError } = require('./services/reliability/twitchDelivery');
+const { createTwitchConnectionController } = require('./services/twitchConnectionController');
 const { configureSharedRateGate, cancelAllGeminiRequests, getGeminiClientStatus, HARD_MAX_REQUESTS_PER_MINUTE } = require('./services/geminiClient');
 const { stopTemporaryPinTimer } = require('./services/twitchChat');
 const { createModSessionManager } = require('./middleware/modSession');
@@ -31,15 +32,6 @@ const { getRenderedNativeResponse } = require('./services/nativeCommandResponses
 const { ensureViewerProfileIndexes, purgeExpiredOptedOutProfiles } = require('./services/viewerProfiles');
 const { REQUIRED_CHATTERS_SCOPE, getRandomChatters } = require('./services/twitchChatters');
 const { REQUIRED_ANNOUNCEMENT_SCOPE, sendChatAnnouncement } = require('./services/twitchAnnouncements');
-const {
-  getAccessToken,
-  getStoredAuth,
-  getValidAccessToken,
-  refreshStoredToken,
-  validateAccessToken
-} = require('./services/twitchAuth');
-
-const { getValidBroadcasterAccessToken } = require('./services/twitchBroadcasterAuth');
 const {
   getPinnedChatMessage,
   pinChatMessage,
@@ -60,16 +52,14 @@ const { registerAutomationRoutes } = require('./routes/automation');
 const { registerMemoryRoutes } = require('./routes/memory');
 const { registerRecapRoutes } = require('./routes/recap');
 const { registerNativeCommandRoutes } = require('./routes/nativeCommands');
+const { registerReliabilityRoutes } = require('./routes/reliability');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ADMIN_PATH = '/hailfatcloud';
-
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
 const QWERT_OAUTH_LINK_SECRET = (process.env.QWERT_OAUTH_LINK_SECRET || '').trim();
 const TWITCH_CLIENT_ID = (process.env.TWITCH_CLIENT_ID || '').trim();
 const TWITCH_CLIENT_SECRET = (process.env.TWITCH_CLIENT_SECRET || '').trim();
-const TWITCH_REDIRECT_URI = 'https://sqwertarmybot.onrender.com/auth/twitch/callback';
 const TWITCH_OAUTH_SCOPES = ['chat:read', 'chat:edit', 'user:read:chat', 'user:write:chat', 'user:bot', 'moderator:manage:chat_messages', 'moderator:manage:shoutouts', REQUIRED_ANNOUNCEMENT_SCOPE, REQUIRED_CHATTERS_SCOPE, REQUIRED_CLIPS_SCOPE];
 const TWITCH_BROADCASTER_SCOPES = [
   'channel:bot',
@@ -94,7 +84,7 @@ const MOD_SESSION_COOKIE = 'sqwert_mod_session';
 const MOD_SESSION_LIFETIME = 12 * 60 * 60 * 1000;
 const MOD_SESSION_COOKIE_SECURE = Boolean(process.env.RENDER_SERVICE_ID || process.env.RENDER || process.env.NODE_ENV === 'production');
 const FALLBACK_ACCESS_TOKEN = (process.env.TWITCH_BOT_ACCESS_TOKEN || '').replace(/^oauth:/i, '').trim();
-const channelName = (process.env.TWITCH_CHANNEL || '').toLowerCase().trim();
+const channelName = normalizeChannelName(process.env.TWITCH_CHANNEL);
 const botUsername = (process.env.TWITCH_BOT_USERNAME || '').toLowerCase().trim();
 
 app.use(express.json({
@@ -108,14 +98,11 @@ if (!QWERT_OAUTH_LINK_SECRET) {
   console.warn('[Startup] QWERT_OAUTH_LINK_SECRET is not set. Private Qwert broadcaster authorization will be unavailable.');
 }
 
-let botConnected = false;
 let runtime = null;
 let eventSubInbox = null;
 let server = null;
 let shutdownPromise = null;
 let retentionTimer = null;
-let usingMongoOAuth = false;
-let twitchClient = null;
 let recapManager = null;
 let customCommandManager = null;
 let chatTimerManager = null;
@@ -124,48 +111,20 @@ let automationSpacingManager = null;
 let persistentPinManager = null;
 let clipCommandManager = null;
 let botPersonalityManager = null;
-let twitchReconnectInProgress = false;
-let twitchAuthRecoveryInProgress = false;
-let twitchAuthRecoveryTimer = null;
-let oauthValidationTimer = null;
-let twitchConnectionGeneration = 0;
+let twitchMessageHandler = null;
+
+const twitchConnection = createTwitchConnectionController({
+  channelName,
+  botUsername,
+  fallbackAccessToken: FALLBACK_ACCESS_TOKEN,
+  oauthValidationIntervalMs: OAUTH_VALIDATION_INTERVAL,
+  isDatabaseConnected,
+  getRuntime: () => runtime,
+  getRecapManager: () => recapManager,
+  getMessageHandler: () => twitchMessageHandler
+});
 
 const shouldFallbackToIrc = canFallbackToIrc;
-
-async function sendViaIrcFallback(channel, message, apiError, options = {}) {
-  if (!twitchClient || !botConnected) {
-    throw apiError;
-  }
-
-  const normalizedChannel = String(channel || '').replace(/^#/, '').toLowerCase();
-  const targetChannel = normalizedChannel || channelName;
-
-  console.warn(
-    `[Chat] Chat API unavailable (${apiError?.message || apiError}). Falling back to IRC for this message.`
-  );
-
-  let fallbackMessage = String(message || '').trim();
-  const fallbackLogin = String(options?.fallbackMentionLogin || '').replace(/^@+/, '').toLowerCase().trim();
-  const fallbackDisplayName = String(options?.fallbackMentionDisplayName || '').replace(/^@+/, '').trim();
-  const fallbackTarget = fallbackLogin || fallbackDisplayName;
-  if (options?.replyParentMessageId && fallbackTarget) {
-    const mentionPattern = new RegExp(`^@${String(fallbackTarget).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|\\s|[,:-])`, 'i');
-    if (!mentionPattern.test(fallbackMessage)) fallbackMessage = `@${fallbackTarget} ${fallbackMessage}`.trim();
-  }
-  fallbackMessage = Array.from(fallbackMessage).slice(0, TWITCH_MESSAGE_LIMIT).join('').trim();
-
-  await context.assertOperation();
-  try { await twitchClient.say(targetChannel, fallbackMessage); }
-  catch (cause) { throw deliveryError('IRC send outcome is unknown; it will not be retried automatically.', { state: 'UNKNOWN', cause }); }
-
-  console.log('[Chat] Message sent through IRC fallback. Bot badge will not apply to this message.');
-
-  return {
-    method: 'irc_fallback',
-    fallback: true,
-    apiError: apiError?.message || String(apiError || '')
-  };
-}
 
 const chatClientProxy = {
   async say(channel, message, options = {}) {
@@ -221,7 +180,7 @@ const chatClientProxy = {
         throw err;
       }
 
-      return sendViaIrcFallback(channel, message, err, options);
+      return twitchConnection.sendViaIrcFallback(channel, message, err, options);
     }
   }
 };
@@ -270,7 +229,7 @@ eventSubReactionManager = createEventSubReactionManager({
   channelName,
   sendMessage: (channel, message, options = {}) => chatClientProxy.say(channel, message, options),
   sendAnnouncement: (message, options) => sendChatAnnouncement(message, options),
-  getBotAccessToken,
+  getBotAccessToken: twitchConnection.getBotAccessToken,
   getCustomCommandManager: () => customCommandManager,
   noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve(),
   getAutomationSpacingSeconds: () => automationSpacingManager?.getSettings?.().minimumSpacingSeconds || 0,
@@ -293,7 +252,7 @@ botPersonalityManager = createBotPersonalityManager({
       currentStreamStartedAt: status.twitchStreamStartedAt || null,
       lastStreamEndedAt: status.lastStreamEndedAt || null,
       lastStreamEndedAgoMs: status.lastStreamEndedAgoMs ?? null,
-      streamTimezone: status.streamTimezone || 'America/Los_Angeles'
+      streamTimezone: status.streamTimezone || STREAM_TIME_ZONE
     };
   },
   getSessionMemoryContext: (request) => recapManager?.getSessionMemoryContext?.(request) || { text: '' },
@@ -307,7 +266,7 @@ clipCommandManager = createClipCommandManager({
   getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables)
 });
 
-const twitchMessageHandler = createTwitchMessageHandler({
+twitchMessageHandler = createTwitchMessageHandler({
   getRecapManager: () => recapManager,
   getCustomCommandManager: () => customCommandManager,
   getChatTimerManager: () => chatTimerManager,
@@ -320,282 +279,6 @@ const twitchMessageHandler = createTwitchMessageHandler({
   summaryPrefix: SUMMARY_PREFIX
 });
 
-async function getBotAccessToken() {
-  try {
-    const stored = await getAccessToken();
-    if (stored) {
-      usingMongoOAuth = true;
-      return stored;
-    }
-  } catch (err) {
-    console.error('[OAuth Bot] Failed to read stored Twitch token:', err.message || err);
-  }
-
-  usingMongoOAuth = false;
-  return FALLBACK_ACCESS_TOKEN || null;
-}
-
-async function refreshBotAccessToken() {
-  const refreshed = await refreshStoredToken();
-  usingMongoOAuth = true;
-  return refreshed;
-}
-
-async function validateAnyBotToken(token) {
-  return validateAccessToken(token);
-}
-
-function isIrcAuthenticationFailure(reason) {
-  const text = String(reason || '').toLowerCase();
-  return text.includes('login authentication failed') || text.includes('improperly formatted auth');
-}
-
-function clearTwitchAuthRecoveryTimer() {
-  if (twitchAuthRecoveryTimer) {
-    clearTimeout(twitchAuthRecoveryTimer);
-    twitchAuthRecoveryTimer = null;
-  }
-}
-
-async function recoverTwitchIrcAuthentication(reason = 'IRC authentication failure') {
-  if (!runtime?.isActive() || !usingMongoOAuth || twitchAuthRecoveryInProgress) return;
-
-  twitchAuthRecoveryInProgress = true;
-  clearTwitchAuthRecoveryTimer();
-
-  try {
-    console.warn(`[OAuth Bot] ${reason}. Validating the stored bot token and refreshing it if needed.`);
-
-    // If MongoDB already contains a newer valid token, use it. Otherwise a 401
-    // from /validate automatically refreshes the token and saves the rotated
-    // access + refresh token pair before we reconnect tmi.js.
-    const accessToken = await getValidAccessToken({ allowRefresh: true });
-    if (!accessToken) throw new Error('No MongoDB Twitch bot authorization is available.');
-
-    usingMongoOAuth = true;
-    await reconnectTwitchClient(reason, { accessToken });
-    console.log('[OAuth Bot] IRC authentication recovery completed successfully.');
-  } catch (err) {
-    console.error('[OAuth Bot] IRC authentication recovery failed:', err.message || err);
-
-    // A revoked/invalid refresh token genuinely requires consent again. Do not
-    // hammer Twitch in that case. Transient network/5xx failures get one delayed
-    // retry path so the bot can heal without manual intervention.
-    if (!err?.reauthorizationRequired) {
-      twitchAuthRecoveryTimer = setTimeout(() => {
-        twitchAuthRecoveryTimer = null;
-        recoverTwitchIrcAuthentication('retry after IRC authentication failure').catch((retryErr) => {
-          console.error('[OAuth Bot] Delayed IRC authentication recovery failed:', retryErr.message || retryErr);
-        });
-      }, 15000);
-      console.warn('[OAuth Bot] IRC authentication recovery will retry in 15 seconds.');
-    } else {
-      console.error('[OAuth Bot] Twitch reports that the bot authorization itself is no longer refreshable. Manual bot reauthorization is required.');
-    }
-  } finally {
-    twitchAuthRecoveryInProgress = false;
-  }
-}
-
-async function validateStoredOAuthSessions() {
-  if (!isDatabaseConnected() || !runtime?.isActive()) return;
-
-  try {
-    const before = await getStoredAuth();
-    const validBotToken = await getValidAccessToken({ allowRefresh: true });
-    const after = await getStoredAuth();
-
-    if (validBotToken) {
-      usingMongoOAuth = true;
-      console.log('[OAuth Bot] Hourly token validation succeeded.');
-
-      // If validation had to refresh the token, rebuild the IRC client with the
-      // newly stored token now instead of waiting for Twitch to force a RECONNECT.
-      if (before?.accessToken && after?.accessToken && before.accessToken !== after.accessToken) {
-        await reconnectTwitchClient('hourly OAuth refresh', { accessToken: after.accessToken });
-      }
-    }
-  } catch (err) {
-    if (err?.reauthorizationRequired) {
-      console.error('[OAuth Bot] Authorization can no longer be refreshed. Manual bot reauthorization is required.');
-    } else {
-      console.warn('[OAuth Bot] Hourly token validation failed:', err.message || err);
-    }
-  }
-
-  try {
-    const broadcasterToken = await getValidBroadcasterAccessToken({ allowRefresh: true });
-    if (broadcasterToken) {
-      console.log('[OAuth Broadcaster] Hourly token validation succeeded.');
-    }
-  } catch (err) {
-    if (err?.reauthorizationRequired) {
-      console.error('[OAuth Broadcaster] Authorization can no longer be refreshed. Qwert must authorize again.');
-    } else {
-      console.warn('[OAuth Broadcaster] Hourly token validation failed:', err.message || err);
-    }
-  }
-}
-
-function startOAuthValidationLoop() {
-  if (oauthValidationTimer) clearInterval(oauthValidationTimer);
-  oauthValidationTimer = setInterval(() => {
-    validateStoredOAuthSessions().catch((err) => {
-      console.warn('[OAuth] Scheduled OAuth validation error:', err.message || err);
-    });
-  }, OAUTH_VALIDATION_INTERVAL);
-}
-
-async function resolveStartupToken() {
-  try {
-    const stored = await getValidAccessToken({ allowRefresh: true });
-    if (stored) {
-      usingMongoOAuth = true;
-      console.log('[OAuth Bot] Using Twitch token stored in MongoDB.');
-      return stored;
-    }
-  } catch (err) {
-    console.error('[OAuth Bot] Stored Twitch token could not be used:', err.message || err);
-  }
-
-  if (FALLBACK_ACCESS_TOKEN) {
-    usingMongoOAuth = false;
-    console.warn('[OAuth Bot] Using legacy TWITCH_BOT_ACCESS_TOKEN fallback. Authorize the bot in the WebUI to move fully to MongoDB OAuth.');
-    return FALLBACK_ACCESS_TOKEN;
-  }
-
-  return null;
-}
-
-function attachTwitchHandlers(client, generation) {
-  client.on('connected', () => {
-    if (generation !== twitchConnectionGeneration || !runtime?.isActive()) return;
-    botConnected = true;
-    console.log('[Bot] Twitch chat connection is online.');
-  });
-
-  client.on('disconnected', (reason) => {
-    if (generation !== twitchConnectionGeneration || !runtime?.isActive()) return;
-    botConnected = false;
-    console.log('[Bot] Twitch chat disconnected:', reason);
-
-    // tmi.js does not always surface Twitch's login failure through the notice
-    // handler before the socket closes. The disconnect reason does contain it,
-    // so recover here as well. This is the path that handles a Twitch RECONNECT
-    // arriving after the IRC access token has expired.
-    if (usingMongoOAuth && isIrcAuthenticationFailure(reason)) {
-      recoverTwitchIrcAuthentication('IRC disconnect reported an authentication failure').catch((err) => {
-        console.error('[OAuth Bot] IRC disconnect recovery error:', err.message || err);
-      });
-    }
-  });
-
-  client.on('notice', (channel, msgid, message) => {
-    if (generation !== twitchConnectionGeneration || !runtime?.isActive()) return;
-
-    if (usingMongoOAuth && isIrcAuthenticationFailure(message)) {
-      recoverTwitchIrcAuthentication('IRC NOTICE reported an authentication failure').catch((err) => {
-        console.error('[OAuth Bot] IRC notice recovery error:', err.message || err);
-      });
-    }
-  });
-
-  client.on('announcement', (channel, tags, message, self, color) => {
-    if (generation !== twitchConnectionGeneration || !recapManager || !runtime?.canServeControls()) return;
-
-    const rawMessage = String(message || '').trim();
-    if (!rawMessage) return;
-
-    const displayName = tags?.['display-name'] || tags?.login || tags?.username || 'moderator';
-    recapManager.recordModeratorAnnouncement({
-      displayName,
-      rawMessage,
-      color: String(color || tags?.['msg-param-color'] || '').trim(),
-      tags,
-      twitchMessageId: tags?.id || tags?.['message-id'] || '',
-      timestamp: tags?.['tmi-sent-ts'] || Date.now()
-    });
-  });
-
-  client.on('message', async (channel, tags, message) => {
-    if (generation !== twitchConnectionGeneration || !recapManager || !runtime?.canServeControls()) return;
-    await context.runOperation(() => twitchMessageHandler.handleMessage(channel, tags, message))
-      .catch((err) => { if (!err.cancelled) console.error('[Chat Handler] Message processing failed:', err.message); });
-  });
-}
-
-
-async function createAndConnectTwitchClient(accessToken) {
-  await context.assertOperation();
-  if (!accessToken) throw new Error('No Twitch access token is available.');
-  if (!botUsername || !channelName) {
-    throw new Error('TWITCH_BOT_USERNAME or TWITCH_CHANNEL is missing.');
-  }
-
-  twitchConnectionGeneration++;
-  const generation = twitchConnectionGeneration;
-
-  const client = new tmi.Client({
-    options: { debug: true },
-    identity: {
-      username: botUsername,
-      password: `oauth:${accessToken.replace(/^oauth:/i, '')}`
-    },
-    channels: [channelName]
-  });
-
-  attachTwitchHandlers(client, generation);
-  twitchClient = client;
-  let connectTimer;
-  try {
-    await Promise.race([client.connect(), new Promise((_, reject) => {
-      connectTimer = setTimeout(() => reject(new Error('Twitch IRC connection timed out after 20 seconds.')), 20000);
-    })]);
-    await context.assertOperation();
-  } catch (err) { void client.disconnect().catch(() => {}); throw err; }
-  finally { clearTimeout(connectTimer); }
-  botConnected = true;
-  console.log(`[Bot] Connected to Twitch channel: #${channelName}`);
-  return client;
-}
-
-async function reconnectTwitchClient(reason = 'manual reconnect', { accessToken = null } = {}) {
-  if (twitchReconnectInProgress || !runtime?.isActive()) return;
-  twitchReconnectInProgress = true;
-
-  try {
-    console.log(`[Bot] Reconnecting Twitch client: ${reason}`);
-    const oldClient = twitchClient;
-    botConnected = false;
-
-    if (oldClient) {
-      try {
-        await oldClient.disconnect();
-      } catch (err) {
-        console.warn('[Bot] Old Twitch client disconnect warning:', err.message || err);
-      }
-    }
-
-    const tokenToUse = accessToken || await getBotAccessToken();
-    await createAndConnectTwitchClient(tokenToUse);
-    await recapManager?.start();
-    await recapManager?.checkStreamStatus();
-    console.log('[Bot] Twitch client reconnected successfully.');
-  } finally {
-    twitchReconnectInProgress = false;
-  }
-}
-
-
-
-// Express 4 does not catch rejected async route handlers automatically.
-for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
-  const register = app[method].bind(app);
-  app[method] = (path, ...handlers) => register(path, ...handlers.map((handler) => typeof handler !== 'function' ? handler :
-    function safeRoute(req, res, next) {
-      try { Promise.resolve(handler(req, res, next)).catch(next); } catch (err) { next(err); }
-    }));
-}
 app.use((req, res, next) => {
   const exempt = req.path.startsWith('/auth/') || req.path === '/eventsub/twitch' || req.path === '/mod-login' || req.path === '/mod-logout';
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !exempt && !runtime?.canServeControls()) {
@@ -626,8 +309,8 @@ registerDashboardRoutes(app, {
   getRuntimeStatus: () => runtime?.status() || {},
   getBotPersonalityManager: () => botPersonalityManager,
   getDatabaseConnected: () => isDatabaseConnected(),
-  getBotConnected: () => botConnected,
-  getUsingMongoOAuth: () => usingMongoOAuth,
+  getBotConnected: () => twitchConnection.isConnected(),
+  getUsingMongoOAuth: () => twitchConnection.isUsingMongoOAuth(),
   viewsDir: path.join(__dirname, 'views'),
   adminPath: ADMIN_PATH
 });
@@ -650,8 +333,8 @@ registerRecapRoutes(app, {
 registerAuthRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => isDatabaseConnected(),
-  setUsingMongoOAuth: (value) => { usingMongoOAuth = Boolean(value); },
-  reconnectTwitchClient,
+  setUsingMongoOAuth: (value) => twitchConnection.setUsingMongoOAuth(value),
+  reconnectTwitchClient: twitchConnection.reconnect,
   channelName,
   botUsername,
   clientId: TWITCH_CLIENT_ID,
@@ -711,8 +394,8 @@ async function activateBot() {
   await eventSubReactionManager.initialize();
   await botPersonalityManager.initialize();
   recapManager = createRecapManager({
-    client: chatClientProxy, channelName, getTwitchAccessToken: getBotAccessToken,
-    refreshTwitchAccessToken: refreshBotAccessToken, validateTwitchAccessToken: validateAnyBotToken,
+    client: chatClientProxy, channelName, getTwitchAccessToken: twitchConnection.getBotAccessToken,
+    refreshTwitchAccessToken: twitchConnection.refreshBotAccessToken, validateTwitchAccessToken: twitchConnection.validateAnyBotToken,
     getSessionMemoryConfig: () => botPersonalityManager?.getConfig?.()?.sessionMemory || {},
     getEventReactionHoldStatus,
     getTaggedQuestionRecapBufferStatus: () => botPersonalityManager?.getRecapCollisionStatus?.() || { active: false },
@@ -724,9 +407,9 @@ async function activateBot() {
   await chatTimerManager.initialize();
   // Detection remains restartable even if initial OAuth/IRC is unavailable.
   await recapManager.start();
-  const accessToken = await resolveStartupToken();
+  const accessToken = await twitchConnection.resolveStartupToken();
   if (accessToken) {
-    try { await createAndConnectTwitchClient(accessToken); }
+    try { await twitchConnection.createAndConnect(accessToken); }
     catch (err) { console.warn('[Bot] Initial chat connection failed; automatic recovery will retry:', err.message); }
   }
   eventSubInbox.start();
@@ -734,7 +417,9 @@ async function activateBot() {
   catch (err) { console.warn('[Persistent Pin] Startup sync pending:', err.message); }
   try { await runEventSubEnsure(); }
   catch (err) { console.warn('[EventSub] Subscription setup pending:', err.message); }
-  startOAuthValidationLoop();
+  twitchConnection.startOAuthValidationLoop();
+  try { await purgeExpiredOptedOutProfiles(channelName); }
+  catch (err) { console.warn('[Retention] Startup purge pending:', err.message); }
   retentionTimer = setInterval(() => {
     if (runtime.isActive()) void purgeExpiredOptedOutProfiles(channelName).catch((err) => console.warn('[Retention]', err.message));
   }, 6 * 60 * 60000);
@@ -764,13 +449,7 @@ async function runEventSubEnsure() {
 
 async function maintainBot() {
   if (!runtime.isActive()) return;
-  if (!botConnected && !twitchReconnectInProgress) {
-    const token = await resolveStartupToken();
-    if (token) {
-      try { await reconnectTwitchClient('automatic connection recovery', { accessToken: token }); }
-      catch (err) { console.warn('[Bot] Recovery pending:', err.message); }
-    }
-  }
+  await twitchConnection.maintainConnection();
 
   // Healthy EventSub subscriptions only need a periodic reconciliation. Missing
   // optional scopes are expected and do not trigger the five-minute retry loop;
@@ -794,8 +473,7 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
   activate: activateBot,
   maintenance: maintainBot,
   quiesce: () => {
-    botConnected = false; twitchConnectionGeneration++;
-    clearTwitchAuthRecoveryTimer(); clearInterval(oauthValidationTimer); clearInterval(retentionTimer);
+    twitchConnection.quiesce(); clearInterval(retentionTimer);
     recapManager?.quiesce(); chatTimerManager?.quiesce(); persistentPinManager?.quiesce();
     eventSubInbox?.quiesce(); stopTemporaryPinTimer(); cancelAllGeminiRequests();
   },
@@ -804,9 +482,7 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
     if (persist) { work.push(recapManager?.shutdown({ persist: true }), chatTimerManager?.shutdown()); }
     const results = await Promise.allSettled(work);
     for (const result of results) if (result.status === 'rejected') console.error('[Shutdown] Durable flush failed:', result.reason?.message);
-    if (twitchClient) {
-      try { await twitchClient.disconnect(); } catch (err) { console.warn('[Shutdown] IRC disconnect:', err.message); }
-    }
+    await twitchConnection.disconnect();
     const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
     if (failures.length) throw new AggregateError(failures, 'One or more shutdown checkpoints failed.');
   },
@@ -816,71 +492,16 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
 context.configureRuntime(runtime);
 configureSharedRateGate(createRateGate({ key: process.env.GEMINI_API_KEY || 'unconfigured', limit: HARD_MAX_REQUESTS_PER_MINUTE }));
 
-// Recovery actions require an authenticated operator and an explicit outcome.
-app.get('/reliability/status', requireModSession, async (req, res) => {
-  const state = runtime.status();
-  if (!state.ready) return res.json({ success: true, runtime: state, review: [] });
-  const timers = await chatTimerManager.listTimers();
-  const recap = recapManager.getStatus();
-  const pin = persistentPinManager.getConfig();
-  const pendingKeys = [recap.recoveryDeliveryKey,
-    ...timers.filter((item) => item.recoveryRequired).map((item) => item.deliveryKey),
-    pin.recoveryRequired ? pin.deliveryKey : ''].filter(Boolean);
-  // A Mongo acknowledgement can be lost AFTER a receipt was committed. Include
-  // such confirmed receipts while the owning feature still awaits reconciliation.
-  const rows = await collection().find({ namespace: channelName, $or: [
-    { kind: 'event', state: { $in: ['review', 'failed'] } },
-    { kind: 'delivery', state: { $in: ['unknown', 'sending'] } },
-    { kind: 'delivery', key: { $in: pendingKeys } }
-  ] }, { maxTimeMS: 5000 }).sort({ createdAt: -1 }).limit(100).toArray();
-  const eventKeys = new Set(rows.filter((row) => row.kind === 'event' && row.deliveryKey).map((row) => row.deliveryKey));
-  const review = [];
-  for (const row of rows) {
-    if (row.kind === 'event') {
-      if (row.deliveryKey && delivery.isInFlight(row.deliveryKey)) continue;
-      review.push({ target: 'event', id: row.messageId, deliveryKey: row.deliveryKey || '', state: row.state,
-        title: `Twitch event: ${row.payload?.type || 'notification'}`, detail: row.lastError || '',
-        createdAt: row.createdAt, retryOnly: row.state === 'failed' });
-      continue;
-    }
-    if (delivery.isInFlight(row.key) || eventKeys.has(row.key)) continue;
-    const timer = timers.find((item) => item.deliveryKey === row.key);
-    const isRecap = recap.recoveryDeliveryKey === row.key;
-    const isPin = pin.deliveryKey === row.key && pin.recoveryRequired;
-    review.push({ target: isRecap ? 'recap' : timer ? 'timer' : isPin ? 'pin' : 'delivery',
-      id: timer ? timer.id : row.key, deliveryKey: row.key, state: row.state,
-      title: isRecap ? 'Hourly recap' : timer ? `Timer: ${timer.name}` : isPin ? 'Rotating pinned banner' : row.deliveryKind,
-      detail: row.lastError || 'Twitch may have received this action before its acknowledgement was saved.',
-      preview: String(row.payload?.message || row.payload?.rendered || '').slice(0, 500), createdAt: row.createdAt });
-  }
-  res.json({ success: true, runtime: state, review });
+registerReliabilityRoutes(app, {
+  requireModSession,
+  channelName,
+  getRuntime: () => runtime,
+  getChatTimerManager: () => chatTimerManager,
+  getRecapManager: () => recapManager,
+  getPersistentPinManager: () => persistentPinManager,
+  getEventSubInbox: () => eventSubInbox
 });
-app.post('/reliability/resolve', requireModSession, async (req, res) => {
-  const { target, id, outcome, expectedDeliveryKey } = req.body;
-  if (typeof expectedDeliveryKey !== 'string' || !expectedDeliveryKey ||
-      (['recap', 'pin', 'delivery'].includes(target) && id !== expectedDeliveryKey)) {
-    return res.status(409).json({ success: false, error: 'Refresh the recovery panel before reviewing this exact delivery.' });
-  }
-  if (!['sent', 'not_sent'].includes(outcome) || req.body.confirmed !== true) return res.status(400).json({ success: false, error: 'Confirm whether the message was sent or definitely not sent.' });
-  let result;
-  if (target === 'recap') result = await recapManager.resolveDeliveryReview(outcome, expectedDeliveryKey);
-  else if (target === 'timer') result = await chatTimerManager.resolveReview(id, outcome, expectedDeliveryKey);
-  else if (target === 'pin') result = await persistentPinManager.resolveReview(outcome, expectedDeliveryKey);
-  else if (target === 'event') { await eventSubInbox.resolveReview(id, outcome, expectedDeliveryKey); result = { success: true, message: 'Event receipt resolved. Remaining unfinished actions will resume.' }; }
-  else if (target === 'delivery') {
-    const row = await delivery.get(id);
-    if (!row || row.namespace !== channelName) return res.status(404).json({ success: false, error: 'Delivery record not found for this channel.' });
-    const saved = await delivery.resolve(id, outcome);
-    result = { success: Boolean(saved), message: 'Receipt reviewed. No standalone message was automatically restarted.' };
-  } else return res.status(400).json({ success: false, error: 'Invalid recovery target.' });
-  if (result?.success === false) return res.status(409).json({ success: false, error: result.message || 'The operation changed; refresh its status.' });
-  res.json({ success: true, message: result?.message || 'Delivery reviewed. Refresh the affected control before continuing.', result });
-});
-app.post('/reliability/retry-event', requireModSession, async (req, res) => {
-  if (req.body.confirmed !== true) return res.status(400).json({ success: false, error: 'Explicit confirmation is required.' });
-  await eventSubInbox.retryFailed(req.body.id);
-  res.json({ success: true, message: 'Failed event requeued. Completed action steps will not be repeated.' });
-});
+
 app.use((err, req, res, next) => {
   console.error('[WebUI] Request failed:', err.message);
   if (res.headersSent) return next(err);

@@ -4,6 +4,7 @@ const { getFollowInfo: getTwitchFollowInfo, formatFollowAge, formatFollowDate } 
 const { getGameInfo: getTwitchGameInfo } = require('./twitchChannels');
 const { isSharedChatGuest } = require('./sourceRecords');
 
+const { createOwnResponseTracker } = require('../shared/ownResponseTracker');
 const MAX_COMMAND_NAME_LENGTH = 80;
 const MAX_PUBLIC_DESCRIPTION_LENGTH = 300;
 const MAX_TRIGGER_LENGTH = 120;
@@ -15,7 +16,6 @@ const MAX_RESPONSE_DELAY_SECONDS = 30;
 const DEFAULT_COMMAND_COOLDOWN_SECONDS = 5;
 const DEFAULT_GLOBAL_COOLDOWN_SECONDS = 5;
 const RESERVED_COMMANDS = new Set(['!commands', '!recap', '!startrecap', '!stoprecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
-const OWN_RESPONSE_TTL_MS = 15000;
 const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
 const RESPONSE_MODES = ['equal', 'weighted', 'ifelse'];
 const SEND_AS_MODES = ['chat', 'reply', 'announcement'];
@@ -448,7 +448,7 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
   let lastGlobalResponseAt = 0;
   let globalResponseInFlight = false;
   const lastTriggeredAt = new Map();
-  const ownResponses = [];
+  const { note: noteOwnResponse, consume: consumeOwnResponse } = createOwnResponseTracker();
 
   async function refreshCache() {
     cache = await CustomCommand.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
@@ -586,24 +586,6 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
     return commandToClient(updated);
   }
 
-  function cleanupOwnResponses() {
-    const cutoff = Date.now() - OWN_RESPONSE_TTL_MS;
-    while (ownResponses.length && ownResponses[0].createdAt < cutoff) ownResponses.shift();
-  }
-
-  function noteOwnResponse(message) {
-    cleanupOwnResponses();
-    ownResponses.push({ message: String(message || '').trim(), createdAt: Date.now() });
-  }
-
-  function consumeOwnResponse(message) {
-    cleanupOwnResponses();
-    const normalized = String(message || '').trim();
-    const index = ownResponses.findIndex((entry) => entry.message === normalized);
-    if (index === -1) return false;
-    ownResponses.splice(index, 1);
-    return true;
-  }
 
   function findMatch(rawMessage) {
     const raw = String(rawMessage || '').trim();

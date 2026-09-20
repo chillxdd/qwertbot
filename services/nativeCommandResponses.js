@@ -1,10 +1,11 @@
 const NativeCommandConfig = require('../models/NativeCommandConfig');
+const { COMMANDS_URL } = require('../config/app');
 
 const MAX_RESPONSE_LENGTH = 450;
 const OPTIONAL_BLANK_RESPONSES = new Set(['setlast.success', 'cliplast.success', 'clip.success']);
 const DEFAULT_NATIVE_RESPONSES = Object.freeze({
   commands: {
-    response: 'All SqwertArmyBot commands: https://sqwertarmybot.onrender.com/commands'
+    response: `All SqwertArmyBot commands: ${COMMANDS_URL}`
   },
   last: {
     response: 'Last Notable Run End: $(clipurl)',

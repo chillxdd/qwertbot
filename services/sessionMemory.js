@@ -17,43 +17,23 @@ const {
   sharedChatOriginFromRecord
 } = require('./sourceRecords');
 const { auditGeneratedAttribution } = require('./attributionAudit');
-const DEFAULT_SESSION_MEMORY_CONFIG = Object.freeze({
-  enabled: true,
-  recentDetailedHours: 2,
-  maxContextCharacters: 18000,
-  recentChatMessages: 30,
-  relevantOlderBlocks: 2,
-  promptInstructions: ''
-});
-
-const MIN_RECENT_DETAILED_HOURS = 1;
-const MAX_RECENT_DETAILED_HOURS = 8;
-const MIN_MAX_CONTEXT_CHARACTERS = 4000;
-const MAX_MAX_CONTEXT_CHARACTERS = 40000;
-const MIN_RECENT_CHAT_MESSAGES = 0;
-const MAX_RECENT_CHAT_MESSAGES = 100;
-const MIN_RELEVANT_OLDER_BLOCKS = 0;
-const MAX_RELEVANT_OLDER_BLOCKS = 6;
-const MAX_SESSION_MEMORY_PROMPT_LENGTH = 6000;
+const {
+  DEFAULT_SESSION_MEMORY_CONFIG,
+  MIN_RECENT_DETAILED_HOURS,
+  MAX_RECENT_DETAILED_HOURS,
+  MIN_MAX_CONTEXT_CHARACTERS,
+  MAX_MAX_CONTEXT_CHARACTERS,
+  MIN_RECENT_CHAT_MESSAGES,
+  MAX_RECENT_CHAT_MESSAGES,
+  MIN_RELEVANT_OLDER_BLOCKS,
+  MAX_RELEVANT_OLDER_BLOCKS,
+  MAX_SESSION_MEMORY_PROMPT_LENGTH,
+  normalizeSessionMemoryConfig
+} = require('../features/memory/sessionConfig');
+const { tokenize, identityRetrievalTerms, scoreBlockForQuestion } = require('../features/memory/sessionRetrieval');
+const { buildSessionMemoryContext, formatSharedChatGuestMemoryProvenance } = require('../features/memory/sessionContext');
 const MAX_DETAILED_SUMMARY_LENGTH = 3000;
 const MAX_COMPACT_SUMMARY_LENGTH = 550;
-
-function clampNumber(value, min, max, fallback) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.min(max, Math.round(parsed)));
-}
-
-function normalizeSessionMemoryConfig(value = {}) {
-  return {
-    enabled: value?.enabled !== false,
-    recentDetailedHours: clampNumber(value?.recentDetailedHours, MIN_RECENT_DETAILED_HOURS, MAX_RECENT_DETAILED_HOURS, DEFAULT_SESSION_MEMORY_CONFIG.recentDetailedHours),
-    maxContextCharacters: clampNumber(value?.maxContextCharacters, MIN_MAX_CONTEXT_CHARACTERS, MAX_MAX_CONTEXT_CHARACTERS, DEFAULT_SESSION_MEMORY_CONFIG.maxContextCharacters),
-    recentChatMessages: clampNumber(value?.recentChatMessages, MIN_RECENT_CHAT_MESSAGES, MAX_RECENT_CHAT_MESSAGES, DEFAULT_SESSION_MEMORY_CONFIG.recentChatMessages),
-    relevantOlderBlocks: clampNumber(value?.relevantOlderBlocks, MIN_RELEVANT_OLDER_BLOCKS, MAX_RELEVANT_OLDER_BLOCKS, DEFAULT_SESSION_MEMORY_CONFIG.relevantOlderBlocks),
-    promptInstructions: String(value?.promptInstructions || '').trim().slice(0, MAX_SESSION_MEMORY_PROMPT_LENGTH)
-  };
-}
 
 async function callBackgroundGemini(prompt, label) {
   return requestGeminiTextWithRetry(prompt, {
@@ -235,24 +215,6 @@ function collectSharedChatGuestIdentities(chatRecords = []) {
     if (guests.length >= 100) break;
   }
   return guests;
-}
-
-function formatSharedChatGuestMemoryProvenance(block = {}) {
-  const guests = Array.isArray(block?.sharedChatGuests) ? block.sharedChatGuests : [];
-  if (!guests.length) return '';
-  const lines = guests.slice(0, 100).map((guest) => {
-    const viewer = String(guest?.displayName || guest?.login || 'Guest viewer').trim();
-    const login = String(guest?.login || '').trim();
-    const source = String(
-      guest?.sourceBroadcasterDisplayName || guest?.sourceBroadcasterLogin ||
-      (guest?.sourceBroadcasterUserId ? `source room ${guest.sourceBroadcasterUserId}` : 'another participating channel')
-    ).trim();
-    return `- ${viewer}${login && login.toLowerCase() !== viewer.toLowerCase() ? ` (@${login})` : ''} originated from ${source} through Twitch Shared Chat.`;
-  });
-  return [
-    'SHARED CHAT GUEST PROVENANCE (temporary current-stream context only; this does not establish GeneralQwert community membership):',
-    ...lines
-  ].join('\n');
 }
 
 async function generateSessionMemoryBlock({ chatLogs = [], streamContexts = [], twitchEvents = [], streamLore = '', streamTiming = {}, publicRecap = '', config = {}, channelName = 'generalqwert' }) {
@@ -1311,170 +1273,6 @@ ${createUntrustedBlock('STREAM_LORE_SOURCE', loreSourceChat.join('\n'))}`;
   const observations = collapseCandidatesByExistingTarget([...dedupe.values()]);
   console.log(`[Stream Lore] Learning pass: ${indexedLines.length} source message(s), ${proposed} proposed, ${accepted} accepted, ${rejectedEvidence} rejected for evidence IDs, ${rejectedEntailment} rejected by independent ownership/entailment audit, ${rejectedRelation} rejected for invalid relation/target, ${rejectedScope} rejected for invalid/ungrounded scope, ${rejectedGeneric} rejected as generic/base-rate channel activity, ${rejectedSafety} rejected by safety/telemetry filters.`);
   return observations;
-}
-
-function tokenize(text) {
-  const stop = new Set(['the','and','for','that','this','with','what','when','where','which','who','why','how','did','does','was','were','are','is','it','to','of','in','on','at','a','an','qwert','sqwertarmybot','bot','earlier','today','tonight','stream']);
-  return String(text || '').toLowerCase().match(/[\p{L}\p{N}_'-]{2,}/gu)?.filter((word) => !stop.has(word)) || [];
-}
-
-function identityRetrievalTerms(identity = {}) {
-  const normalized = normalizeIdentity(identity || {});
-  return [...new Set([
-    normalized.userId,
-    normalized.login,
-    normalized.displayName,
-    ...(normalized.aliases || [])
-  ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean))];
-}
-
-function blockSearchText(block = {}) {
-  const claims = (Array.isArray(block?.claims) ? block.claims : [])
-    .map((claim) => `${claim?.text || ''} ${(claim?.people || []).join(' ')}`)
-    .join(' ');
-  const sharedGuests = (Array.isArray(block?.sharedChatGuests) ? block.sharedChatGuests : [])
-    .map((guest) => `${guest?.userId || ''} ${guest?.login || ''} ${guest?.displayName || ''} ${guest?.sourceBroadcasterLogin || ''} ${guest?.sourceBroadcasterDisplayName || ''}`)
-    .join(' ');
-  return `${block?.topics?.join(' ') || ''} ${block?.people?.join(' ') || ''} ${block?.compactSummary || ''} ${block?.detailedSummary || ''} ${claims} ${sharedGuests}`.toLowerCase();
-}
-
-function scoreBlockForQuestion(block, questionTokens, identityTerms = []) {
-  const haystack = blockSearchText(block);
-  let score = 0;
-  for (const token of questionTokens) {
-    if (haystack.includes(token)) score += 1;
-    if ((block?.topics || []).some((item) => String(item).toLowerCase().includes(token))) score += 2;
-    if ((block?.people || []).some((item) => String(item).toLowerCase().includes(token))) score += 3;
-  }
-  for (const term of identityTerms) {
-    if (!term) continue;
-    const sharedGuestMatch = (Array.isArray(block?.sharedChatGuests) ? block.sharedChatGuests : []).some((guest) => [
-      guest?.userId,
-      guest?.login,
-      guest?.displayName
-    ].some((value) => String(value || '').trim().toLowerCase() === term));
-    if ((block?.people || []).some((item) => String(item).toLowerCase() === term)) score += 8;
-    else if (sharedGuestMatch) score += 8;
-    else if (haystack.includes(term)) score += 4;
-  }
-  if (block?.attributionAudited === true) score += 1;
-  return score;
-}
-
-function formatBlockTime(block) {
-  const start = Number(block?.startedAtMs || 0);
-  const end = Number(block?.endedAtMs || 0);
-  if (!start && !end) return 'time unavailable';
-  const fmt = (value) => value ? new Date(value).toISOString() : '?';
-  return `${fmt(start)} to ${fmt(end)}`;
-}
-
-function formatMemoryClaims(block = {}) {
-  const claims = Array.isArray(block?.claims) ? block.claims.filter((claim) => String(claim?.text || '').trim()) : [];
-  if (!claims.length) return '';
-  return [
-    'AUDITED ATOMIC CLAIMS:',
-    ...claims.slice(0, 24).map((claim) => `- ${String(claim.text).trim()}${claim.sourceIds?.length ? ` [sources: ${claim.sourceIds.join(', ')}]` : ''}`)
-  ].join('\n');
-}
-
-function formatDetailedMemoryBlock(block = {}) {
-  const audited = block?.attributionAudited === true;
-  const header = `${audited ? 'AUDITED DETAILED MEMORY' : 'LEGACY UNAUDITED MEMORY'} [${formatBlockTime(block)}]:`;
-  const warning = audited
-    ? ''
-    : 'CAUTION: This block predates attribution auditing. Use it only for broad topic orientation; do not rely on its named-person, possession, relationship, or pronoun claims without current structured evidence.';
-  const claims = audited ? formatMemoryClaims(block) : '';
-  const sharedChatProvenance = formatSharedChatGuestMemoryProvenance(block);
-  return [header, warning, sharedChatProvenance, String(block?.detailedSummary || '').trim(), claims].filter(Boolean).join('\n');
-}
-
-function buildSessionMemoryContext({
-  blocks = [],
-  question = '',
-  requesterIdentity = null,
-  recipientIdentity = null,
-  recentChatLogs = [],
-  config = {},
-  streamLive = false
-}) {
-  const normalizedConfig = normalizeSessionMemoryConfig(config);
-  if (!normalizedConfig.enabled || !streamLive) {
-    return { text: '', stats: { enabled: normalizedConfig.enabled, blockCount: Array.isArray(blocks) ? blocks.length : 0, includedDetailedBlocks: 0, compactCharacters: 0, contextCharacters: 0 } };
-  }
-
-  const validBlocks = (Array.isArray(blocks) ? blocks : []).filter((block) => block?.detailedSummary || block?.compactSummary);
-  const now = Date.now();
-  const recentCutoff = now - normalizedConfig.recentDetailedHours * 60 * 60 * 1000;
-  const recent = validBlocks.filter((block) => Number(block?.endedAtMs || 0) >= recentCutoff);
-  const older = validBlocks.filter((block) => Number(block?.endedAtMs || 0) < recentCutoff);
-  const requester = normalizeIdentity(requesterIdentity || {});
-  const recipient = normalizeIdentity(recipientIdentity || {});
-  const identityTerms = [...new Set([...identityRetrievalTerms(requester), ...identityRetrievalTerms(recipient)])];
-  const questionTokens = tokenize([question, ...identityTerms].join(' '));
-  const relevantOlder = older
-    .map((block, index) => ({ block, index, score: scoreBlockForQuestion(block, questionTokens, identityTerms) }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score || b.index - a.index)
-    .slice(0, normalizedConfig.relevantOlderBlocks)
-    .map((item) => item.block);
-
-  const compactLines = validBlocks.map((block, index) => {
-    const labels = [...(block?.topics || []), ...(block?.people || [])].slice(0, 8).join(', ');
-    const auditLabel = block?.attributionAudited === true ? 'audited' : 'legacy-unaudited';
-    const sharedGuests = (Array.isArray(block?.sharedChatGuests) ? block.sharedChatGuests : [])
-      .map((guest) => guest?.displayName || guest?.login)
-      .filter(Boolean)
-      .slice(0, 12);
-    const sharedLabel = sharedGuests.length ? ` | Shared Chat guests (not GeneralQwert membership): ${sharedGuests.join(', ')}` : '';
-    return `- Block ${index + 1} [${formatBlockTime(block)}; ${auditLabel}]: ${String(block?.compactSummary || block?.detailedSummary || '').trim()}${labels ? ` | Index: ${labels}` : ''}${sharedLabel}`;
-  });
-
-  const selectedDetailed = [];
-  const seen = new Set();
-  for (const block of [...recent, ...relevantOlder]) {
-    const key = `${block?.sequence || ''}:${block?.endedAtMs || ''}:${block?.detailedSummary || ''}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    selectedDetailed.push(block);
-  }
-
-  const detailSections = selectedDetailed.map(formatDetailedMemoryBlock);
-  const chatSlice = normalizedConfig.recentChatMessages > 0
-    ? normalizeChatRecords(recentChatLogs).slice(-normalizedConfig.recentChatMessages)
-    : [];
-  const renderedRecentChat = chatSlice.map((record) => renderChatRecord(record, { includeBotMarker: true, includeSourceId: true }));
-  const roleLines = [
-    identityKey(requester) ? `Requester identity for retrieval: ${requester.displayName || requester.login}${requester.login ? ` (@${requester.login})` : ''}${requester.userId ? ` [userId=${requester.userId}]` : ''}` : '',
-    identityKey(recipient) && identityKey(recipient) !== identityKey(requester) ? `Response recipient identity for retrieval: ${recipient.displayName || recipient.login}${recipient.login ? ` (@${recipient.login})` : ''}${recipient.userId ? ` [userId=${recipient.userId}]` : ''}` : ''
-  ].filter(Boolean);
-
-  let text = 'CURRENT-STREAM SESSION MEMORY (temporary; clears when this Twitch stream ends):';
-  if (roleLines.length) text += `\n${roleLines.join('\n')}`;
-  text += '\n[BOT CONTEXT ONLY] lines may explain what chat was responding to, but they are not independent viewer testimony and must not be attributed to a viewer.';
-  text += '\n[SHARED CHAT GUEST] lines are valid temporary context for this joint stream, but do not establish GeneralQwert community membership, Qwert-channel roles, or ownership of GeneralQwert lore.';
-  if (detailSections.length) text += `\n\nSELECTED DETAILED MEMORY:\n${detailSections.join('\n\n')}`;
-  if (renderedRecentChat.length) text += `\n\nRECENT STRUCTURED CHAT SINCE THE LAST COMPLETED MEMORY BLOCK:\n${renderedRecentChat.join('\n')}`;
-  text += `\n\nCOMPACT HISTORY INDEX (whole-stream orientation; lower priority than audited detail and current structured chat):\n${compactLines.join('\n') || '(no completed memory blocks yet)'}`;
-
-  if (text.length > normalizedConfig.maxContextCharacters) {
-    text = text.slice(0, normalizedConfig.maxContextCharacters).trimEnd();
-    const lastBreak = text.lastIndexOf('\n');
-    if (lastBreak > Math.floor(normalizedConfig.maxContextCharacters * 0.8)) text = text.slice(0, lastBreak).trimEnd();
-    text += '\n[Session memory context truncated to configured limit.]';
-  }
-
-  return {
-    text,
-    stats: {
-      enabled: true,
-      blockCount: validBlocks.length,
-      auditedBlockCount: validBlocks.filter((block) => block?.attributionAudited === true).length,
-      includedDetailedBlocks: selectedDetailed.length,
-      compactCharacters: compactLines.join('\n').length,
-      contextCharacters: text.length
-    }
-  };
 }
 
 module.exports = {
