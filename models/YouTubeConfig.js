@@ -5,6 +5,7 @@ const youtubeConfigSchema = new mongoose.Schema({
   enabled: { type: Boolean, default: true },
   commandsEnabled: { type: Boolean, default: true },
   timersEnabled: { type: Boolean, default: true },
+  globalTimerStartDelaySeconds: { type: Number, min: 0, max: 86400, default: 0 },
   timerSafetyStopUnits: { type: Number, min: 0, max: 10000, default: 7500 },
   hardSafetyStopUnits: { type: Number, min: 100, max: 10000, default: 9000 },
   searchSafetyStopCalls: { type: Number, min: 1, max: 100, default: 90 }

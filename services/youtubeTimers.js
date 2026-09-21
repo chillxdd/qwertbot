@@ -3,12 +3,20 @@
 const YouTubeChatTimer = require('../models/YouTubeChatTimer');
 const { selectResponseIndex } = require('../features/youtube/pure');
 
-function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () => true }) {
+function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () => true, getGlobalStartDelaySeconds = () => 0 }) {
   let timers = [];
   let active = false;
   let sessionStartedAt = 0;
   let timer = null;
   const nextDueById = new Map();
+
+  function globalStartDelayMs() {
+    return Math.max(0, Number(getGlobalStartDelaySeconds() || 0)) * 1000;
+  }
+
+  function sessionGlobalGateAt() {
+    return active && sessionStartedAt ? sessionStartedAt + globalStartDelayMs() : 0;
+  }
 
   async function reload() {
     timers = await YouTubeChatTimer.find({ channelKey, enabled: true }).lean();
@@ -17,11 +25,11 @@ function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () 
       const id = String(item._id);
       if (!nextDueById.has(id) || !active) {
         const startDelay = Math.max(0, Number(item.startDelaySeconds || 0)) * 1000;
-        // startSession() deliberately anchors existing timers to stream start.
-        // A timer created while already live should instead wait its full start
-        // delay from creation/reload rather than firing immediately because the
-        // stream has already been live longer than that delay.
-        nextDueById.set(id, active ? now + startDelay : 0);
+        // startSession() deliberately anchors existing timers to the moment the
+        // first YouTube live chat becomes ready. A timer created while already
+        // live waits its own full start delay from creation/reload, while the
+        // global start-delay gate can only push it later (never earlier).
+        nextDueById.set(id, active ? Math.max(now + startDelay, sessionGlobalGateAt()) : 0);
       }
     }
     const valid = new Set(timers.map((item) => String(item._id)));
@@ -33,8 +41,10 @@ function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () 
     active = true;
     sessionStartedAt = Date.now();
     await reload();
+    const globalDelay = globalStartDelayMs();
     for (const item of timers) {
-      nextDueById.set(String(item._id), sessionStartedAt + Math.max(0, Number(item.startDelaySeconds || 0)) * 1000);
+      const itemDelay = Math.max(0, Number(item.startDelaySeconds || 0)) * 1000;
+      nextDueById.set(String(item._id), sessionStartedAt + Math.max(globalDelay, itemDelay));
     }
     if (!timer) timer = setInterval(() => { void tick(); }, 5000);
   }
@@ -43,6 +53,14 @@ function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () 
     active = false;
     sessionStartedAt = 0;
     nextDueById.clear();
+  }
+
+  function applyGlobalStartDelay() {
+    if (!active || !sessionStartedAt) return;
+    const gateAt = sessionGlobalGateAt();
+    for (const [id, dueAt] of nextDueById.entries()) {
+      if (dueAt && dueAt < gateAt) nextDueById.set(id, gateAt);
+    }
   }
 
   async function fireTimer(item, { manual = false } = {}) {
@@ -103,7 +121,7 @@ function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () 
     timer = null;
   }
 
-  return { reload, startSession, stopSession, fireNow, shutdown };
+  return { reload, startSession, stopSession, applyGlobalStartDelay, fireNow, shutdown };
 }
 
 module.exports = { createYouTubeTimerManager };

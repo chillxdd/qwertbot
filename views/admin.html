@@ -1355,6 +1355,20 @@
             <button id="refreshYoutubeTimersBtn" class="secondary" type="button">Refresh</button>
           </div>
         </div>
+        <div class="custom-editor-block timer-global-settings">
+          <div class="custom-response-heading">
+            <strong>Global Timer Settings</strong>
+            <button id="saveYoutubeTimerSettingsBtn" class="secondary" type="button">Save Settings</button>
+          </div>
+          <div class="timer-settings-grid">
+            <div>
+              <label class="prompt-label" for="youtubeGlobalTimerStartDelay">Global Start Delay</label>
+              <div class="duration-field"><input id="youtubeGlobalTimerStartDelay" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
+            </div>
+          </div>
+          <div class="detail">Minimum delay after the first YouTube live chat connects before any scheduled YouTube timer can fire. Per-timer start delays still apply; the longer delay wins.</div>
+          <div id="youtubeTimerSettingsMsg" class="detail custom-field-message"></div>
+        </div>
         <div id="youtubeTimersMsg" class="detail"></div>
         <div id="youtubeTimerList" class="custom-command-list"></div>
         <div id="youtubeTimerPagination" class="list-pagination" aria-label="YouTube timer pagination">

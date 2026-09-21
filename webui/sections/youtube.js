@@ -119,6 +119,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
     $('youtubeBotEnabled').checked = cfg.enabled !== false;
     $('youtubeCommandsEnabled').checked = cfg.commandsEnabled !== false;
     $('youtubeTimersEnabled').checked = cfg.timersEnabled !== false;
+    if ($('youtubeGlobalTimerStartDelay')) $('youtubeGlobalTimerStartDelay').value = Number(cfg.globalTimerStartDelaySeconds ?? 0);
     $('youtubeTimerQuotaStop').value = Number(cfg.timerSafetyStopUnits ?? 7500);
     $('youtubeHardQuotaStop').value = Number(cfg.hardSafetyStopUnits ?? 9000);
     $('youtubeSearchQuotaStop').value = Number(cfg.searchSafetyStopCalls ?? 90);
@@ -573,6 +574,28 @@ export function initYoutubeSection({ $, esc, postJson }) {
     if (view === 'native') void loadNative().catch((e) => setMessage('youtubeNativeMsg', e.message, true));
   }
 
+  async function saveGlobalTimerSettings() {
+    const value = Number($('youtubeGlobalTimerStartDelay').value);
+    if (!Number.isInteger(value) || value < 0 || value > 86400) {
+      return setMessage('youtubeTimerSettingsMsg', 'Global Start Delay must be a whole number between 0 and 86400 seconds.', true);
+    }
+    const button = $('saveYoutubeTimerSettingsBtn');
+    const cfg = adminState?.config || {};
+    button.disabled = true;
+    setMessage('youtubeTimerSettingsMsg', 'Saving...');
+    try {
+      const d = await postJson('/youtube/admin/config', { ...cfg, globalTimerStartDelaySeconds: value });
+      if (!d.success) throw new Error(d.error || 'Could not save YouTube timer settings.');
+      if (adminState) adminState.config = { ...(adminState.config || {}), ...(d.config || {}) };
+      setMessage('youtubeTimerSettingsMsg', 'Timer settings saved.');
+      await refreshAdminState().catch(() => {});
+    } catch (err) {
+      setMessage('youtubeTimerSettingsMsg', err.message || 'Could not save YouTube timer settings.', true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function saveControls() {
     const cfg = adminState?.config || {};
     setMessage('youtubeOauthMsg', 'Saving...');
@@ -643,6 +666,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
   $('youtubeTimerPrevPage').onclick = () => { if (timerPage > 1) { timerPage -= 1; renderTimers(); } };
   $('youtubeTimerNextPage').onclick = () => { timerPage += 1; renderTimers(); };
   $('refreshYoutubeTimersBtn').onclick = () => void loadTimers().then(() => setMessage('youtubeTimersMsg', 'Refreshed.')).catch((e) => setMessage('youtubeTimersMsg', e.message, true));
+  $('saveYoutubeTimerSettingsBtn').onclick = () => void saveGlobalTimerSettings();
 
   $('addYoutubeCommandBtn').onclick = () => openCommandDialog();
   $('closeYoutubeCommandDialogBtn').onclick = closeCommandDialog;

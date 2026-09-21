@@ -20,6 +20,7 @@ const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   commandsEnabled: true,
   timersEnabled: true,
+  globalTimerStartDelaySeconds: 0,
   timerSafetyStopUnits: 7500,
   hardSafetyStopUnits: 9000,
   searchSafetyStopCalls: 90
@@ -52,8 +53,18 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
   const timerManager = createYouTubeTimerManager({
     channelKey,
     sendToAllChats: (text, options) => sendToAllChats(text, options),
-    isEnabled: () => Boolean(config.enabled && config.timersEnabled && twitchLive && !quiesced)
+    isEnabled: () => Boolean(config.enabled && config.timersEnabled && twitchLive && !quiesced),
+    getGlobalStartDelaySeconds: () => Number(config.globalTimerStartDelaySeconds || 0)
   });
+
+  function hasConnectedChat() {
+    return [...workerStates.values()].some((state) => state?.state === 'connected');
+  }
+
+  async function maybeStartTimerSession() {
+    if (!config.enabled || !config.timersEnabled || !twitchLive || quiesced || !hasConnectedChat()) return;
+    await timerManager.startSession();
+  }
 
   const chatFactory = createYouTubeChatStreamFactory({
     authManager,
@@ -69,7 +80,13 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     },
     onWorkerState: (state) => {
       workerStates.set(state.liveChatId, state);
-      if (state.state === 'ended') commandManager.clearChat(state.liveChatId);
+      if (state.state === 'connected') {
+        void maybeStartTimerSession().catch((err) => console.warn(`[YouTube Timers] Could not start timer session: ${err?.message || err}`));
+      }
+      if (state.state === 'ended') {
+        commandManager.clearChat(state.liveChatId);
+        if (!hasConnectedChat()) timerManager.stopSession();
+      }
     }
   });
 
@@ -83,6 +100,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       enabled: doc?.enabled !== false,
       commandsEnabled: doc?.commandsEnabled !== false,
       timersEnabled: doc?.timersEnabled !== false,
+      globalTimerStartDelaySeconds: Number(doc?.globalTimerStartDelaySeconds ?? DEFAULT_CONFIG.globalTimerStartDelaySeconds),
       timerSafetyStopUnits: Number(doc?.timerSafetyStopUnits ?? DEFAULT_CONFIG.timerSafetyStopUnits),
       hardSafetyStopUnits: Number(doc?.hardSafetyStopUnits ?? DEFAULT_CONFIG.hardSafetyStopUnits),
       searchSafetyStopCalls: Number(doc?.searchSafetyStopCalls ?? DEFAULT_CONFIG.searchSafetyStopCalls)
@@ -201,7 +219,6 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     }
     if (!initialized) await initialize();
     if (quiesced || !config.enabled) return;
-    if (config.timersEnabled) await timerManager.startSession();
     startDiscoveryWindow();
   }
 
@@ -262,10 +279,12 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     const timerSafetyStopUnits = Math.max(500, Math.min(9900, Math.floor(Number(input.timerSafetyStopUnits ?? config.timerSafetyStopUnits))));
     const hardSafetyStopUnits = Math.max(timerSafetyStopUnits + 50, Math.min(10000, Math.floor(Number(input.hardSafetyStopUnits ?? config.hardSafetyStopUnits))));
     const searchSafetyStopCalls = Math.max(1, Math.min(100, Math.floor(Number(input.searchSafetyStopCalls ?? config.searchSafetyStopCalls))));
+    const globalTimerStartDelaySeconds = Math.max(0, Math.min(86400, Math.floor(Number(input.globalTimerStartDelaySeconds ?? config.globalTimerStartDelaySeconds))));
     const update = {
       enabled: input.enabled !== false,
       commandsEnabled: input.commandsEnabled !== false,
       timersEnabled: input.timersEnabled !== false,
+      globalTimerStartDelaySeconds,
       timerSafetyStopUnits,
       hardSafetyStopUnits,
       searchSafetyStopCalls
@@ -273,15 +292,16 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     await YouTubeConfig.findOneAndUpdate({ channelKey }, { $set: update, $setOnInsert: { channelKey } }, { upsert: true, setDefaultsOnInsert: true });
     const wasEnabled = config.enabled;
     const wereTimersEnabled = config.timersEnabled;
+    const previousGlobalTimerStartDelaySeconds = Number(config.globalTimerStartDelaySeconds || 0);
     config = update;
     if (wasEnabled && !config.enabled) await stopWorkers('youtube-disabled');
     if (!wasEnabled && config.enabled && twitchLive) {
-      if (config.timersEnabled) await timerManager.startSession();
       startDiscoveryWindow();
     } else if (config.enabled && twitchLive) {
       if (wereTimersEnabled && !config.timersEnabled) timerManager.stopSession();
-      if (!wereTimersEnabled && config.timersEnabled) await timerManager.startSession();
+      if (!wereTimersEnabled && config.timersEnabled) await maybeStartTimerSession();
     }
+    if (previousGlobalTimerStartDelaySeconds !== config.globalTimerStartDelaySeconds) timerManager.applyGlobalStartDelay();
     return { ...config };
   }
 
@@ -348,6 +368,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       enabled: config.enabled,
       commandsEnabled: config.commandsEnabled,
       timersEnabled: config.timersEnabled,
+      globalTimerStartDelaySeconds: config.globalTimerStartDelaySeconds,
       twitchLive,
       streamStateKnown,
       broadcaster: { channelId: YOUTUBE_BROADCASTER_CHANNEL_ID || null, handle: YOUTUBE_BROADCASTER_HANDLE || null },
@@ -374,7 +395,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     if (!quiesced) return;
     quiesced = false;
     if (twitchLive && config.enabled) {
-      if (config.timersEnabled) await timerManager.startSession();
+      await maybeStartTimerSession();
       startDiscoveryWindow();
     }
   }
