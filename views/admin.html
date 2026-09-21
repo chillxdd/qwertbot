@@ -1420,14 +1420,12 @@
         </div>
 
         <div class="custom-editor-block">
-          <div class="custom-trigger-heading"><strong>Triggers</strong></div>
-          <div class="detail">1/1 trigger</div>
-          <div class="custom-trigger-list">
-            <div class="custom-trigger-row youtube-single-trigger-row">
-              <select aria-label="Trigger type" disabled><option>!Command</option></select>
-              <input id="youtubeCommandTrigger" type="text" maxlength="50" placeholder="Example: !discord" aria-label="YouTube command trigger">
-            </div>
+          <div class="custom-trigger-heading">
+            <strong>Triggers</strong>
+            <button id="addYoutubeCommandTriggerBtn" class="secondary" type="button">Add Trigger</button>
           </div>
+          <div id="youtubeCommandTriggerHelp" class="detail">0/25 triggers</div>
+          <div id="youtubeCommandTriggers" class="custom-trigger-list"></div>
           <div id="youtubeCommandTriggerMsg" class="detail custom-field-message"></div>
         </div>
 

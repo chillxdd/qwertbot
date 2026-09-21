@@ -4,6 +4,18 @@ const youtubeCustomCommandSchema = new mongoose.Schema({
   channelKey: { type: String, required: true, lowercase: true, trim: true, index: true },
   name: { type: String, required: true, trim: true, maxlength: 80 },
   publicDescription: { type: String, default: '', trim: true, maxlength: 300 },
+  // Multi-trigger representation. YouTube supports !Command triggers only; all
+  // triggers on one record share responses, cooldown, counter, and permissions.
+  triggers: {
+    type: [String],
+    default: [],
+    validate: {
+      validator: (values) => Array.isArray(values) && values.length <= 25 && values.every((v) => typeof v === 'string' && v.trim().length >= 1 && v.length <= 120),
+      message: 'A YouTube command can have up to 25 triggers.'
+    }
+  },
+  // Legacy first-trigger fields remain for backwards compatibility and for the
+  // historical unique index. New saves mirror triggers[0] into these fields.
   trigger: { type: String, required: true, trim: true, maxlength: 120 },
   normalizedTrigger: { type: String, required: true, trim: true, maxlength: 120 },
   responses: {

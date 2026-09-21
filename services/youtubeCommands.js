@@ -33,7 +33,16 @@ function createYouTubeCommandManager({ channelKey, sendMessage }) {
       YouTubeCustomCommandSettings.findOne({ channelKey }).lean(),
       YouTubeNativeCommandConfig.findOne({ channelKey }).lean()
     ]);
-    commandMap = new Map(commands.map((command) => [normalizeCommandTrigger(command.normalizedTrigger || command.trigger), command]));
+    commandMap = new Map();
+    for (const command of commands) {
+      const triggers = Array.isArray(command.triggers) && command.triggers.length
+        ? command.triggers
+        : [command.normalizedTrigger || command.trigger];
+      for (const value of triggers) {
+        const trigger = normalizeCommandTrigger(value);
+        if (trigger) commandMap.set(trigger, command);
+      }
+    }
     settings = { globalCooldownSeconds: Number(savedSettings?.globalCooldownSeconds ?? 5) };
     nativeConfig = {
       commandsEnabled: savedNative?.commandsEnabled !== false,
@@ -122,7 +131,12 @@ function createYouTubeCommandManager({ channelKey, sendMessage }) {
       { $inc: { counter: 1 }, $set: { lastResponseIndex: responseIndex } },
       { new: true }
     ).lean();
-    if (!counterDoc) { commandMap.delete(parsed.trigger); return { handled: false }; }
+    if (!counterDoc) {
+      for (const [trigger, mapped] of commandMap.entries()) {
+        if (String(mapped?._id) === String(command._id)) commandMap.delete(trigger);
+      }
+      return { handled: false };
+    }
     command.counter = counterDoc.counter;
     command.lastResponseIndex = responseIndex;
 

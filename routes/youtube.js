@@ -11,6 +11,25 @@ const { DEFAULT_NATIVE_RESPONSE } = require('../services/youtubeCommands');
 const MAX_MESSAGE_LENGTH = 200;
 const TRIGGER_PATTERN = /^![a-z0-9][a-z0-9_-]{0,49}$/i;
 
+
+function cleanCommandTriggers(values) {
+  const raw = Array.isArray(values) ? values : [values];
+  const seen = new Set();
+  const triggers = [];
+  for (const value of raw) {
+    const trigger = normalizeCommandTrigger(value);
+    if (!trigger) continue;
+    if (!TRIGGER_PATTERN.test(trigger)) throw new Error('Each trigger must look like !command and use only letters, numbers, underscore, or hyphen.');
+    if (trigger === '!commands') throw new Error('!commands is reserved as the built-in YouTube command list.');
+    if (seen.has(trigger)) continue;
+    seen.add(trigger);
+    triggers.push(trigger);
+  }
+  if (!triggers.length) throw new Error('Add at least one YouTube command trigger.');
+  if (triggers.length > 25) throw new Error('A YouTube custom command can have at most 25 triggers.');
+  return triggers;
+}
+
 function cleanResponses(values) {
   const responses = (Array.isArray(values) ? values : []).map((value) => String(value || '').replace(/[\r\n]+/g, ' ').trim()).filter(Boolean);
   if (!responses.length || responses.length > 25) throw new Error('Provide between 1 and 25 responses.');
@@ -37,18 +56,26 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
     if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'Commands are temporarily unavailable.' });
     try {
       const [commands, native] = await Promise.all([
-        YouTubeCustomCommand.find({ channelKey, enabled: true }).sort({ normalizedTrigger: 1 }).select('name normalizedTrigger publicDescription cooldownSeconds userLevel probability').lean(),
+        YouTubeCustomCommand.find({ channelKey, enabled: true }).sort({ normalizedTrigger: 1 }).select('name triggers normalizedTrigger trigger publicDescription cooldownSeconds userLevel probability').lean(),
         YouTubeNativeCommandConfig.findOne({ channelKey }).lean()
       ]);
-      const customCommands = commands.map((command) => ({
-        id: String(command._id),
-        name: command.name || command.normalizedTrigger,
-        publicDescription: command.publicDescription || '',
-        triggers: [{ triggerType: 'command', trigger: command.normalizedTrigger }],
-        cooldownSeconds: Number(command.cooldownSeconds || 0),
-        userLevel: command.userLevel || 'everyone',
-        probability: Number(command.probability ?? 100)
-      }));
+      const customCommands = commands.map((command) => {
+        const triggers = (Array.isArray(command.triggers) && command.triggers.length
+          ? command.triggers
+          : [command.normalizedTrigger || command.trigger])
+          .map(normalizeCommandTrigger)
+          .filter(Boolean)
+          .map((trigger) => ({ triggerType: 'command', trigger }));
+        return {
+          id: String(command._id),
+          name: command.name || triggers[0]?.trigger || 'Custom Command',
+          publicDescription: command.publicDescription || '',
+          triggers,
+          cooldownSeconds: Number(command.cooldownSeconds || 0),
+          userLevel: command.userLevel || 'everyone',
+          probability: Number(command.probability ?? 100)
+        };
+      });
       const nativeCommands = native?.commandsEnabled === false ? [] : [{
         name: '!commands',
         userLevel: 'everyone',
@@ -58,7 +85,7 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
       // standardized public directory uses the richer split collections.
       const items = [
         ...nativeCommands.map((command) => ({ trigger: command.name, description: command.description })),
-        ...customCommands.map((command) => ({ trigger: command.triggers[0].trigger, description: command.publicDescription }))
+        ...customCommands.flatMap((command) => command.triggers.map((item) => ({ trigger: item.trigger, description: command.publicDescription })))
       ];
       return res.json({ success: true, commands: items, customCommands, nativeCommands });
     } catch (err) {
@@ -114,9 +141,27 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
   app.post('/youtube/custom-commands/save', requireModSession, async (req, res) => {
     if (!requireDb(res)) return;
     try {
-      const trigger = normalizeCommandTrigger(req.body?.trigger);
-      if (!TRIGGER_PATTERN.test(trigger)) throw new Error('Trigger must look like !command and use only letters, numbers, underscore, or hyphen.');
-      if (trigger === '!commands') throw new Error('!commands is reserved as the built-in YouTube command list.');
+      const triggers = cleanCommandTriggers(
+        Array.isArray(req.body?.triggers) && req.body.triggers.length ? req.body.triggers : req.body?.trigger
+      );
+      const trigger = triggers[0];
+      const existingId = req.body?.id ? String(req.body.id) : '';
+      const conflictQuery = {
+        channelKey,
+        $or: [
+          { normalizedTrigger: { $in: triggers } },
+          { triggers: { $in: triggers } }
+        ]
+      };
+      if (existingId) conflictQuery._id = { $ne: existingId };
+      const conflicting = await YouTubeCustomCommand.findOne(conflictQuery).select('_id name normalizedTrigger trigger triggers').lean();
+      if (conflicting) {
+        const otherTriggers = new Set((Array.isArray(conflicting.triggers) && conflicting.triggers.length
+          ? conflicting.triggers
+          : [conflicting.normalizedTrigger || conflicting.trigger]).map(normalizeCommandTrigger));
+        const duplicate = triggers.find((item) => otherTriggers.has(item)) || trigger;
+        throw new Error(`${duplicate} is already used by another YouTube custom command.`);
+      }
       const responses = cleanResponses(req.body?.responses);
       const responseMode = ['equal', 'weighted'].includes(req.body?.responseMode) ? req.body.responseMode : 'equal';
       const responseWeights = responseMode === 'weighted'
@@ -126,6 +171,7 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
         channelKey,
         name: String(req.body?.name || trigger).trim().slice(0, 80),
         publicDescription: String(req.body?.publicDescription || '').trim().slice(0, 300),
+        triggers,
         trigger,
         normalizedTrigger: trigger,
         responses,
@@ -145,7 +191,7 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
       await youtubeManager.reloadCommands();
       return res.json({ success: true, command: saved.toObject() });
     } catch (err) {
-      const message = err?.code === 11000 ? 'That YouTube command trigger already exists.' : (err.message || 'Could not save YouTube command.');
+      const message = err?.code === 11000 ? 'One of those YouTube command triggers is already in use.' : (err.message || 'Could not save YouTube command.');
       return res.status(400).json({ success: false, error: message });
     }
   });

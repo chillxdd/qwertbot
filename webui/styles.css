@@ -734,7 +734,8 @@ button.success{background:#16834a}
 @media(max-width:700px){.bulk-cleanup-panel{align-items:stretch}.bulk-cleanup-panel label,.bulk-cleanup-panel button{width:100%}}
 
 /* Compact public description editor */
-#customCommandPublicDescription{height:78px;min-height:78px;max-height:78px;resize:none;overflow-y:auto}
+#customCommandPublicDescription,#youtubeCommandDescription{height:78px;min-height:78px;max-height:78px;resize:none;overflow-y:auto}
+#youtubeAutomationPanel .custom-trigger-row select:disabled{opacity:.8;cursor:default}
 /* Viewer profile cleanup stays out of the way until explicitly opened. */
 .viewer-profile-cleanup-shell{margin-top:24px;padding-top:14px;border-top:1px solid #2a2a30}.viewer-profile-cleanup-shell>.advanced-toggle{margin:0}.viewer-profile-cleanup-shell .advanced-settings-body{margin-top:10px}.viewer-profile-cleanup-panel{margin-top:0}
 
@@ -835,8 +836,6 @@ button.success{background:#16834a}
 /* V7 platform UI parity: keep YouTube administration on the same visual system as Twitch. */
 .user-level-member{background:rgba(255,0,0,.12);border-color:rgba(255,70,70,.48);color:#ff8a8a}
 #youtubeAutomationPanel .custom-command-add-row button{min-height:0}
-#youtubeAutomationPanel .youtube-single-trigger-row{grid-template-columns:minmax(130px,180px) minmax(220px,1fr)}
-#youtubeAutomationPanel .youtube-single-trigger-row select:disabled{opacity:.8;cursor:default}
 #youtubeCommandDialog.custom-command-editor,
 #youtubeTimerDialog.custom-command-editor{
   width:min(900px,calc(100vw - 48px));
@@ -845,7 +844,6 @@ button.success{background:#16834a}
 }
 #youtubeAutomationPanel .custom-response-bottom-actions{justify-content:flex-end}
 #youtubeAutomationPanel .custom-response-bottom-actions button{margin:0}
-@media(max-width:700px){#youtubeAutomationPanel .youtube-single-trigger-row{grid-template-columns:1fr}}
 @media(max-width:760px){
   #youtubeCommandDialog.custom-command-editor,
   #youtubeTimerDialog.custom-command-editor{inset:10px;width:calc(100vw - 20px);max-height:calc(100vh - 20px)}

@@ -11,6 +11,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
 
   const PAGE_SIZES = new Set([10, 25, 50]);
   const MAX_RESPONSES = 25;
+  const MAX_TRIGGERS = 25;
   const MAX_RESPONSE_LENGTH = 200;
   const USER_LEVEL_LABELS = { everyone: 'Everyone', member: 'Member', moderator: 'Moderator', owner: 'Owner' };
 
@@ -154,7 +155,8 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const list = commands.filter((command) => {
       if (userLevel !== 'all' && (command.userLevel || 'everyone') !== userLevel) return false;
       if (!search) return true;
-      const haystack = [command.name, command.normalizedTrigger || command.trigger, command.publicDescription, command.userLevel, ...(command.responses || [])].map(normalize).join(' ');
+      const triggerValues = commandTriggerValues(command);
+      const haystack = [command.name, ...triggerValues, command.publicDescription, command.userLevel, ...(command.responses || [])].map(normalize).join(' ');
       return haystack.includes(search);
     });
     return [...list].sort((a, b) => {
@@ -219,20 +221,22 @@ export function initYoutubeSection({ $, esc, postJson }) {
       return;
     }
     list.innerHTML = items.map((command) => {
-      const trigger = command.normalizedTrigger || command.trigger;
+      const triggers = commandTriggerValues(command);
+      const primaryTrigger = triggers[0] || command.normalizedTrigger || command.trigger || '!command';
       const enabled = command.enabled !== false;
       const responseCount = Array.isArray(command.responses) ? command.responses.length : 0;
+      const triggerChips = triggers.map((trigger) => `<span class="custom-trigger-chip"><strong>${esc(trigger)}</strong><small>!Command</small></span>`).join('');
       return `
         <div class="custom-command-card" data-youtube-command-id="${esc(command._id)}">
           <div class="custom-command-card-main">
             <div class="custom-command-title-row">
-              <strong class="custom-command-name">${esc(command.name || trigger)}</strong>
+              <strong class="custom-command-name">${esc(command.name || primaryTrigger)}</strong>
               <span class="custom-command-state ${enabled ? 'enabled' : 'disabled'}">${enabled ? 'Enabled' : 'Disabled'}</span>
               ${userLevelBadgeHtml(command.userLevel)}
             </div>
             ${command.publicDescription ? `<div class="readonly-command-description">${esc(command.publicDescription)}</div>` : ''}
-            <div class="custom-trigger-chip-list"><span class="custom-trigger-chip"><strong>${esc(trigger)}</strong><small>!Command</small></span></div>
-            <div class="detail">${Number(command.probability ?? 100)}% chance · ${Number(command.cooldownSeconds || 0)}s cooldown · ${Number(command.responseDelaySeconds || 0)}s delay · ${responseCount} response${responseCount === 1 ? '' : 's'} · ${esc(responseModeLabel(command.responseMode))} · Counter: ${Number(command.counter || 0)}</div>
+            <div class="custom-trigger-chip-list">${triggerChips}</div>
+            <div class="detail">${triggers.length} trigger${triggers.length === 1 ? '' : 's'} · ${Number(command.probability ?? 100)}% chance · ${Number(command.cooldownSeconds || 0)}s cooldown · ${Number(command.responseDelaySeconds || 0)}s delay · ${responseCount} response${responseCount === 1 ? '' : 's'} · ${esc(responseModeLabel(command.responseMode))} · Counter: ${Number(command.counter || 0)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary youtube-command-edit-btn" type="button">Edit</button>
@@ -247,6 +251,75 @@ export function initYoutubeSection({ $, esc, postJson }) {
       card.querySelector('.youtube-command-toggle-btn').onclick = () => void toggleCommand(command);
       card.querySelector('.youtube-command-delete-btn').onclick = () => void deleteCommand(command?._id);
     });
+  }
+
+  function commandTriggerValues(command) {
+    const raw = Array.isArray(command?.triggers) && command.triggers.length
+      ? command.triggers
+      : [command?.normalizedTrigger || command?.trigger];
+    const seen = new Set();
+    const result = [];
+    for (const value of raw) {
+      let trigger = String(value || '').trim().toLowerCase();
+      if (!trigger) continue;
+      if (!trigger.startsWith('!')) trigger = `!${trigger}`;
+      if (seen.has(trigger)) continue;
+      seen.add(trigger);
+      result.push(trigger);
+    }
+    return result;
+  }
+
+  function updateYoutubeTriggerUi() {
+    const container = $('youtubeCommandTriggers');
+    if (!container) return;
+    const count = container.children.length;
+    $('youtubeCommandTriggerHelp').textContent = `${count}/${MAX_TRIGGERS} triggers`;
+    $('addYoutubeCommandTriggerBtn').disabled = count >= MAX_TRIGGERS;
+    container.querySelectorAll('.youtube-command-trigger-remove').forEach((button) => { button.disabled = count <= 1; });
+  }
+
+  function youtubeTriggerRow(value = '!') {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'custom-trigger-row';
+    wrapper.innerHTML = `
+      <select aria-label="Trigger type" disabled><option>!Command</option></select>
+      <input class="youtube-command-trigger-input" type="text" maxlength="50" placeholder="Example: !discord" aria-label="YouTube command trigger">
+      <button class="secondary youtube-command-trigger-remove" type="button">Remove</button>`;
+    wrapper.querySelector('.youtube-command-trigger-input').value = value || '!';
+    wrapper.querySelector('.youtube-command-trigger-remove').onclick = () => {
+      const container = $('youtubeCommandTriggers');
+      if (container.children.length <= 1) {
+        setMessage('youtubeCommandTriggerMsg', 'A custom command needs at least one trigger.', true);
+        return;
+      }
+      wrapper.remove();
+      setMessage('youtubeCommandTriggerMsg', '');
+      updateYoutubeTriggerUi();
+    };
+    return wrapper;
+  }
+
+  function addYoutubeTrigger(value = '!') {
+    const container = $('youtubeCommandTriggers');
+    if (!container || container.children.length >= MAX_TRIGGERS) return;
+    container.appendChild(youtubeTriggerRow(value));
+    updateYoutubeTriggerUi();
+  }
+
+  function youtubeTriggerPayload() {
+    const inputs = [...$('youtubeCommandTriggers').querySelectorAll('.youtube-command-trigger-input')];
+    const seen = new Set();
+    const values = [];
+    for (const input of inputs) {
+      let trigger = String(input.value || '').trim().toLowerCase();
+      if (!trigger) continue;
+      if (!trigger.startsWith('!')) trigger = `!${trigger}`;
+      if (seen.has(trigger)) continue;
+      seen.add(trigger);
+      values.push(trigger);
+    }
+    return values;
   }
 
   function commandResponseMode() {
@@ -327,9 +400,11 @@ export function initYoutubeSection({ $, esc, postJson }) {
   function openCommandDialog(id = '') {
     const command = commands.find((item) => String(item._id) === String(id));
     $('youtubeCommandId').value = command?._id || '';
-    $('youtubeCommandDialogTitle').textContent = command ? `Edit ${command.name || command.normalizedTrigger || command.trigger}` : 'Add Custom Command';
+    const triggers = commandTriggerValues(command);
+    $('youtubeCommandDialogTitle').textContent = command ? `Edit ${command.name || triggers[0] || command.normalizedTrigger || command.trigger}` : 'Add Custom Command';
     $('youtubeCommandName').value = command?.name || '';
-    $('youtubeCommandTrigger').value = command?.normalizedTrigger || command?.trigger || '!';
+    $('youtubeCommandTriggers').innerHTML = '';
+    (triggers.length ? triggers : ['!']).forEach(addYoutubeTrigger);
     $('youtubeCommandDescription').value = command?.publicDescription || '';
     $('youtubeCommandUserLevel').value = command?.userLevel || 'everyone';
     $('youtubeCommandCooldown').value = Number(command?.cooldownSeconds ?? 5);
@@ -345,6 +420,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
     setMessage('youtubeCommandTriggerMsg', '');
     setMessage('youtubeCommandResponsesMsg', '');
     syncCommandDescriptionCount();
+    updateYoutubeTriggerUi();
     updateYoutubeResponseUi('command');
     openDialog('youtubeCommandDialog');
   }
@@ -354,10 +430,17 @@ export function initYoutubeSection({ $, esc, postJson }) {
   async function saveCommand() {
     setMessage('youtubeCommandDialogMsg', 'Saving...');
     const payload = responsePayload('command');
+    const triggers = youtubeTriggerPayload();
+    if (!triggers.length) {
+      setMessage('youtubeCommandDialogMsg', '');
+      setMessage('youtubeCommandTriggerMsg', 'Add at least one trigger.', true);
+      return;
+    }
+    setMessage('youtubeCommandTriggerMsg', '');
     const body = {
       id: $('youtubeCommandId').value || undefined,
       name: $('youtubeCommandName').value,
-      trigger: $('youtubeCommandTrigger').value,
+      triggers,
       publicDescription: $('youtubeCommandDescription').value,
       responses: payload.responses,
       responseWeights: payload.weights,
@@ -381,7 +464,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const d = await postJson('/youtube/custom-commands/save', {
       id: command._id,
       name: command.name,
-      trigger: command.normalizedTrigger || command.trigger,
+      triggers: commandTriggerValues(command),
       publicDescription: command.publicDescription || '',
       responses: command.responses || [],
       responseMode: command.responseMode || 'equal',
@@ -675,6 +758,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
   $('youtubeCommandDialog').addEventListener('click', (e) => { if (e.target === $('youtubeCommandDialog')) closeCommandDialog(); });
   $('youtubeCommandDialog').addEventListener('close', () => $('youtubeCommandDialog').classList.remove('open'));
   $('youtubeCommandDescription').addEventListener('input', syncCommandDescriptionCount);
+  $('addYoutubeCommandTriggerBtn').onclick = () => addYoutubeTrigger('!');
   $('youtubeCommandResponseMode').addEventListener('change', () => updateYoutubeResponseUi('command'));
   $('addYoutubeCommandResponseBtn').onclick = () => addYoutubeResponse('command');
   $('showYoutubeCommandVariablesBtn').onclick = () => openDialog('youtubeCommandVariablesDialog');
