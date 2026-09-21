@@ -318,6 +318,16 @@ function registerDashboardRoutes(app, options) {
     return res.sendFile(path.join(viewsDir, 'command-platforms.html'));
   });
 
+  app.get('/privacy', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return res.sendFile(path.join(viewsDir, 'privacy.html'));
+  });
+
+  app.get('/terms', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return res.sendFile(path.join(viewsDir, 'terms.html'));
+  });
+
   app.get('/ttvcommands', (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.sendFile(path.join(viewsDir, 'commands.html'));

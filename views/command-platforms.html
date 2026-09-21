@@ -1,34 +1,45 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0b0e13">
   <meta name="robots" content="index,follow">
-  <title>SqwertArmyBot Commands</title>
+  <title>SqwertArmyBot</title>
   <style>
     *{box-sizing:border-box}
     body{margin:0;min-height:100vh;background:#0b0e13;color:#eef2f7;font-family:system-ui,-apple-system,Segoe UI,sans-serif;display:grid;place-items:center;padding:24px}
     main{width:min(760px,100%)}
     .card{background:#121720;border:1px solid #27303d;border-radius:18px;padding:28px}
     h1{margin:0 0 8px;font-size:clamp(1.8rem,5vw,2.6rem)}
-    p{margin:0;color:#aeb7c4;line-height:1.5}
+    p{margin:0;color:#aeb7c4;line-height:1.55}
+    .about{margin-top:12px}
     .choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:26px}
     .choice{display:block;border:1px solid #354154;border-radius:14px;padding:22px;text-decoration:none;color:#eef2f7;background:#171e29;transition:transform .12s ease,border-color .12s ease}
     .choice:hover,.choice:focus-visible{transform:translateY(-2px);border-color:#6d7d96;outline:none}
     .choice strong{display:block;font-size:1.25rem;margin-bottom:6px}
     .choice span{color:#aeb7c4}
+    .privacy-note{margin-top:24px;padding:16px;border:1px solid #27303d;border-radius:12px;background:#0f141c;font-size:.95rem}
+    .legal{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;padding-top:18px;border-top:1px solid #27303d}
+    .legal a{color:#8eb7ff;text-decoration:none}
     @media(max-width:560px){.choices{grid-template-columns:1fr}.card{padding:22px}}
   </style>
 </head>
 <body>
   <main>
     <section class="card">
-      <h1>SqwertArmyBot Commands</h1>
-      <p>Which command list would you like to see?</p>
+      <h1>SqwertArmyBot</h1>
+      <p>Livestream chat automation for GeneralQwert on Twitch and YouTube.</p>
+      <p class="about">SqwertArmyBot provides platform-specific chat commands, scheduled timer messages, and stream automation. Its YouTube connection uses Google OAuth only to authorize the SqwertArmyBot channel, find active GeneralQwert livestream chats, read chat messages for configured commands, and send configured bot responses.</p>
       <div class="choices">
         <a class="choice" href="/ttvcommands"><strong>Twitch Commands</strong><span>Commands available in Qwert's Twitch chat.</span></a>
         <a class="choice" href="/ytcommands"><strong>YouTube Commands</strong><span>Commands available in Qwert's YouTube live chat.</span></a>
       </div>
+      <div class="privacy-note">Google/YouTube data is used only to operate the YouTube chat integration. See the Privacy Policy for details about access, storage, retention, and deletion.</div>
+      <nav class="legal" aria-label="Legal links">
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/terms">Terms of Service</a>
+      </nav>
     </section>
   </main>
 </body>

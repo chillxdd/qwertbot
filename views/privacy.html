@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b0e13">
+  <meta name="robots" content="index,follow">
+  <title>SqwertArmyBot Privacy Policy</title>
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#0b0e13;color:#eef2f7;font-family:system-ui,-apple-system,Segoe UI,sans-serif;line-height:1.62}
+    main{width:min(900px,calc(100% - 32px));margin:40px auto}
+    .card{background:#121720;border:1px solid #27303d;border-radius:18px;padding:clamp(24px,5vw,44px)}
+    h1{margin:0 0 6px;font-size:clamp(2rem,5vw,3rem);line-height:1.1}
+    h2{margin:30px 0 8px;font-size:1.2rem;color:#f4f7fb}
+    p,li{color:#b9c3cf}
+    p{margin:8px 0 0}
+    ul{margin:10px 0 0;padding-left:22px}
+    li+li{margin-top:7px}
+    a{color:#8eb7ff}
+    .meta{color:#8794a5;margin-bottom:24px}
+    .notice{background:#171e29;border:1px solid #354154;border-radius:12px;padding:16px;margin:20px 0}
+    .footer{margin-top:34px;padding-top:20px;border-top:1px solid #27303d;display:flex;gap:18px;flex-wrap:wrap}
+    .footer a{text-decoration:none}
+  </style>
+</head>
+<body>
+<main>
+  <article class="card">
+    <h1>SqwertArmyBot Privacy Policy</h1>
+    <div class="meta">Last updated: September 22, 2026</div>
+
+    <p>This Privacy Policy explains how <strong>SqwertArmyBot</strong>, a livestream chat automation bot used for GeneralQwert's Twitch and YouTube streams, accesses, uses, stores, and shares information. The YouTube integration is used to connect the SqwertArmyBot YouTube channel to active livestream chats so the bot can respond to configured commands and post configured timer messages.</p>
+
+    <div class="notice">
+      SqwertArmyBot does not sell Google or YouTube user data, use it for advertising, or use YouTube live chat data to train AI models. The YouTube integration is intentionally separate from QwertBot's Gemini recap, Tagged Questions, Viewer Profiles, and memory systems.
+    </div>
+
+    <h2>1. Google and YouTube data we access</h2>
+    <p>When the SqwertArmyBot operator connects the bot through Google OAuth, the application may access the following information through the YouTube Data API:</p>
+    <ul>
+      <li>The authorized bot channel's YouTube channel ID and display name.</li>
+      <li>OAuth access and refresh tokens, granted scopes, and token expiration information.</li>
+      <li>Public information about active GeneralQwert YouTube broadcasts, including video IDs, titles, and active live chat IDs.</li>
+      <li>Live chat information needed to operate commands: message text, message ID, publish time, the author's channel ID and display name, and whether the author is the chat owner, a moderator, or a sponsor/member.</li>
+    </ul>
+
+    <h2>2. How we use Google and YouTube data</h2>
+    <p>SqwertArmyBot uses this information only to provide its livestream chat features, including:</p>
+    <ul>
+      <li>Verifying that OAuth is connected to the intended SqwertArmyBot YouTube channel.</li>
+      <li>Finding active GeneralQwert YouTube livestreams and connecting to their live chats.</li>
+      <li>Reading live chat messages so configured <code>!</code> commands can be detected and answered.</li>
+      <li>Sending configured custom-command responses, the native <code>!commands</code> response, and configured timer messages.</li>
+      <li>Displaying connection, quota, and diagnostic status to the bot operator.</li>
+      <li>Refreshing OAuth access when needed so the bot can remain connected without repeated sign-in.</li>
+    </ul>
+
+    <h2>3. Storage and retention</h2>
+    <ul>
+      <li>OAuth access and refresh tokens are encrypted by the application before being stored in the application's MongoDB database.</li>
+      <li>The connected YouTube channel ID, channel display name, granted scopes, token expiration time, and update timestamps are stored while the YouTube connection remains configured.</li>
+      <li>YouTube live chat message text and chat-author details are processed in memory for command handling and are not persistently stored by the YouTube subsystem.</li>
+      <li>Recent chatter names and recently seen message IDs may be held temporarily in process memory for command features and duplicate protection. They are discarded when the relevant live-chat session ends or the process restarts.</li>
+      <li>Configured commands, timers, cooldowns, and related bot settings may be stored in the application database. These settings are created by the bot operator and are not Google account data.</li>
+    </ul>
+
+    <h2>4. Sharing and disclosure</h2>
+    <p>SqwertArmyBot does not sell personal information or Google user data. Information is disclosed only as necessary to operate the service:</p>
+    <ul>
+      <li>To Google/YouTube when making authorized YouTube API requests and sending live-chat messages.</li>
+      <li>To infrastructure providers used to run the application, including Render for application hosting and MongoDB for application data storage, to the extent technically necessary to provide the service.</li>
+      <li>When required by law or necessary to protect the security and integrity of the service.</li>
+    </ul>
+    <p>YouTube live chat data accessed by this integration is not provided to advertisers, data brokers, or information resellers.</p>
+
+    <h2>5. Security</h2>
+    <p>SqwertArmyBot uses HTTPS for web and API traffic. Stored Google OAuth credentials are encrypted by the application before database storage. Access to administrative controls is restricted to the bot operator. No security measure is perfect, but the application is designed to minimize the amount of Google user data retained.</p>
+
+    <h2>6. Your choices and deletion</h2>
+    <p>The bot operator can disconnect YouTube OAuth from SqwertArmyBot's YouTube OAuth Management page. Disconnecting removes the stored YouTube OAuth credential record from the application database. Access can also be revoked from the connected Google account's third-party access/security settings.</p>
+    <p>For privacy or deletion questions, contact the SqwertArmyBot operator using the support contact shown on the Google OAuth consent screen or through the <a href="https://www.youtube.com/@SqwertArmyBot" rel="noopener noreferrer">SqwertArmyBot YouTube channel</a>.</p>
+
+    <h2>7. Children's privacy</h2>
+    <p>SqwertArmyBot is a livestream chat automation tool and is not designed to knowingly collect personal information from children. The application processes YouTube live-chat content supplied through YouTube's services only as described above.</p>
+
+    <h2>8. Changes to this policy</h2>
+    <p>This policy may be updated if SqwertArmyBot's features or data practices change. The "Last updated" date at the top of this page will be revised when material changes are made.</p>
+
+    <h2>9. Google API Services</h2>
+    <p>SqwertArmyBot's use and transfer of information received from Google APIs will adhere to the applicable Google API Services User Data Policy and YouTube API policies.</p>
+
+    <nav class="footer" aria-label="Legal and navigation links">
+      <a href="/">Home</a>
+      <a href="/terms">Terms of Service</a>
+      <a href="/ttvcommands">Twitch Commands</a>
+      <a href="/ytcommands">YouTube Commands</a>
+    </nav>
+  </article>
+</main>
+</body>
+</html>
