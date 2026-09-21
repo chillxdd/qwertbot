@@ -754,3 +754,19 @@ button.success{background:#16834a}
 .youtube-card-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px;color:var(--muted,#aab2bf);font-size:.9rem}
 .youtube-card-actions{display:flex;gap:8px;flex-wrap:wrap}
 .youtube-empty{padding:18px 0;color:var(--muted,#aab2bf)}
+
+
+/* V6 dashboard alignment and diagnostics grouping. */
+.dashboard-status-grid{grid-template-columns:repeat(3,minmax(0,1fr));}
+.platform-nav{grid-template-columns:repeat(3,minmax(0,1fr));}
+.youtube-commands-subsection-nav{grid-template-columns:repeat(3,minmax(0,1fr));}
+.diagnostics-group{margin-top:22px;padding-top:18px;border-top:1px solid var(--nb-border,#2a313d);}
+.diagnostics-group:first-of-type{margin-top:14px;}
+.diagnostics-group-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:10px;}
+.diagnostics-group-heading h4{margin:0;color:var(--nb-text,#f2f3f5);font-size:13px;font-weight:750;letter-spacing:.055em;text-transform:uppercase;}
+.diagnostics-group-heading .detail{max-width:680px;text-align:right;}
+.diagnostics-group .runtime-diagnostics-grid{margin:0;}
+.diagnostics-group-youtube .youtube-preflight-card{margin-top:12px;}
+.diagnostics-toolbar{margin-top:22px;padding-top:16px;border-top:1px solid var(--nb-border,#2a313d);}
+@media(max-width:800px){.dashboard-status-grid{grid-template-columns:1fr 1fr}.dashboard-status-grid .box:last-child{grid-column:1/-1}.platform-nav{grid-template-columns:repeat(3,minmax(0,1fr));}.youtube-commands-subsection-nav{grid-template-columns:repeat(3,minmax(0,1fr));}}
+@media(max-width:600px){.dashboard-status-grid,.platform-nav,.youtube-commands-subsection-nav{grid-template-columns:1fr}.dashboard-status-grid .box:last-child{grid-column:auto}.diagnostics-group-heading{align-items:flex-start;flex-direction:column;gap:4px}.diagnostics-group-heading .detail{text-align:left}}

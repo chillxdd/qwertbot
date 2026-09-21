@@ -24,7 +24,7 @@
       <button id="logoutBtn" class="secondary" type="button" hidden>Logout</button>
     </div>
   </div>
-  <div class="grid">
+  <div class="grid dashboard-status-grid">
     <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
     <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
     <div class="box"><div id="dbStatusLabel" class="label">Database Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
@@ -1212,7 +1212,7 @@
         <h3>YouTube Commands &amp; Automation</h3>
         <div class="detail">YouTube-only commands and timers. Twitch commands, variables, counters, and timers remain completely separate.</div>
       </div>
-      <div class="subsection-nav commands-subsection-nav" role="tablist" aria-label="YouTube commands and automation views">
+      <div class="subsection-nav commands-subsection-nav youtube-commands-subsection-nav" role="tablist" aria-label="YouTube commands and automation views">
         <button id="youtubeCustomCommandsViewTab" class="secondary active" type="button">Custom Commands</button>
         <button id="youtubeTimersViewTab" class="secondary" type="button">Timers</button>
         <button id="youtubeNativeCommandsViewTab" class="secondary" type="button">Native Commands</button>
@@ -1273,36 +1273,61 @@
       </div>
 
       <div id="runtimeDiagnosticsMsg" class="detail">Open this section to load runtime health.</div>
-      <div class="runtime-diagnostics-grid" aria-label="Runtime diagnostics">
-        <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API / Bot Badge</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
-        <div class="box"><div class="label">YouTube Live Chats</div><div id="diagYoutubeChats" class="value warn">Checking...</div><div id="diagYoutubeChatsDetail" class="detail"></div></div>
-        <div class="box"><div class="label">YouTube API Quota</div><div id="diagYoutubeQuota" class="value warn">Checking...</div><div id="diagYoutubeQuotaDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Process Memory</div><div id="diagMemory" class="value warn">Checking...</div><div id="diagMemoryDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Node Heap</div><div id="diagHeap" class="value warn">Checking...</div><div id="diagHeapDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Event Loop</div><div id="diagEventLoop" class="value warn">Checking...</div><div id="diagEventLoopDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Process Uptime</div><div id="diagUptime" class="value warn">Checking...</div><div id="diagUptimeDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Gemini Queue</div><div id="diagGemini" class="value warn">Checking...</div><div id="diagGeminiDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Gemini Requests (Last 60s)</div><div id="diagGeminiRequests" class="value warn">Checking...</div><div id="diagGeminiRequestsDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Premium Recap Editor Quota</div><div id="diagRecapFlash" class="value warn">Checking...</div><div id="diagRecapFlashDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Tagged Questions</div><div id="diagTagged" class="value warn">Checking...</div><div id="diagTaggedDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Recap Engine</div><div id="diagRecap" class="value warn">Checking...</div><div id="diagRecapDetail" class="detail"></div></div>
-        <div class="box"><div class="label">Core Services</div><div id="diagServices" class="value warn">Checking...</div><div id="diagServicesDetail" class="detail"></div></div>
-      </div>
 
-      <div class="recap-utility-card youtube-preflight-card">
-        <div class="recap-card-title">YouTube Preflight</div>
-        <div class="detail">Run this before going live to verify SqwertArmyBot OAuth/token refresh, the StreamList gRPC client, and Qwert's configured YouTube channel. It does not send a chat message or start a live-chat worker; it uses one inexpensive YouTube Data API lookup.</div>
-        <div class="modal-actions"><button id="runYoutubePreflightBtn" type="button">Run YouTube Preflight</button></div>
-        <div id="youtubePreflightResult" class="detail">Not run yet.</div>
-      </div>
+      <section class="diagnostics-group" aria-labelledby="diagnosticsGeneralTitle">
+        <div class="diagnostics-group-heading">
+          <h4 id="diagnosticsGeneralTitle">General</h4>
+          <div class="detail">Process-level health shared by the whole QwertBot service.</div>
+        </div>
+        <div class="runtime-diagnostics-grid" aria-label="General runtime diagnostics">
+          <div class="box"><div class="label">Process Memory</div><div id="diagMemory" class="value warn">Checking...</div><div id="diagMemoryDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Node Heap</div><div id="diagHeap" class="value warn">Checking...</div><div id="diagHeapDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Event Loop</div><div id="diagEventLoop" class="value warn">Checking...</div><div id="diagEventLoopDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Process Uptime</div><div id="diagUptime" class="value warn">Checking...</div><div id="diagUptimeDetail" class="detail"></div></div>
+        </div>
+      </section>
 
-      <div class="recap-utility-card youtube-quota-card">
-        <div class="recap-card-title">YouTube Quota Safety</div><div class="detail">Internal conservative counters reset on the same Pacific-day boundary as YouTube's daily quota. They are safety estimates, not a replacement for Google Cloud's official quota page.</div>
-        <div class="form-grid"><label>Pause timers at main units<input id="youtubeTimerQuotaStop" type="number" min="500" max="9900" value="7500"></label><label>Stop all bot sends at main units<input id="youtubeHardQuotaStop" type="number" min="550" max="10000" value="9000"></label><label>Discovery search safety limit<input id="youtubeSearchQuotaStop" type="number" min="1" max="100" value="90"></label></div>
-        <div class="modal-actions"><button id="saveYoutubeQuotaBtn" class="secondary" type="button">Save Quota Safety</button><button id="refreshYoutubeDiagnosticsBtn" class="secondary" type="button">Refresh YouTube Status</button></div><div id="youtubeQuotaMsg" class="detail"></div>
-      </div>
+      <section class="diagnostics-group" aria-labelledby="diagnosticsTwitchTitle">
+        <div class="diagnostics-group-heading">
+          <h4 id="diagnosticsTwitchTitle">Twitch</h4>
+          <div class="detail">Twitch transport, AI, recap, and Tagged Question health.</div>
+        </div>
+        <div class="runtime-diagnostics-grid" aria-label="Twitch diagnostics">
+          <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API / Bot Badge</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Core Services</div><div id="diagServices" class="value warn">Checking...</div><div id="diagServicesDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Gemini Queue</div><div id="diagGemini" class="value warn">Checking...</div><div id="diagGeminiDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Gemini Requests (Last 60s)</div><div id="diagGeminiRequests" class="value warn">Checking...</div><div id="diagGeminiRequestsDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Premium Recap Editor Quota</div><div id="diagRecapFlash" class="value warn">Checking...</div><div id="diagRecapFlashDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Tagged Questions</div><div id="diagTagged" class="value warn">Checking...</div><div id="diagTaggedDetail" class="detail"></div></div>
+          <div class="box"><div class="label">Recap Engine</div><div id="diagRecap" class="value warn">Checking...</div><div id="diagRecapDetail" class="detail"></div></div>
+        </div>
+      </section>
 
-      <div class="render-log-toolbar">
+      <section class="diagnostics-group diagnostics-group-youtube" aria-labelledby="diagnosticsYoutubeTitle">
+        <div class="diagnostics-group-heading">
+          <h4 id="diagnosticsYoutubeTitle">YouTube</h4>
+          <div class="detail">YouTube live-chat connectivity, quota, and preflight controls.</div>
+        </div>
+        <div class="runtime-diagnostics-grid" aria-label="YouTube diagnostics">
+          <div class="box"><div class="label">YouTube Live Chats</div><div id="diagYoutubeChats" class="value warn">Checking...</div><div id="diagYoutubeChatsDetail" class="detail"></div></div>
+          <div class="box"><div class="label">YouTube API Quota</div><div id="diagYoutubeQuota" class="value warn">Checking...</div><div id="diagYoutubeQuotaDetail" class="detail"></div></div>
+        </div>
+
+        <div class="recap-utility-card youtube-preflight-card">
+          <div class="recap-card-title">YouTube Preflight</div>
+          <div class="detail">Run this before going live to verify SqwertArmyBot OAuth/token refresh, the StreamList gRPC client, and Qwert's configured YouTube channel. It does not send a chat message or start a live-chat worker; it uses one inexpensive YouTube Data API lookup.</div>
+          <div class="modal-actions"><button id="runYoutubePreflightBtn" type="button">Run YouTube Preflight</button></div>
+          <div id="youtubePreflightResult" class="detail">Not run yet.</div>
+        </div>
+
+        <div class="recap-utility-card youtube-quota-card">
+          <div class="recap-card-title">YouTube Quota Safety</div><div class="detail">Internal conservative counters reset on the same Pacific-day boundary as YouTube's daily quota. They are safety estimates, not a replacement for Google Cloud's official quota page.</div>
+          <div class="form-grid"><label>Pause timers at main units<input id="youtubeTimerQuotaStop" type="number" min="500" max="9900" value="7500"></label><label>Stop all bot sends at main units<input id="youtubeHardQuotaStop" type="number" min="550" max="10000" value="9000"></label><label>Discovery search safety limit<input id="youtubeSearchQuotaStop" type="number" min="1" max="100" value="90"></label></div>
+          <div class="modal-actions"><button id="saveYoutubeQuotaBtn" class="secondary" type="button">Save Quota Safety</button><button id="refreshYoutubeDiagnosticsBtn" class="secondary" type="button">Refresh YouTube Status</button></div><div id="youtubeQuotaMsg" class="detail"></div>
+        </div>
+      </section>
+
+      <div class="render-log-toolbar diagnostics-toolbar">
         <button id="refreshLogsBtn" type="button">Refresh Diagnostics</button>
         <label class="inline-check"><input id="autoRefreshLogs" type="checkbox" checked> Auto-refresh every 10s</label>
       </div>
