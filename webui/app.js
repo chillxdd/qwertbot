@@ -10,6 +10,7 @@ import { initEventSubReactionsSection } from './sections/eventSubReactions.js';
 import { initAutomationSection } from './sections/automation.js';
 import { initOauthSection } from './sections/oauth.js';
 import { initRenderLogsSection } from './sections/renderLogs.js';
+import { initYoutubeSection } from './sections/youtube.js';
 
 let loggedIn = false;
 let config = { channelName: 'generalqwert', maxStreamLoreLength: 12000 };
@@ -53,6 +54,7 @@ const eventSubReactions = initEventSubReactionsSection({ $, esc, postJson, confi
 const automation = initAutomationSection({ $, postJson });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
+const youtube = initYoutubeSection({ $, esc, postJson });
 void messaging;
 const reliability = initReliabilitySection({ $, postJson, isLoggedIn: () => loggedIn, onResolved: () => status() });
 let statusLoading = false;
@@ -99,7 +101,7 @@ async function status() {
     const botReady = Boolean(d.oauth.stored && botMissing.length === 0);
     const broadcasterReady = Boolean(broadcaster.stored && broadcasterMissing.length === 0);
     const chatReady = Boolean(d.oauth.chatApiReady);
-    $('chatApiStatusLabel').textContent = loggedIn ? 'Twitch Chat API Status' : 'Chat Connection';
+    $('chatApiStatusLabel').textContent = loggedIn ? 'Twitch Chat API / Bot Badge' : 'Chat Connection';
     $('chatApiStatusBox').textContent = loggedIn
       ? (chatReady ? (singleAccountMode ? 'CHAT READY' : 'BOT BADGE READY') : 'NOT READY')
       : (chatReady ? (singleAccountMode ? 'CONNECTED' : 'CONNECTED AS CHATBOT') : 'NOT CONNECTED');
@@ -460,42 +462,72 @@ $('resetNativeResponseBtn').onclick = resetNativeResponseDialog;
 $('nativeResponseDialog').addEventListener('click', (event) => { if (event.target === $('nativeResponseDialog')) closeNativeResponseDialog(); });
 selectCommandsView('commands', { load: false });
 
-const sectionMap = {
-  messagingTab: 'messagingPanel',
+const twitchSections = {
   customCommandsTab: 'customCommandsPanel',
+  messagingTab: 'messagingPanel',
   loreTab: 'lorePanel',
-  oauthTab: 'oauthPanel',
-  renderLogsTab: 'renderLogsPanel'
+  oauthTab: 'oauthPanel'
 };
-function toggleSection(tabId) {
-  const targetId = sectionMap[tabId];
-  const target = $(targetId);
-  const shouldOpen = !target.classList.contains('open');
-  Object.entries(sectionMap).forEach(([buttonId, panelId]) => {
-    $(panelId).classList.remove('open');
-    $(buttonId).classList.remove('active');
-    $(buttonId).setAttribute('aria-expanded', 'false');
-    if (panelId === 'renderLogsPanel') renderLogs.onVisibilityChange(false);
-    if (panelId === 'customCommandsPanel') {
-      customCommands.onVisibilityChange(false);
-      timers.onVisibilityChange(false);
-      eventSubReactions.onVisibilityChange(false);
-    }
-    if (panelId === 'lorePanel') viewerProfiles.onVisibilityChange(false);
+const youtubeSections = {
+  youtubeAutomationTab: 'youtubeAutomationPanel',
+  youtubeOauthTab: 'youtubeOauthPanel'
+};
+const allSectionPanels = [...Object.values(twitchSections), ...Object.values(youtubeSections), 'renderLogsPanel'];
+
+function closeAllDashboardSections() {
+  allSectionPanels.forEach((panelId) => $(panelId)?.classList.remove('open'));
+  [...Object.keys(twitchSections), ...Object.keys(youtubeSections)].forEach((tabId) => {
+    $(tabId)?.classList.remove('active');
+    $(tabId)?.setAttribute('aria-expanded', 'false');
   });
-  if (shouldOpen) {
-    target.classList.add('open');
-    $(tabId).classList.add('active');
-    $(tabId).setAttribute('aria-expanded', 'true');
-    if (targetId === 'renderLogsPanel') renderLogs.onVisibilityChange(true);
-    if (targetId === 'customCommandsPanel') selectCommandsView('commands');
-    if (targetId === 'lorePanel') lore.selectMemoryView('lore');
+  customCommands.onVisibilityChange(false);
+  timers.onVisibilityChange(false);
+  eventSubReactions.onVisibilityChange(false);
+  viewerProfiles.onVisibilityChange(false);
+  renderLogs.onVisibilityChange(false);
+  youtube.onAutomationVisibilityChange(false);
+  youtube.onOauthVisibilityChange(false);
+  youtube.onDiagnosticsVisibilityChange(false);
+}
+
+function openSubsection(tabId, group) {
+  const map = group === 'youtube' ? youtubeSections : twitchSections;
+  const panelId = map[tabId];
+  if (!panelId) return;
+  closeAllDashboardSections();
+  $(panelId).classList.add('open');
+  $(tabId).classList.add('active');
+  $(tabId).setAttribute('aria-expanded', 'true');
+  if (panelId === 'customCommandsPanel') selectCommandsView('commands');
+  if (panelId === 'lorePanel') lore.selectMemoryView('lore');
+  if (panelId === 'youtubeAutomationPanel') youtube.onAutomationVisibilityChange(true);
+  if (panelId === 'youtubeOauthPanel') youtube.onOauthVisibilityChange(true);
+}
+
+function showPlatform(platform, preferredTab = null) {
+  for (const id of ['twitchTab', 'youtubeTab', 'diagnosticsTab']) $(id).classList.toggle('active', id === `${platform}Tab`);
+  $('twitchSubNav').hidden = platform !== 'twitch';
+  $('youtubeSubNav').hidden = platform !== 'youtube';
+  closeAllDashboardSections();
+  if (platform === 'twitch') openSubsection(preferredTab && twitchSections[preferredTab] ? preferredTab : 'customCommandsTab', 'twitch');
+  else if (platform === 'youtube') openSubsection(preferredTab && youtubeSections[preferredTab] ? preferredTab : 'youtubeAutomationTab', 'youtube');
+  else if (platform === 'diagnostics') {
+    $('renderLogsPanel').classList.add('open');
+    renderLogs.onVisibilityChange(true);
+    youtube.onDiagnosticsVisibilityChange(true);
   }
 }
-Object.keys(sectionMap).forEach((tabId) => {
-  $(tabId).setAttribute('aria-expanded', 'false');
-  $(tabId).onclick = () => toggleSection(tabId);
-});
+
+Object.keys(twitchSections).forEach((tabId) => { $(tabId).onclick = () => openSubsection(tabId, 'twitch'); });
+Object.keys(youtubeSections).forEach((tabId) => { $(tabId).onclick = () => openSubsection(tabId, 'youtube'); });
+$('twitchTab').onclick = () => showPlatform('twitch');
+$('youtubeTab').onclick = () => showPlatform('youtube');
+$('diagnosticsTab').onclick = () => showPlatform('diagnostics');
 
 await restoreSession();
+if (loggedIn && new URLSearchParams(location.search).get('youtube_oauth') === 'success') {
+  showPlatform('youtube', 'youtubeOauthTab');
+  $('youtubeOauthMsg').textContent = 'YouTube OAuth connected successfully.';
+  history.replaceState({}, '', location.pathname);
+}
 setInterval(status, 15000);

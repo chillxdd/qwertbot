@@ -313,12 +313,18 @@ function registerDashboardRoutes(app, options) {
   });
 
 
-  app.get('/', (req, res) => res.redirect(302, '/commands'));
+  app.get('/', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    return res.sendFile(path.join(viewsDir, 'command-platforms.html'));
+  });
 
-  app.get('/commands', (req, res) => {
+  app.get('/ttvcommands', (req, res) => {
     res.set('Cache-Control', 'no-store');
     return res.sendFile(path.join(viewsDir, 'commands.html'));
   });
+
+  // Legacy public URL retained so old bot messages/bookmarks keep working.
+  app.get('/commands', (req, res) => res.redirect(302, '/ttvcommands'));
 
   app.get(adminPath, (req, res) => {
     res.set('Cache-Control', 'no-store');

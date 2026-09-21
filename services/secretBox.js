@@ -47,7 +47,7 @@ function encrypt(value, contextId) {
   const plaintext = String(value || '');
   const candidates = secretCandidates();
   if (!candidates.length) {
-    throw new Error('Discord webhook storage needs CONFIG_ENCRYPTION_KEY (preferred), QWERT_OAUTH_LINK_SECRET, or TWITCH_CLIENT_SECRET to be configured on the server.');
+    throw new Error('Encrypted configuration storage needs CONFIG_ENCRYPTION_KEY (preferred), QWERT_OAUTH_LINK_SECRET, or TWITCH_CLIENT_SECRET to be configured on the server.');
   }
   if (!plaintext) throw new Error('Cannot encrypt an empty secret.');
   const [source, rootSecret] = candidates[0];
@@ -65,13 +65,13 @@ function encrypt(value, contextId) {
 }
 
 function decrypt(box, contextId) {
-  if (!box || String(box.version || '') !== VERSION) throw new Error('Unsupported encrypted webhook format.');
+  if (!box || String(box.version || '') !== VERSION) throw new Error('Unsupported encrypted secret format.');
   const iv = Buffer.from(String(box.iv || ''), 'base64');
   const tag = Buffer.from(String(box.tag || ''), 'base64');
   const data = Buffer.from(String(box.data || ''), 'base64');
-  if (iv.length !== IV_BYTES || tag.length !== 16 || !data.length) throw new Error('Stored Discord webhook secret is invalid.');
+  if (iv.length !== IV_BYTES || tag.length !== 16 || !data.length) throw new Error('Stored encrypted secret is invalid.');
   const candidates = secretCandidates();
-  if (!candidates.length) throw new Error('Discord webhook decryption key is not configured on the server.');
+  if (!candidates.length) throw new Error('Encrypted configuration decryption key is not configured on the server.');
 
   const preferred = String(box.source || '');
   const ordered = [...candidates].sort((a, b) => Number(b[0] === preferred) - Number(a[0] === preferred));
@@ -87,7 +87,7 @@ function decrypt(box, contextId) {
       // with QWERT_OAUTH_LINK_SECRET.
     }
   }
-  throw new Error('Could not decrypt the stored Discord webhook. The encryption secret may have changed.');
+  throw new Error('Could not decrypt the stored encrypted secret. The encryption secret may have changed.');
 }
 
 module.exports = { encrypt, decrypt, status, VERSION };

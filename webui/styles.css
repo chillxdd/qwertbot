@@ -740,3 +740,17 @@ button.success{background:#16834a}
 
 .reliability-review-item { margin-top: 14px; padding: 14px; border: 1px solid #654638; border-radius: 8px; }
 .reliability-review-item p { overflow-wrap: anywhere; margin: 8px 0; }
+
+/* Platform navigation added for isolated Twitch/YouTube administration. */
+.platform-nav{margin-top:18px}
+.platform-subnav{margin:10px 0 18px;gap:8px;flex-wrap:wrap}
+.platform-subnav[hidden]{display:none!important}
+.youtube-subview{margin-top:14px}
+.youtube-native-card{max-width:900px}
+.youtube-native-card input[type="text"],.youtube-native-card input:not([type]){width:100%}
+.youtube-control-row{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0}
+.youtube-quota-card{margin-top:18px}
+.youtube-card-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.youtube-card-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px;color:var(--muted,#aab2bf);font-size:.9rem}
+.youtube-card-actions{display:flex;gap:8px;flex-wrap:wrap}
+.youtube-empty{padding:18px 0;color:var(--muted,#aab2bf)}

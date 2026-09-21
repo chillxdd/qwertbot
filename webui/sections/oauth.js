@@ -74,13 +74,6 @@ export function initOauthSection({ $, postJson }) {
       ? `Account: ${broadcaster.username || 'unknown'}${broadcasterMissing.length ? ` | Missing: ${broadcasterMissing.join(', ')}` : ' | Bot badge + EventSub scopes granted'}`
       : 'Private Qwert authorization link required';
 
-    const chatReady = Boolean(d.oauth.chatApiReady);
-    $('oauthChatApiStatusBox').textContent = chatReady ? 'BOT BADGE READY' : 'NOT READY';
-    $('oauthChatApiStatusBox').className = `value ${chatReady ? 'good' : 'warn'}`;
-    $('oauthChatApiDetail').textContent = chatReady
-      ? 'Outgoing bot messages use Twitch Send Chat Message API + App Access Token.'
-      : (!botReady || !broadcasterReady ? 'Complete both OAuth grants above.' : 'OAuth grants are present, but Twitch Chat API is not ready. Check Diagnostics.');
-
     $('oauthBtn').disabled = !d.oauth.configured || !d.database.connected;
     return { botReady, broadcasterReady };
   }

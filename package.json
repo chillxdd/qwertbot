@@ -2,7 +2,7 @@
   "name": "sqwertarmybot",
   "version": "1.0.0",
   "private": true,
-  "description": "Twitch community bot for GeneralQwert",
+  "description": "Twitch and YouTube community bot for GeneralQwert",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -16,6 +16,8 @@
   "dependencies": {
     "express": "4.22.2",
     "mongoose": "8.24.2",
-    "tmi.js": "1.8.5"
+    "tmi.js": "1.8.5",
+    "@grpc/grpc-js": "1.14.4",
+    "@grpc/proto-loader": "0.8.1"
   }
 }

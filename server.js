@@ -14,6 +14,7 @@ const { createRuntime } = require('./services/reliability/runtime');
 const { createRateGate } = require('./services/reliability/rateGate');
 const { canFallbackToIrc, deliveryError } = require('./services/reliability/twitchDelivery');
 const { createTwitchConnectionController } = require('./services/twitchConnectionController');
+const { createYouTubeManager } = require('./services/youtubeManager');
 const { configureSharedRateGate, cancelAllGeminiRequests, getGeminiClientStatus, HARD_MAX_REQUESTS_PER_MINUTE } = require('./services/geminiClient');
 const { stopTemporaryPinTimer } = require('./services/twitchChat');
 const { createModSessionManager } = require('./middleware/modSession');
@@ -53,6 +54,8 @@ const { registerMemoryRoutes } = require('./routes/memory');
 const { registerRecapRoutes } = require('./routes/recap');
 const { registerNativeCommandRoutes } = require('./routes/nativeCommands');
 const { registerReliabilityRoutes } = require('./routes/reliability');
+const { registerYouTubeAuthRoutes } = require('./routes/youtubeAuth');
+const { registerYouTubeRoutes } = require('./routes/youtube');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -112,6 +115,7 @@ let persistentPinManager = null;
 let clipCommandManager = null;
 let botPersonalityManager = null;
 let twitchMessageHandler = null;
+let youtubeManager = null;
 
 const twitchConnection = createTwitchConnectionController({
   channelName,
@@ -193,6 +197,8 @@ const modSessionManager = createModSessionManager({
 });
 
 const requireModSession = modSessionManager.requireSession;
+
+youtubeManager = createYouTubeManager({ channelKey: channelName || 'generalqwert' });
 
 automationSpacingManager = createAutomationSpacingManager({ channelName });
 
@@ -311,6 +317,7 @@ registerDashboardRoutes(app, {
   getDatabaseConnected: () => isDatabaseConnected(),
   getBotConnected: () => twitchConnection.isConnected(),
   getUsingMongoOAuth: () => twitchConnection.isUsingMongoOAuth(),
+  getYouTubeManager: () => youtubeManager,
   viewsDir: path.join(__dirname, 'views'),
   adminPath: ADMIN_PATH
 });
@@ -381,11 +388,49 @@ registerNativeCommandRoutes(app, {
   channelName
 });
 
+registerYouTubeAuthRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => isDatabaseConnected(),
+  youtubeManager,
+  adminPath: ADMIN_PATH
+});
+
+registerYouTubeRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => isDatabaseConnected(),
+  youtubeManager,
+  channelKey: channelName || 'generalqwert',
+  viewsDir: path.join(__dirname, 'views')
+});
+
 registerChatRoutes(app, {
   requireModSession,
   channelName,
   chatClientProxy
 });
+
+async function initializeYouTubeFailOpen(context = 'startup') {
+  try {
+    await youtubeManager?.initialize?.();
+    return true;
+  } catch (err) {
+    console.warn(`[YouTube] ${context} failed; Twitch will continue normally:`, err?.message || err);
+    return false;
+  }
+}
+
+async function syncYouTubeFailOpen(streamStatus, context = 'live-state sync') {
+  try {
+    await youtubeManager?.syncTwitchLiveState?.({
+      live: Boolean(streamStatus?.streamLive),
+      known: Boolean(streamStatus?.streamStateInitialized)
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[YouTube] ${context} failed; Twitch will continue normally:`, err?.message || err);
+    return false;
+  }
+}
 
 async function activateBot() {
   await automationSpacingManager.initialize();
@@ -393,6 +438,7 @@ async function activateBot() {
   await customCommandManager.initialize();
   await eventSubReactionManager.initialize();
   await botPersonalityManager.initialize();
+  await initializeYouTubeFailOpen('initialization');
   recapManager = createRecapManager({
     client: chatClientProxy, channelName, getTwitchAccessToken: twitchConnection.getBotAccessToken,
     refreshTwitchAccessToken: twitchConnection.refreshBotAccessToken, validateTwitchAccessToken: twitchConnection.validateAnyBotToken,
@@ -407,6 +453,10 @@ async function activateBot() {
   await chatTimerManager.initialize();
   // Detection remains restartable even if initial OAuth/IRC is unavailable.
   await recapManager.start();
+  {
+    const streamStatus = recapManager.getStatus();
+    await syncYouTubeFailOpen(streamStatus, 'startup live-state sync');
+  }
   const accessToken = await twitchConnection.resolveStartupToken();
   if (accessToken) {
     try { await twitchConnection.createAndConnect(accessToken); }
@@ -450,6 +500,10 @@ async function runEventSubEnsure() {
 async function maintainBot() {
   if (!runtime.isActive()) return;
   await twitchConnection.maintainConnection();
+  {
+    const streamStatus = recapManager?.getStatus?.() || {};
+    await syncYouTubeFailOpen(streamStatus, 'maintenance live-state sync');
+  }
 
   // Healthy EventSub subscriptions only need a periodic reconciliation. Missing
   // optional scopes are expected and do not trigger the five-minute retry loop;
@@ -475,10 +529,11 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
   quiesce: () => {
     twitchConnection.quiesce(); clearInterval(retentionTimer);
     recapManager?.quiesce(); chatTimerManager?.quiesce(); persistentPinManager?.quiesce();
+    void youtubeManager?.quiesce?.();
     eventSubInbox?.quiesce(); stopTemporaryPinTimer(); cancelAllGeminiRequests();
   },
   flush: async ({ persist }) => {
-    const work = [eventSubInbox?.stop()];
+    const work = [eventSubInbox?.stop(), youtubeManager?.shutdown?.()];
     if (persist) { work.push(recapManager?.shutdown({ persist: true }), chatTimerManager?.shutdown()); }
     const results = await Promise.allSettled(work);
     for (const result of results) if (result.status === 'rejected') console.error('[Shutdown] Durable flush failed:', result.reason?.message);

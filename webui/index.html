@@ -3,7 +3,7 @@
 <head>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0b0e13">
-  <title>GeneralQwert's Twitch Bot</title>
+  <title>GeneralQwert's Bot</title>
   <link rel="stylesheet" href="/webui/styles.css">
 </head>
 <body>
@@ -17,7 +17,7 @@
 
 <div class="card">
   <div class="dashboard-header">
-    <h2>GeneralQwert's Twitch Bot</h2>
+    <h2>GeneralQwert's Bot</h2>
     <div class="dashboard-session-actions">
       <span id="readonlyBadge" class="readonly-badge" hidden>Read-only</span>
       <button id="openLoginBtn" class="secondary" type="button" hidden>Mod Login</button>
@@ -28,16 +28,23 @@
     <div class="box"><div class="label">Qwert Status</div><div id="qStatus" class="value warn">Checking...</div><div id="qDetail" class="detail"></div><div id="streamMeta" class="detail"></div></div>
     <div class="box"><div class="label">Bot Status</div><div id="bStatus" class="value warn">Checking...</div><div id="bDetail" class="detail"></div></div>
     <div class="box"><div id="dbStatusLabel" class="label">Database Status</div><div id="dbStatus" class="value warn">Checking...</div><div id="dbDetail" class="detail"></div></div>
-    <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API Status</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
   </div>
 
   <div id="protected">
-    <div class="section-nav" role="tablist" aria-label="Bot dashboard sections">
+    <div class="section-nav platform-nav" role="tablist" aria-label="Bot platform sections">
+      <button id="twitchTab" class="secondary" type="button">Twitch</button>
+      <button id="youtubeTab" class="secondary" type="button">YouTube</button>
+      <button id="diagnosticsTab" class="secondary" type="button">Diagnostics</button>
+    </div>
+    <div id="twitchSubNav" class="subsection-nav platform-subnav" role="tablist" aria-label="Twitch sections" hidden>
       <button id="customCommandsTab" class="secondary" type="button">Commands &amp; Automation</button>
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
-      <button id="renderLogsTab" class="secondary" type="button">Diagnostics</button>
+    </div>
+    <div id="youtubeSubNav" class="subsection-nav platform-subnav" role="tablist" aria-label="YouTube sections" hidden>
+      <button id="youtubeAutomationTab" class="secondary" type="button">Commands &amp; Automation</button>
+      <button id="youtubeOauthTab" class="secondary" type="button">OAuth Management</button>
     </div>
 
     <div id="messagingPanel" class="section-panel">
@@ -1197,8 +1204,66 @@
       <div class="oauth-grid">
         <div class="box"><div class="label">Bot OAuth</div><div id="oauthStatusBox" class="value warn">Checking...</div><div id="oauthDetail" class="detail"></div><div class="oauth-action"><button id="oauthBtn">Authorize / Reauthorize Twitch Bot</button><div id="oauthMsg" class="detail"></div></div></div>
         <div class="box"><div class="label">Broadcaster OAuth</div><div id="broadcasterStatusBox" class="value warn">Checking...</div><div id="broadcasterDetail" class="detail"></div><div class="oauth-action"><button id="broadcasterOauthBtn">Authorize / Reauthorize Broadcaster</button><div id="broadcasterOauthMsg" class="detail"></div></div></div>
-        <div class="box wide"><div class="label">Twitch Chat API</div><div id="oauthChatApiStatusBox" class="value warn">Checking...</div><div id="oauthChatApiDetail" class="detail"></div></div>
       </div>
+    </div>
+
+    <div id="youtubeAutomationPanel" class="section-panel">
+      <div class="section-intro">
+        <h3>YouTube Commands &amp; Automation</h3>
+        <div class="detail">YouTube-only commands and timers. Twitch commands, variables, counters, and timers remain completely separate.</div>
+      </div>
+      <div class="subsection-nav commands-subsection-nav" role="tablist" aria-label="YouTube commands and automation views">
+        <button id="youtubeCustomCommandsViewTab" class="secondary active" type="button">Custom Commands</button>
+        <button id="youtubeTimersViewTab" class="secondary" type="button">Timers</button>
+        <button id="youtubeNativeCommandsViewTab" class="secondary" type="button">Native Commands</button>
+      </div>
+
+      <div id="youtubeCustomCommandsView" class="subsection-view open youtube-subview">
+        <div class="custom-command-header"><div><h3>Custom Commands</h3><div class="detail">Separate YouTube command records. Supported variables: $(user), $(touser), $(query), $(count), $(counter), $(randomuser), and $(random min max).</div></div><button id="addYoutubeCommandBtn" type="button">Add YouTube Command</button></div>
+        <div class="custom-global-cooldown-card"><div><strong>Global Command Cooldown</strong><div class="detail">Scoped independently per YouTube live chat, so vertical and horizontal viewers do not block each other.</div></div><div class="custom-global-cooldown-input-row"><input id="youtubeGlobalCooldown" type="number" min="0" max="86400" step="1" value="5"><span class="duration-unit">seconds</span><button id="saveYoutubeGlobalCooldownBtn" class="secondary" type="button">Save</button></div></div>
+        <div id="youtubeCommandList" class="custom-command-list"></div><div id="youtubeCommandsMsg" class="detail"></div>
+      </div>
+
+      <div id="youtubeTimersView" class="subsection-view youtube-subview">
+        <div class="custom-command-header"><div><h3>YouTube Timers</h3><div class="detail">Posts to every distinct active YouTube chat. Minimum interval: 10 minutes. With two separate chats, one timer fire sends two messages and uses twice the quota.</div></div><button id="addYoutubeTimerBtn" type="button">Add YouTube Timer</button></div>
+        <div id="youtubeTimerList" class="custom-command-list"></div><div id="youtubeTimersMsg" class="detail"></div>
+      </div>
+
+      <div id="youtubeNativeCommandsView" class="subsection-view youtube-subview">
+        <h3>Native Commands</h3>
+        <div class="box wide youtube-native-card"><div class="label">!commands</div><label class="inline-check"><input id="youtubeNativeCommandsEnabled" type="checkbox" checked> Enabled</label><label class="prompt-label" for="youtubeNativeCommandsResponse">Response</label><input id="youtubeNativeCommandsResponse" maxlength="200" placeholder="YouTube commands URL"><div class="detail">This is the only built-in YouTube command. Custom commands are managed separately above.</div><button id="saveYoutubeNativeBtn" type="button">Save !commands</button><div id="youtubeNativeMsg" class="detail"></div></div>
+      </div>
+
+      <dialog id="youtubeCommandDialog" class="custom-command-dialog">
+        <div class="custom-command-dialog-inner"><div class="custom-dialog-heading"><h3 id="youtubeCommandDialogTitle">YouTube Command</h3><button id="closeYoutubeCommandDialogBtn" class="secondary" type="button">Close</button></div>
+          <input id="youtubeCommandId" type="hidden">
+          <label class="prompt-label">Name</label><input id="youtubeCommandName" maxlength="80">
+          <label class="prompt-label">Trigger</label><input id="youtubeCommandTrigger" maxlength="50" placeholder="!discord">
+          <label class="prompt-label">Public Description</label><input id="youtubeCommandDescription" maxlength="300">
+          <label class="prompt-label">Responses <span class="detail">one per line, max 200 characters each</span></label><textarea id="youtubeCommandResponses" rows="6" maxlength="5025"></textarea>
+          <div class="form-grid"><label>User Level<select id="youtubeCommandUserLevel"><option value="everyone">Everyone</option><option value="member">Member</option><option value="moderator">Moderator</option><option value="owner">Owner</option></select></label><label>Cooldown (seconds)<input id="youtubeCommandCooldown" type="number" min="0" max="86400" value="5"></label><label>Probability %<input id="youtubeCommandProbability" type="number" min="0" max="100" value="100"></label><label>Response Delay (seconds)<input id="youtubeCommandDelay" type="number" min="0" max="30" step="0.5" value="0"></label></div>
+          <label class="inline-check"><input id="youtubeCommandAvoidRepeat" type="checkbox"> Avoid immediate response repeat</label><label class="inline-check"><input id="youtubeCommandEnabled" type="checkbox" checked> Enabled</label>
+          <div class="modal-actions"><button id="deleteYoutubeCommandBtn" class="danger" type="button">Delete</button><button id="saveYoutubeCommandBtn" type="button">Save Command</button></div><div id="youtubeCommandDialogMsg" class="detail"></div>
+        </div>
+      </dialog>
+
+      <dialog id="youtubeTimerDialog" class="custom-command-dialog">
+        <div class="custom-command-dialog-inner"><div class="custom-dialog-heading"><h3 id="youtubeTimerDialogTitle">YouTube Timer</h3><button id="closeYoutubeTimerDialogBtn" class="secondary" type="button">Close</button></div>
+          <input id="youtubeTimerId" type="hidden"><label class="prompt-label">Name</label><input id="youtubeTimerName" maxlength="80"><label class="prompt-label">Responses <span class="detail">one per line, max 200 characters each</span></label><textarea id="youtubeTimerResponses" rows="6" maxlength="5025"></textarea>
+          <div class="form-grid"><label>Interval (minutes)<input id="youtubeTimerIntervalMinutes" type="number" min="10" max="1440" value="15"></label><label>First Post Delay (minutes)<input id="youtubeTimerStartDelayMinutes" type="number" min="0" max="1440" value="15"></label></div>
+          <label class="inline-check"><input id="youtubeTimerAvoidRepeat" type="checkbox"> Avoid immediate response repeat</label><label class="inline-check"><input id="youtubeTimerEnabled" type="checkbox" checked> Enabled</label>
+          <div class="modal-actions"><button id="deleteYoutubeTimerBtn" class="danger" type="button">Delete</button><button id="fireYoutubeTimerBtn" class="secondary" type="button">Fire Now</button><button id="saveYoutubeTimerBtn" type="button">Save Timer</button></div><div id="youtubeTimerDialogMsg" class="detail"></div>
+        </div>
+      </dialog>
+    </div>
+
+    <div id="youtubeOauthPanel" class="section-panel">
+      <div class="section-intro"><h3>YouTube OAuth Management</h3><div class="detail">Only SqwertArmyBot authorizes this app. Qwert's YouTube account does not grant OAuth access.</div></div>
+      <div class="oauth-grid">
+        <div class="box"><div class="label">SqwertArmyBot OAuth</div><div id="youtubeOauthStatus" class="value warn">Checking...</div><div id="youtubeOauthDetail" class="detail"></div><div class="oauth-action"><button id="youtubeAuthorizeBtn" type="button">Authorize / Reauthorize YouTube Bot</button><button id="youtubeDisconnectBtn" class="secondary" type="button">Disconnect</button></div></div>
+        <div class="box"><div class="label">YouTube Live Chats</div><div id="youtubeLiveStatus" class="value warn">Checking...</div><div id="youtubeLiveDetail" class="detail"></div><div class="oauth-action"><button id="youtubeRediscoverBtn" class="secondary" type="button">Discover Chats Now</button></div></div>
+        <div class="box wide"><div class="label">YouTube Bot Controls</div><div class="youtube-control-row"><label class="inline-check"><input id="youtubeBotEnabled" type="checkbox" checked> YouTube subsystem enabled</label><label class="inline-check"><input id="youtubeCommandsEnabled" type="checkbox" checked> Commands enabled</label><label class="inline-check"><input id="youtubeTimersEnabled" type="checkbox" checked> Timers enabled</label></div><button id="saveYoutubeControlsBtn" class="secondary" type="button">Save Controls</button><div class="detail">When Twitch is offline, the YouTube subsystem sleeps regardless of these settings.</div></div>
+      </div><div id="youtubeOauthMsg" class="detail"></div>
     </div>
 
     <div id="renderLogsPanel" class="section-panel">
@@ -1209,6 +1274,9 @@
 
       <div id="runtimeDiagnosticsMsg" class="detail">Open this section to load runtime health.</div>
       <div class="runtime-diagnostics-grid" aria-label="Runtime diagnostics">
+        <div class="box"><div id="chatApiStatusLabel" class="label">Twitch Chat API / Bot Badge</div><div id="chatApiStatusBox" class="value warn">Checking...</div><div id="chatApiDetail" class="detail"></div></div>
+        <div class="box"><div class="label">YouTube Live Chats</div><div id="diagYoutubeChats" class="value warn">Checking...</div><div id="diagYoutubeChatsDetail" class="detail"></div></div>
+        <div class="box"><div class="label">YouTube API Quota</div><div id="diagYoutubeQuota" class="value warn">Checking...</div><div id="diagYoutubeQuotaDetail" class="detail"></div></div>
         <div class="box"><div class="label">Process Memory</div><div id="diagMemory" class="value warn">Checking...</div><div id="diagMemoryDetail" class="detail"></div></div>
         <div class="box"><div class="label">Node Heap</div><div id="diagHeap" class="value warn">Checking...</div><div id="diagHeapDetail" class="detail"></div></div>
         <div class="box"><div class="label">Event Loop</div><div id="diagEventLoop" class="value warn">Checking...</div><div id="diagEventLoopDetail" class="detail"></div></div>
@@ -1219,6 +1287,19 @@
         <div class="box"><div class="label">Tagged Questions</div><div id="diagTagged" class="value warn">Checking...</div><div id="diagTaggedDetail" class="detail"></div></div>
         <div class="box"><div class="label">Recap Engine</div><div id="diagRecap" class="value warn">Checking...</div><div id="diagRecapDetail" class="detail"></div></div>
         <div class="box"><div class="label">Core Services</div><div id="diagServices" class="value warn">Checking...</div><div id="diagServicesDetail" class="detail"></div></div>
+      </div>
+
+      <div class="recap-utility-card youtube-preflight-card">
+        <div class="recap-card-title">YouTube Preflight</div>
+        <div class="detail">Run this before going live to verify SqwertArmyBot OAuth/token refresh, the StreamList gRPC client, and Qwert's configured YouTube channel. It does not send a chat message or start a live-chat worker; it uses one inexpensive YouTube Data API lookup.</div>
+        <div class="modal-actions"><button id="runYoutubePreflightBtn" type="button">Run YouTube Preflight</button></div>
+        <div id="youtubePreflightResult" class="detail">Not run yet.</div>
+      </div>
+
+      <div class="recap-utility-card youtube-quota-card">
+        <div class="recap-card-title">YouTube Quota Safety</div><div class="detail">Internal conservative counters reset on the same Pacific-day boundary as YouTube's daily quota. They are safety estimates, not a replacement for Google Cloud's official quota page.</div>
+        <div class="form-grid"><label>Pause timers at main units<input id="youtubeTimerQuotaStop" type="number" min="500" max="9900" value="7500"></label><label>Stop all bot sends at main units<input id="youtubeHardQuotaStop" type="number" min="550" max="10000" value="9000"></label><label>Discovery search safety limit<input id="youtubeSearchQuotaStop" type="number" min="1" max="100" value="90"></label></div>
+        <div class="modal-actions"><button id="saveYoutubeQuotaBtn" class="secondary" type="button">Save Quota Safety</button><button id="refreshYoutubeDiagnosticsBtn" class="secondary" type="button">Refresh YouTube Status</button></div><div id="youtubeQuotaMsg" class="detail"></div>
       </div>
 
       <div class="render-log-toolbar">
