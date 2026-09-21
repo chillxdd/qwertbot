@@ -3,12 +3,105 @@
 <head>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0b0e13">
+  <meta name="robots" content="index,follow">
   <title>SqwertArmyBot YouTube Commands</title>
-  <style>
-    body{margin:0;background:#0b0e13;color:#eef2f7;font-family:system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:760px;margin:0 auto;padding:28px 18px}.card{background:#121720;border:1px solid #27303d;border-radius:16px;padding:20px}h1{margin-top:0}.cmd{padding:12px 0;border-top:1px solid #27303d}.cmd:first-of-type{border-top:0}code{font-size:1.05rem;color:#fff}.detail{color:#aeb7c4;margin-top:4px}.status{color:#aeb7c4}
-  </style>
+  <link rel="stylesheet" href="/webui/styles.css">
 </head>
-<body><main class="wrap"><div class="card"><div style="margin-bottom:14px"><a href="/" style="color:#aeb7c4;text-decoration:none">← Command platforms</a></div><h1>YouTube Commands</h1><div class="status" id="status">Loading…</div><div id="list"></div></div></main>
-<script>
-(async()=>{const s=document.getElementById('status'),l=document.getElementById('list');try{const r=await fetch('/youtube-public-commands',{cache:'no-store'}),d=await r.json();if(!d.success)throw new Error(d.error||'Unavailable');s.textContent=d.commands.length?`${d.commands.length} available command${d.commands.length===1?'':'s'}`:'No commands are enabled.';l.innerHTML=d.commands.map(c=>`<div class="cmd"><code>${String(c.trigger).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}</code><div class="detail">${String(c.description||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}</div></div>`).join('')}catch(e){s.textContent=e.message||'Could not load commands.'}})();
-</script></body></html>
+<body class="public-commands-page">
+  <main class="card public-commands-card">
+    <div class="dashboard-header public-commands-header">
+      <div>
+        <div style="margin-bottom:10px"><a href="/" style="color:#adadb8;text-decoration:none">← Command platforms</a></div>
+        <h2>YouTube Commands</h2>
+      </div>
+    </div>
+
+    <div class="readonly-commands-panel public-command-directory">
+      <div class="subsection-nav readonly-command-tabs" role="tablist" aria-label="Public YouTube commands">
+        <button id="readonlyCustomCommandsTab" class="secondary active" type="button" aria-selected="true">Custom Commands</button>
+        <button id="readonlyNativeCommandsTab" class="secondary" type="button" aria-selected="false">Native Commands</button>
+      </div>
+
+      <section id="readonlyCustomCommandsView" class="subsection-view open">
+        <div class="custom-command-header readonly-list-header">
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="readonlyCustomCommandSearch">
+              <span class="sr-only">Search public YouTube custom commands</span>
+              <input id="readonlyCustomCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search public YouTube custom commands">
+            </label>
+            <label class="custom-command-sort-label" for="readonlyCustomCommandUserLevelFilter">User Level
+              <select id="readonlyCustomCommandUserLevelFilter" aria-label="Filter public YouTube custom commands by user level">
+                <option value="all">All Levels</option>
+                <option value="everyone">Everyone</option>
+                <option value="member">Member</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Owner</option>
+              </select>
+            </label>
+            <label class="custom-command-sort-label" for="readonlyCustomCommandSort">Sort
+              <select id="readonlyCustomCommandSort" aria-label="Sort public YouTube custom commands">
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="cooldown_asc">Cooldown — lowest first</option>
+                <option value="cooldown_desc">Cooldown — highest first</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div id="readonlyCustomCommandList" class="custom-command-list"></div>
+        <div id="readonlyCustomCommandsMsg" class="detail"></div>
+        <div id="readonlyCustomCommandPagination" class="list-pagination" aria-label="Public YouTube custom command pagination">
+          <label class="list-page-size">Show
+            <select id="readonlyCustomCommandPageSize" aria-label="Public YouTube custom commands per page">
+              <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+            </select>
+          </label>
+          <div id="readonlyCustomCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="readonlyCustomCommandPrevPage" class="secondary" type="button" aria-label="Previous public YouTube custom command page">←</button>
+            <button id="readonlyCustomCommandNextPage" class="secondary" type="button" aria-label="Next public YouTube custom command page">→</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="readonlyNativeCommandsView" class="subsection-view">
+        <div class="custom-command-header readonly-list-header">
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="readonlyNativeCommandSearch">
+              <span class="sr-only">Search public YouTube native commands</span>
+              <input id="readonlyNativeCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search public YouTube native commands">
+            </label>
+            <label class="custom-command-sort-label" for="readonlyNativeCommandUserLevelFilter">User Level
+              <select id="readonlyNativeCommandUserLevelFilter" aria-label="Filter public YouTube native commands by user level">
+                <option value="all">All Levels</option>
+                <option value="everyone">Everyone</option>
+              </select>
+            </label>
+            <label class="custom-command-sort-label" for="readonlyNativeCommandSort">Sort
+              <select id="readonlyNativeCommandSort" aria-label="Sort public YouTube native commands">
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div id="readonlyNativeCommandList" class="native-command-list"></div>
+        <div id="readonlyNativeCommandsMsg" class="detail"></div>
+        <div id="readonlyNativeCommandPagination" class="list-pagination" aria-label="Public YouTube native command pagination">
+          <label class="list-page-size">Show
+            <select id="readonlyNativeCommandPageSize" aria-label="Public YouTube native commands per page">
+              <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+            </select>
+          </label>
+          <div id="readonlyNativeCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="readonlyNativeCommandPrevPage" class="secondary" type="button" aria-label="Previous public YouTube native command page">←</button>
+            <button id="readonlyNativeCommandNextPage" class="secondary" type="button" aria-label="Next public YouTube native command page">→</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/webui/youtube-commands.js"></script>
+</body>
+</html>

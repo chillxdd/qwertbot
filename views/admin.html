@@ -33,13 +33,13 @@
       <button id="youtubeTab" class="secondary" type="button">YouTube</button>
       <button id="diagnosticsTab" class="secondary" type="button">Diagnostics</button>
     </div>
-    <div id="twitchSubNav" class="subsection-nav platform-subnav" role="tablist" aria-label="Twitch sections" hidden>
+    <div id="twitchSubNav" class="subsection-nav platform-subnav twitch-platform-subnav" role="tablist" aria-label="Twitch sections" hidden>
       <button id="customCommandsTab" class="secondary" type="button">Commands &amp; Automation</button>
       <button id="messagingTab" class="secondary" type="button">AI Recap</button>
       <button id="loreTab" class="secondary" type="button">Memory Management</button>
       <button id="oauthTab" class="secondary" type="button">OAuth Management</button>
     </div>
-    <div id="youtubeSubNav" class="subsection-nav platform-subnav" role="tablist" aria-label="YouTube sections" hidden>
+    <div id="youtubeSubNav" class="subsection-nav platform-subnav youtube-platform-subnav" role="tablist" aria-label="YouTube sections" hidden>
       <button id="youtubeAutomationTab" class="secondary" type="button">Commands &amp; Automation</button>
       <button id="youtubeOauthTab" class="secondary" type="button">OAuth Management</button>
     </div>
@@ -1266,10 +1266,7 @@
     </div>
 
     <div id="youtubeAutomationPanel" class="section-panel">
-      <div class="section-intro">
-        <h3>YouTube Commands &amp; Automation</h3>
-        <div class="detail">YouTube-only commands and timers. Twitch commands, variables, counters, and timers remain completely separate.</div>
-      </div>
+      <h3>Commands &amp; Automation</h3>
       <div class="subsection-nav commands-subsection-nav youtube-commands-subsection-nav" role="tablist" aria-label="YouTube commands and automation views">
         <button id="youtubeCustomCommandsViewTab" class="secondary active" type="button">Custom Commands</button>
         <button id="youtubeTimersViewTab" class="secondary" type="button">Timers</button>
@@ -1277,42 +1274,262 @@
       </div>
 
       <div id="youtubeCustomCommandsView" class="subsection-view open youtube-subview">
-        <div class="custom-command-header"><div><h3>Custom Commands</h3><div class="detail">Separate YouTube command records. Supported variables: $(user), $(touser), $(query), $(count), $(counter), $(randomuser), and $(random min max).</div></div><button id="addYoutubeCommandBtn" type="button">Add YouTube Command</button></div>
-        <div class="custom-global-cooldown-card"><div><strong>Global Command Cooldown</strong><div class="detail">Scoped independently per YouTube live chat, so vertical and horizontal viewers do not block each other.</div></div><div class="custom-global-cooldown-input-row"><input id="youtubeGlobalCooldown" type="number" min="0" max="86400" step="1" value="5"><span class="duration-unit">seconds</span><button id="saveYoutubeGlobalCooldownBtn" class="secondary" type="button">Save</button></div></div>
-        <div id="youtubeCommandList" class="custom-command-list"></div><div id="youtubeCommandsMsg" class="detail"></div>
+        <div class="custom-command-header">
+          <h3>Custom Commands</h3>
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="youtubeCommandSearch">
+              <span class="sr-only">Search YouTube custom commands</span>
+              <input id="youtubeCommandSearch" class="list-search-input" type="search" placeholder="Search commands..." autocomplete="off" aria-label="Search YouTube custom commands">
+            </label>
+            <label class="custom-command-sort-label" for="youtubeCommandUserLevelFilter">User Level
+              <select id="youtubeCommandUserLevelFilter" aria-label="Filter YouTube custom commands by user level">
+                <option value="all">All Levels</option>
+                <option value="everyone">Everyone</option>
+                <option value="member">Member</option>
+                <option value="moderator">Moderator</option>
+                <option value="owner">Owner</option>
+              </select>
+            </label>
+            <label class="custom-command-sort-label" for="youtubeCommandSort">Sort
+              <select id="youtubeCommandSort" aria-label="Sort YouTube custom commands">
+                <option value="created_asc">Date added — oldest first</option>
+                <option value="created_desc">Date added — newest first</option>
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="counter_desc">Counter / uses — highest first</option>
+                <option value="counter_asc">Counter / uses — lowest first</option>
+              </select>
+            </label>
+            <button id="refreshYoutubeCommandsBtn" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="custom-global-cooldown-card">
+          <div class="custom-global-cooldown-copy">
+            <strong>Global Cooldown</strong>
+            <div class="detail">Minimum gap between custom-command messages in each YouTube live chat.</div>
+          </div>
+          <div class="custom-global-cooldown-control">
+            <div class="custom-global-cooldown-input-row">
+              <div class="duration-field compact-duration-field"><input id="youtubeGlobalCooldown" type="number" min="0" max="86400" step="1" value="5"><span class="duration-unit">seconds</span></div>
+              <button id="saveYoutubeGlobalCooldownBtn" class="secondary" type="button">Save</button>
+            </div>
+          </div>
+        </div>
+        <div id="youtubeCommandsMsg" class="detail"></div>
+        <div id="youtubeCommandList" class="custom-command-list"></div>
+        <div id="youtubeCommandPagination" class="list-pagination" aria-label="YouTube custom command pagination">
+          <label class="list-page-size">Show
+            <select id="youtubeCommandPageSize" aria-label="YouTube custom commands per page">
+              <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+            </select>
+          </label>
+          <div id="youtubeCommandPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="youtubeCommandPrevPage" class="secondary" type="button" aria-label="Previous YouTube custom command page">←</button>
+            <button id="youtubeCommandNextPage" class="secondary" type="button" aria-label="Next YouTube custom command page">→</button>
+          </div>
+        </div>
+        <div class="custom-command-add-row">
+          <button id="addYoutubeCommandBtn" type="button">Add Custom Command</button>
+        </div>
       </div>
 
       <div id="youtubeTimersView" class="subsection-view youtube-subview">
-        <div class="custom-command-header"><div><h3>YouTube Timers</h3><div class="detail">Posts to every distinct active YouTube chat. Minimum interval: 10 minutes. With two separate chats, one timer fire sends two messages and uses twice the quota.</div></div><button id="addYoutubeTimerBtn" type="button">Add YouTube Timer</button></div>
-        <div id="youtubeTimerList" class="custom-command-list"></div><div id="youtubeTimersMsg" class="detail"></div>
+        <div class="custom-command-header">
+          <h3>Timers</h3>
+          <div class="custom-command-list-controls">
+            <label class="list-search-wrap" for="youtubeTimerSearch">
+              <span class="sr-only">Search YouTube timers</span>
+              <input id="youtubeTimerSearch" class="list-search-input" type="search" placeholder="Search timers..." autocomplete="off" aria-label="Search YouTube timers">
+            </label>
+            <label class="custom-command-sort-label" for="youtubeTimerSort">Sort
+              <select id="youtubeTimerSort" aria-label="Sort YouTube timers">
+                <option value="created_asc">Date added — oldest first</option>
+                <option value="created_desc">Date added — newest first</option>
+                <option value="name_asc">Name — A to Z</option>
+                <option value="name_desc">Name — Z to A</option>
+                <option value="interval_asc">Interval — shortest first</option>
+                <option value="interval_desc">Interval — longest first</option>
+              </select>
+            </label>
+            <button id="refreshYoutubeTimersBtn" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+        <div id="youtubeTimersMsg" class="detail"></div>
+        <div id="youtubeTimerList" class="custom-command-list"></div>
+        <div id="youtubeTimerPagination" class="list-pagination" aria-label="YouTube timer pagination">
+          <label class="list-page-size">Show
+            <select id="youtubeTimerPageSize" aria-label="YouTube timers per page">
+              <option value="10">10</option><option value="25">25</option><option value="50">50</option>
+            </select>
+          </label>
+          <div id="youtubeTimerPageLabel" class="list-page-label">Page 1 of 1</div>
+          <div class="list-page-buttons">
+            <button id="youtubeTimerPrevPage" class="secondary" type="button" aria-label="Previous YouTube timer page">←</button>
+            <button id="youtubeTimerNextPage" class="secondary" type="button" aria-label="Next YouTube timer page">→</button>
+          </div>
+        </div>
+        <div class="custom-command-add-row">
+          <button id="addYoutubeTimerBtn" type="button">Add Timer</button>
+        </div>
       </div>
 
       <div id="youtubeNativeCommandsView" class="subsection-view youtube-subview">
         <h3>Native Commands</h3>
-        <div class="box wide youtube-native-card"><div class="label">!commands</div><label class="inline-check"><input id="youtubeNativeCommandsEnabled" type="checkbox" checked> Enabled</label><label class="prompt-label" for="youtubeNativeCommandsResponse">Response</label><input id="youtubeNativeCommandsResponse" maxlength="200" placeholder="YouTube commands URL"><div class="detail">This is the only built-in YouTube command. Custom commands are managed separately above.</div><button id="saveYoutubeNativeBtn" type="button">Save !commands</button><div id="youtubeNativeMsg" class="detail"></div></div>
+        <div class="box wide youtube-native-card">
+          <div class="label">!commands</div>
+          <label class="inline-check"><input id="youtubeNativeCommandsEnabled" type="checkbox" checked> Enabled</label>
+          <label class="prompt-label" for="youtubeNativeCommandsResponse">Response</label>
+          <input id="youtubeNativeCommandsResponse" maxlength="200" placeholder="Commands page URL">
+          <div class="detail">Links viewers to the public YouTube command directory.</div>
+          <button id="saveYoutubeNativeBtn" type="button">Save !commands</button>
+          <div id="youtubeNativeMsg" class="detail"></div>
+        </div>
       </div>
 
-      <dialog id="youtubeCommandDialog" class="custom-command-dialog">
-        <div class="custom-command-dialog-inner"><div class="custom-dialog-heading"><h3 id="youtubeCommandDialogTitle">YouTube Command</h3><button id="closeYoutubeCommandDialogBtn" class="secondary" type="button">Close</button></div>
-          <input id="youtubeCommandId" type="hidden">
-          <label class="prompt-label">Name</label><input id="youtubeCommandName" maxlength="80">
-          <label class="prompt-label">Trigger</label><input id="youtubeCommandTrigger" maxlength="50" placeholder="!discord">
-          <label class="prompt-label">Public Description</label><input id="youtubeCommandDescription" maxlength="300">
-          <label class="prompt-label">Responses <span class="detail">one per line, max 200 characters each</span></label><textarea id="youtubeCommandResponses" rows="6" maxlength="5025"></textarea>
-          <div class="form-grid"><label>User Level<select id="youtubeCommandUserLevel"><option value="everyone">Everyone</option><option value="member">Member</option><option value="moderator">Moderator</option><option value="owner">Owner</option></select></label><label>Cooldown (seconds)<input id="youtubeCommandCooldown" type="number" min="0" max="86400" value="5"></label><label>Probability %<input id="youtubeCommandProbability" type="number" min="0" max="100" value="100"></label><label>Response Delay (seconds)<input id="youtubeCommandDelay" type="number" min="0" max="30" step="0.5" value="0"></label></div>
-          <label class="inline-check"><input id="youtubeCommandAvoidRepeat" type="checkbox"> Avoid immediate response repeat</label><label class="inline-check"><input id="youtubeCommandEnabled" type="checkbox" checked> Enabled</label>
-          <div class="modal-actions"><button id="deleteYoutubeCommandBtn" class="danger" type="button">Delete</button><button id="saveYoutubeCommandBtn" type="button">Save Command</button></div><div id="youtubeCommandDialogMsg" class="detail"></div>
+      <dialog id="youtubeCommandDialog" class="custom-command-editor entity-editor-dialog">
+        <div class="custom-editor-header">
+          <h3 id="youtubeCommandDialogTitle">Add Custom Command</h3>
+          <div class="custom-editor-header-actions">
+            <label class="inline-check custom-enabled-check"><input id="youtubeCommandEnabled" type="checkbox" checked> Enabled</label>
+            <button id="closeYoutubeCommandDialogBtn" class="secondary" type="button">Close</button>
+          </div>
+        </div>
+        <input id="youtubeCommandId" type="hidden">
+
+        <div class="custom-editor-block">
+          <label class="prompt-label" for="youtubeCommandName">Name</label>
+          <input id="youtubeCommandName" type="text" maxlength="80" placeholder="Example: Discord">
+          <label class="prompt-label" for="youtubeCommandDescription">Public Description <span class="detail">(optional)</span></label>
+          <textarea id="youtubeCommandDescription" rows="3" maxlength="300" placeholder="Shown on the public commands page."></textarea>
+          <div id="youtubeCommandDescriptionCount" class="detail">0/300 characters</div>
+        </div>
+
+        <div class="custom-editor-block">
+          <div class="custom-trigger-heading"><strong>Triggers</strong></div>
+          <div class="detail">1/1 trigger</div>
+          <div class="custom-trigger-list">
+            <div class="custom-trigger-row youtube-single-trigger-row">
+              <select aria-label="Trigger type" disabled><option>!Command</option></select>
+              <input id="youtubeCommandTrigger" type="text" maxlength="50" placeholder="Example: !discord" aria-label="YouTube command trigger">
+            </div>
+          </div>
+          <div id="youtubeCommandTriggerMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-block">
+          <strong class="custom-block-title">Command Settings</strong>
+          <div class="custom-command-form-grid">
+            <div>
+              <label class="prompt-label" for="youtubeCommandUserLevel">User Level</label>
+              <select id="youtubeCommandUserLevel"><option value="everyone">Everyone</option><option value="member">Member</option><option value="moderator">Moderator</option><option value="owner">Owner</option></select>
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeCommandProbability">Probability (%)</label>
+              <input id="youtubeCommandProbability" type="number" min="0" max="100" step="0.01" value="100">
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeCommandCooldown">Cooldown</label>
+              <div class="duration-field"><input id="youtubeCommandCooldown" type="number" min="0" max="86400" step="1" value="5"><span class="duration-unit">seconds</span></div>
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeCommandDelay">Delay</label>
+              <div class="duration-field"><input id="youtubeCommandDelay" type="number" min="0" max="30" step="0.5" value="0"><span class="duration-unit">seconds</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="custom-editor-block">
+          <div class="custom-response-heading"><strong>Responses</strong></div>
+          <div class="custom-response-mode-wrap">
+            <label class="prompt-label" for="youtubeCommandResponseMode">Mode</label>
+            <select id="youtubeCommandResponseMode"><option value="equal">Equal Odds</option><option value="weighted">Specified Weight</option></select>
+            <div id="youtubeCommandResponseModeHelp" class="detail"></div>
+            <label id="youtubeCommandAvoidRepeatWrap" class="inline-check" hidden><input id="youtubeCommandAvoidRepeat" type="checkbox"> Skip the last response used</label>
+          </div>
+          <div id="youtubeCommandResponses"></div>
+          <div class="custom-response-bottom-actions">
+            <button id="showYoutubeCommandVariablesBtn" class="secondary" type="button">Variables</button>
+            <button id="addYoutubeCommandResponseBtn" class="secondary" type="button">Add Response</button>
+          </div>
+          <div id="youtubeCommandResponsesMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-actions">
+          <button id="saveYoutubeCommandBtn" type="button">Save Command</button>
+          <button id="cancelYoutubeCommandDialogBtn" class="secondary" type="button">Cancel</button>
+        </div>
+        <div id="youtubeCommandDialogMsg" class="detail"></div>
+      </dialog>
+
+      <dialog id="youtubeCommandVariablesDialog" class="custom-variables-dialog">
+        <div class="custom-dialog-header">
+          <h3>Available Variables</h3>
+          <button id="closeYoutubeCommandVariablesBtn" class="secondary" type="button" aria-label="Close YouTube command variables">Close</button>
+        </div>
+        <div class="custom-variable-help-body">
+          <div class="custom-variable-row"><code>$(user)</code><div class="detail">Viewer who triggered the command.</div></div>
+          <div class="custom-variable-row"><code>$(touser)</code><div class="detail">First argument after the trigger; falls back to the triggering viewer when no argument is supplied.</div></div>
+          <div class="custom-variable-row"><code>$(query)</code><div class="detail">Everything after the trigger.</div></div>
+          <div class="custom-variable-row"><code>$(count)</code><div class="detail">Persistent command counter after a successful trigger.</div></div>
+          <div class="custom-variable-row"><code>$(counter)</code><div class="detail">Alias of $(count); returns the same persistent numeric counter.</div></div>
+          <div class="custom-variable-row"><code>$(random MIN MAX)</code><div class="detail">Random whole number from MIN through MAX, inclusive.</div></div>
+          <div class="custom-variable-row"><code>$(randomuser)</code><div class="detail">Random recent/current YouTube chatter known to the active chat worker.</div></div>
+          <div class="custom-variable-note detail">Each YouTube response supports up to 200 characters.</div>
         </div>
       </dialog>
 
-      <dialog id="youtubeTimerDialog" class="custom-command-dialog">
-        <div class="custom-command-dialog-inner"><div class="custom-dialog-heading"><h3 id="youtubeTimerDialogTitle">YouTube Timer</h3><button id="closeYoutubeTimerDialogBtn" class="secondary" type="button">Close</button></div>
-          <input id="youtubeTimerId" type="hidden"><label class="prompt-label">Name</label><input id="youtubeTimerName" maxlength="80"><label class="prompt-label">Responses <span class="detail">one per line, max 200 characters each</span></label><textarea id="youtubeTimerResponses" rows="6" maxlength="5025"></textarea>
-          <div class="form-grid"><label>Interval (minutes)<input id="youtubeTimerIntervalMinutes" type="number" min="10" max="1440" value="15"></label><label>First Post Delay (minutes)<input id="youtubeTimerStartDelayMinutes" type="number" min="0" max="1440" value="15"></label></div>
-          <label class="inline-check"><input id="youtubeTimerAvoidRepeat" type="checkbox"> Avoid immediate response repeat</label><label class="inline-check"><input id="youtubeTimerEnabled" type="checkbox" checked> Enabled</label>
-          <div class="modal-actions"><button id="deleteYoutubeTimerBtn" class="danger" type="button">Delete</button><button id="fireYoutubeTimerBtn" class="secondary" type="button">Fire Now</button><button id="saveYoutubeTimerBtn" type="button">Save Timer</button></div><div id="youtubeTimerDialogMsg" class="detail"></div>
+      <dialog id="youtubeTimerDialog" class="custom-command-editor entity-editor-dialog">
+        <div class="custom-editor-header">
+          <h3 id="youtubeTimerDialogTitle">Add Timer</h3>
+          <div class="custom-editor-header-actions">
+            <label class="inline-check custom-enabled-check"><input id="youtubeTimerEnabled" type="checkbox" checked> Enabled</label>
+            <button id="closeYoutubeTimerDialogBtn" class="secondary" type="button">Close</button>
+          </div>
         </div>
+        <input id="youtubeTimerId" type="hidden">
+
+        <div class="custom-editor-block">
+          <label class="prompt-label" for="youtubeTimerName">Name</label>
+          <input id="youtubeTimerName" type="text" maxlength="80" placeholder="Example: Discord Reminder">
+        </div>
+
+        <div class="custom-editor-block">
+          <strong class="custom-block-title">Schedule</strong>
+          <div class="timer-settings-grid youtube-timer-form-grid">
+            <div>
+              <label class="prompt-label" for="youtubeTimerIntervalMinutes">Interval</label>
+              <div class="duration-field"><input id="youtubeTimerIntervalMinutes" type="number" min="10" max="1440" step="1" value="15"><span class="duration-unit">minutes</span></div>
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeTimerStartDelayMinutes">Start Delay</label>
+              <div class="duration-field"><input id="youtubeTimerStartDelayMinutes" type="number" min="0" max="1440" step="1" value="15"><span class="duration-unit">minutes</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="custom-editor-block">
+          <div class="custom-response-heading"><strong>Actions</strong></div>
+          <div class="custom-response-mode-wrap">
+            <label class="prompt-label" for="youtubeTimerResponseMode">Mode</label>
+            <select id="youtubeTimerResponseMode"><option value="equal">Equal Odds</option><option value="weighted">Specified Weight</option></select>
+            <div id="youtubeTimerResponseModeHelp" class="detail"></div>
+            <label id="youtubeTimerAvoidRepeatWrap" class="inline-check" hidden><input id="youtubeTimerAvoidRepeat" type="checkbox"> Skip the last action used</label>
+          </div>
+          <div id="youtubeTimerResponses"></div>
+          <div class="custom-response-bottom-actions">
+            <button id="addYoutubeTimerResponseBtn" class="secondary" type="button">Add Action</button>
+          </div>
+          <div id="youtubeTimerResponsesMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-actions">
+          <button id="saveYoutubeTimerBtn" type="button">Save Timer</button>
+          <button id="cancelYoutubeTimerDialogBtn" class="secondary" type="button">Cancel</button>
+        </div>
+        <div id="youtubeTimerDialogMsg" class="detail"></div>
       </dialog>
+
     </div>
 
     <div id="youtubeOauthPanel" class="section-panel">

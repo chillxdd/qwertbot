@@ -37,13 +37,30 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
     if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'Commands are temporarily unavailable.' });
     try {
       const [commands, native] = await Promise.all([
-        YouTubeCustomCommand.find({ channelKey, enabled: true }).sort({ normalizedTrigger: 1 }).select('normalizedTrigger publicDescription').lean(),
+        YouTubeCustomCommand.find({ channelKey, enabled: true }).sort({ normalizedTrigger: 1 }).select('name normalizedTrigger publicDescription cooldownSeconds userLevel probability').lean(),
         YouTubeNativeCommandConfig.findOne({ channelKey }).lean()
       ]);
-      const items = [];
-      if (native?.commandsEnabled !== false) items.push({ trigger: '!commands', description: 'Show this YouTube command list.' });
-      for (const command of commands) items.push({ trigger: command.normalizedTrigger, description: command.publicDescription || '' });
-      return res.json({ success: true, commands: items });
+      const customCommands = commands.map((command) => ({
+        id: String(command._id),
+        name: command.name || command.normalizedTrigger,
+        publicDescription: command.publicDescription || '',
+        triggers: [{ triggerType: 'command', trigger: command.normalizedTrigger }],
+        cooldownSeconds: Number(command.cooldownSeconds || 0),
+        userLevel: command.userLevel || 'everyone',
+        probability: Number(command.probability ?? 100)
+      }));
+      const nativeCommands = native?.commandsEnabled === false ? [] : [{
+        name: '!commands',
+        userLevel: 'everyone',
+        description: 'Links to this public SqwertArmyBot YouTube command directory.'
+      }];
+      // Keep the legacy flat shape available for any old cached page while the
+      // standardized public directory uses the richer split collections.
+      const items = [
+        ...nativeCommands.map((command) => ({ trigger: command.name, description: command.description })),
+        ...customCommands.map((command) => ({ trigger: command.triggers[0].trigger, description: command.publicDescription }))
+      ];
+      return res.json({ success: true, commands: items, customCommands, nativeCommands });
     } catch (err) {
       return res.status(500).json({ success: false, error: 'Could not load YouTube commands.' });
     }

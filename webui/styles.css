@@ -770,3 +770,83 @@ button.success{background:#16834a}
 .diagnostics-toolbar{margin-top:22px;padding-top:16px;border-top:1px solid var(--nb-border,#2a313d);}
 @media(max-width:800px){.dashboard-status-grid{grid-template-columns:1fr 1fr}.dashboard-status-grid .box:last-child{grid-column:1/-1}.platform-nav{grid-template-columns:repeat(3,minmax(0,1fr));}.youtube-commands-subsection-nav{grid-template-columns:repeat(3,minmax(0,1fr));}}
 @media(max-width:600px){.dashboard-status-grid,.platform-nav,.youtube-commands-subsection-nav{grid-template-columns:1fr}.dashboard-status-grid .box:last-child{grid-column:auto}.diagnostics-group-heading{align-items:flex-start;flex-direction:column;gap:4px}.diagnostics-group-heading .detail{text-align:left}}
+
+/* UI standardization: Twitch/YouTube navigation and YouTube automation parity */
+#twitchSubNav.platform-subnav,
+#youtubeSubNav.platform-subnav{
+  display:grid;
+  gap:8px;
+  align-items:stretch;
+}
+#twitchSubNav.platform-subnav{grid-template-columns:repeat(4,minmax(0,1fr));}
+#youtubeSubNav.platform-subnav{grid-template-columns:repeat(2,minmax(0,1fr));}
+
+#youtubeAutomationPanel .section-intro{margin-bottom:12px}
+#youtubeAutomationPanel .section-intro .detail{display:none}
+#youtubeAutomationPanel .custom-command-header,
+#youtubeAutomationPanel .custom-command-add-row,
+#youtubeAutomationPanel .custom-global-cooldown-card,
+#youtubeAutomationPanel #youtubeCommandsMsg,
+#youtubeAutomationPanel #youtubeTimersMsg{
+  max-width:none;
+}
+#youtubeAutomationPanel .custom-command-list-controls{margin-left:auto}
+#youtubeAutomationPanel .custom-command-add-row{margin-top:14px}
+#youtubeAutomationPanel .custom-command-add-row button{min-height:34px}
+#youtubeAutomationPanel .youtube-card-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:6px;color:var(--nb-muted);font-size:12px}
+#youtubeAutomationPanel .youtube-empty,
+#youtubeAutomationPanel .custom-empty-state{color:var(--nb-muted)}
+#youtubeAutomationPanel .youtube-native-card{max-width:920px}
+#youtubeAutomationPanel .youtube-timer-form-grid{grid-template-columns:1fr 1fr}
+#youtubeAutomationPanel .custom-response-heading .detail{margin-left:auto}
+#youtubeAutomationPanel .custom-inline-footer{display:flex;justify-content:flex-end;margin-top:6px}
+
+#youtubeCommandDialog.custom-command-editor,
+#youtubeTimerDialog.custom-command-editor{
+  width:min(980px, calc(100vw - 40px));
+  max-width:980px;
+  max-height:calc(100vh - 40px);
+  overflow:auto;
+}
+#youtubeCommandDialog .custom-editor-actions,
+#youtubeTimerDialog .custom-editor-actions{flex-wrap:wrap}
+#youtubeCommandDialog .custom-editor-actions button,
+#youtubeTimerDialog .custom-editor-actions button{margin:0}
+#youtubeCommandDialog textarea,
+#youtubeTimerDialog textarea{resize:vertical}
+
+@media (max-width: 900px){
+  #twitchSubNav.platform-subnav{grid-template-columns:repeat(2,minmax(0,1fr));}
+  #youtubeAutomationPanel .custom-command-header{align-items:flex-start;flex-direction:column}
+  #youtubeAutomationPanel .custom-command-list-controls{width:100%;margin-left:0;align-items:stretch}
+  #youtubeAutomationPanel .custom-command-sort-label{flex:1}
+  #youtubeAutomationPanel .custom-command-sort-label select{min-width:0;width:100%}
+}
+@media (max-width: 600px){
+  #twitchSubNav.platform-subnav,
+  #youtubeSubNav.platform-subnav,
+  .youtube-commands-subsection-nav{grid-template-columns:1fr}
+  #youtubeAutomationPanel .youtube-timer-form-grid{grid-template-columns:1fr}
+  #youtubeAutomationPanel .custom-response-heading{flex-direction:column;align-items:flex-start}
+  #youtubeCommandDialog.custom-command-editor,
+  #youtubeTimerDialog.custom-command-editor{width:calc(100vw - 20px);max-height:calc(100vh - 20px)}
+}
+
+/* V7 platform UI parity: keep YouTube administration on the same visual system as Twitch. */
+.user-level-member{background:rgba(255,0,0,.12);border-color:rgba(255,70,70,.48);color:#ff8a8a}
+#youtubeAutomationPanel .custom-command-add-row button{min-height:0}
+#youtubeAutomationPanel .youtube-single-trigger-row{grid-template-columns:minmax(130px,180px) minmax(220px,1fr)}
+#youtubeAutomationPanel .youtube-single-trigger-row select:disabled{opacity:.8;cursor:default}
+#youtubeCommandDialog.custom-command-editor,
+#youtubeTimerDialog.custom-command-editor{
+  width:min(900px,calc(100vw - 48px));
+  max-width:none;
+  max-height:calc(100vh - 48px);
+}
+#youtubeAutomationPanel .custom-response-bottom-actions{justify-content:flex-end}
+#youtubeAutomationPanel .custom-response-bottom-actions button{margin:0}
+@media(max-width:700px){#youtubeAutomationPanel .youtube-single-trigger-row{grid-template-columns:1fr}}
+@media(max-width:760px){
+  #youtubeCommandDialog.custom-command-editor,
+  #youtubeTimerDialog.custom-command-editor{inset:10px;width:calc(100vw - 20px);max-height:calc(100vh - 20px)}
+}
