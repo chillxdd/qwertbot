@@ -76,7 +76,8 @@ function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () 
     const text = String(item.responses[responseIndex] || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
     if (!text) return { sent: false, reason: 'empty-response' };
     const result = await sendToAllChats(text, { kind: 'timer', timerId: String(item._id), manual });
-    if (result?.sentCount > 0) {
+    const acceptedCount = Number(result?.sentCount || 0) + Number(result?.queuedCount || 0);
+    if (acceptedCount > 0) {
       item.lastResponseIndex = responseIndex;
       item.lastResponse = text;
       item.timesFired = Number(item.timesFired || 0) + 1;
@@ -101,7 +102,8 @@ function createYouTubeTimerManager({ channelKey, sendToAllChats, isEnabled = () 
       nextDueById.set(id, now + intervalMs);
       try {
         const result = await fireTimer(item);
-        if (!result?.sentCount) nextDueById.set(id, Math.min(now + 60000, now + intervalMs));
+        const coveredCount = Number(result?.sentCount || 0) + Number(result?.queuedCount || 0) + Number(result?.dedupedCount || 0);
+        if (!coveredCount) nextDueById.set(id, Math.min(now + 60000, now + intervalMs));
       } catch (err) {
         console.warn(`[YouTube Timers] ${item.name || id} could not send: ${err?.message || err}`);
         nextDueById.set(id, Math.min(now + 60000, now + intervalMs));

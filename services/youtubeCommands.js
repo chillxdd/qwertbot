@@ -92,8 +92,8 @@ function createYouTubeCommandManager({ channelKey, sendMessage }) {
       if (!userMeetsLevel(classifyYouTubeUser(author), 'everyone')) return { handled: false };
       if (isCooling(nativeCooldowns, String(liveChatId), 5)) return { handled: true, sent: false, reason: 'cooldown' };
       const response = (nativeConfig.commandsResponse || DEFAULT_NATIVE_RESPONSE).slice(0, MAX_CHAT_MESSAGE_LENGTH);
-      await sendMessage(liveChatId, response, { kind: 'command' });
-      return { handled: true, sent: true, native: true };
+      const delivery = await sendMessage(liveChatId, response, { kind: 'command' });
+      return { handled: true, sent: Boolean(delivery?.sent), queued: Boolean(delivery?.queued), native: true };
     }
 
     const command = commandMap.get(parsed.trigger);
@@ -107,8 +107,8 @@ function createYouTubeCommandManager({ channelKey, sendMessage }) {
     if (isCooling(commandCooldowns, key, Math.max(0, Number(command.cooldownSeconds || 0)))) {
       const cooldownResponse = String(command.cooldownResponse || '').slice(0, MAX_CHAT_MESSAGE_LENGTH);
       if (cooldownResponse) {
-        await sendMessage(liveChatId, cooldownResponse, { kind: 'command' });
-        return { handled: true, sent: true, reason: 'command-cooldown' };
+        const delivery = await sendMessage(liveChatId, cooldownResponse, { kind: 'command' });
+        return { handled: true, sent: Boolean(delivery?.sent), queued: Boolean(delivery?.queued), reason: 'command-cooldown' };
       }
       return { handled: true, sent: false, reason: 'command-cooldown' };
     }
@@ -150,8 +150,8 @@ function createYouTubeCommandManager({ channelKey, sendMessage }) {
 
     const delayMs = Math.max(0, Math.min(30, Number(command.responseDelaySeconds || 0))) * 1000;
     if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-    await sendMessage(liveChatId, rendered, { kind: 'command' });
-    return { handled: true, sent: true, commandId: String(command._id), trigger: parsed.trigger };
+    const delivery = await sendMessage(liveChatId, rendered, { kind: 'command' });
+    return { handled: true, sent: Boolean(delivery?.sent), queued: Boolean(delivery?.queued), commandId: String(command._id), trigger: parsed.trigger };
   }
 
   function clearChat(liveChatId) {

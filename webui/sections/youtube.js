@@ -104,16 +104,30 @@ export function initYoutubeSection({ $, esc, postJson }) {
 
     const chats = Array.isArray(status.distinctChats) ? status.distinctChats : [];
     const connected = chats.filter((chat) => chat.state === 'connected').length;
+    const reconnecting = chats.filter((chat) => chat.state === 'reconnecting').length;
+    const connecting = chats.filter((chat) => chat.state === 'connecting' || chat.state === 'priming').length;
+    const errors = chats.filter((chat) => chat.state === 'error').length;
+    const activeChats = connected + reconnecting + connecting;
+    const pending = status.pendingDeliveries || {};
     let liveText = 'SLEEPING'; let liveState = 'warn';
     if (status.twitchLive) {
-      if (connected) { liveText = `${connected} CHAT${connected === 1 ? '' : 'S'} CONNECTED`; liveState = 'good'; }
+      if (activeChats) {
+        liveText = `${activeChats} CHAT${activeChats === 1 ? '' : 'S'} ACTIVE`;
+        liveState = connected === activeChats && !errors ? 'good' : errors ? 'bad' : 'warn';
+      } else if (errors) { liveText = 'CHAT ERROR'; liveState = 'bad'; }
       else if (status.lastDiscoveryError) { liveText = 'DISCOVERY ERROR'; liveState = 'bad'; }
       else { liveText = 'DISCOVERING'; liveState = 'warn'; }
     }
     setValue('youtubeLiveStatus', liveText, liveState);
     const broadcastText = (status.activeBroadcasts || []).map((item) => item.title || item.videoId).filter(Boolean).join(' · ');
+    const stateParts = [];
+    if (connected) stateParts.push(`${connected} connected`);
+    if (reconnecting) stateParts.push(`${reconnecting} reconnecting`);
+    if (connecting) stateParts.push(`${connecting} connecting`);
+    if (errors) stateParts.push(`${errors} error`);
+    if (Number(pending.total || 0)) stateParts.push(`${pending.total} pending send${Number(pending.total) === 1 ? '' : 's'}`);
     $('youtubeLiveDetail').textContent = status.twitchLive
-      ? `${status.activeBroadcasts?.length || 0} active broadcast(s) · ${chats.length} distinct chat(s)${broadcastText ? ` · ${broadcastText}` : ''}${status.lastDiscoveryError ? ` · ${status.lastDiscoveryError}` : ''}`
+      ? `${status.activeBroadcasts?.length || 0} active broadcast(s) · ${chats.length} distinct chat(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}${broadcastText ? ` · ${broadcastText}` : ''}${status.lastDiscoveryError ? ` · ${status.lastDiscoveryError}` : ''}`
       : 'Twitch is offline, so YouTube discovery and live-chat workers are asleep.';
     $('youtubeRediscoverBtn').disabled = !status.twitchLive || !oauthReady || !cfg.enabled;
 
@@ -125,8 +139,14 @@ export function initYoutubeSection({ $, esc, postJson }) {
     $('youtubeHardQuotaStop').value = Number(cfg.hardSafetyStopUnits ?? 9000);
     $('youtubeSearchQuotaStop').value = Number(cfg.searchSafetyStopCalls ?? 90);
 
-    setValue('diagYoutubeChats', status.twitchLive ? (connected ? `${connected} CONNECTED` : 'NO CHAT') : 'SLEEPING', status.twitchLive ? (connected ? 'good' : 'warn') : 'good');
-    $('diagYoutubeChatsDetail').textContent = `${status.activeBroadcasts?.length || 0} broadcast(s), ${chats.length} distinct chat worker(s). Last discovery: ${status.lastDiscoveryAt ? fmtTime(status.lastDiscoveryAt) : 'not yet'}.`;
+    const diagChatText = !status.twitchLive
+      ? 'SLEEPING'
+      : activeChats
+        ? `${activeChats} ACTIVE`
+        : errors ? 'CHAT ERROR' : 'NO CHAT';
+    const diagChatState = !status.twitchLive ? 'good' : activeChats && connected === activeChats && !errors ? 'good' : errors ? 'bad' : 'warn';
+    setValue('diagYoutubeChats', diagChatText, diagChatState);
+    $('diagYoutubeChatsDetail').textContent = `${status.activeBroadcasts?.length || 0} broadcast(s) · ${chats.length} distinct chat worker(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}. Last discovery: ${status.lastDiscoveryAt ? fmtTime(status.lastDiscoveryAt) : 'not yet'}.`;
     const main = Number(quota.mainUnits || 0), mainLimit = Number(quota.mainLimit || 10000), searches = Number(quota.searchCalls || 0), searchLimit = Number(quota.searchLimit || 100);
     const quotaState = main >= Number(cfg.hardSafetyStopUnits || 9000) ? 'bad' : main >= Number(cfg.timerSafetyStopUnits || 7500) ? 'warn' : 'good';
     setValue('diagYoutubeQuota', `${main.toLocaleString()} / ${mainLimit.toLocaleString()}`, quotaState);
