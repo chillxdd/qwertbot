@@ -24,6 +24,9 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
       discoveryCalls: Number(doc?.discoveryCalls || 0),
       streamConnections: Number(doc?.streamConnections || 0),
       authCalls: Number(doc?.authCalls || 0),
+      viewerCountCalls: Number(doc?.viewerCountCalls || 0),
+      googleQuotaExhaustedAt: doc?.googleQuotaExhaustedAt ? new Date(doc.googleQuotaExhaustedAt).toISOString() : null,
+      googleQuotaError: String(doc?.googleQuotaError || ''),
       mainLimit: YOUTUBE_MAIN_DAILY_LIMIT,
       searchLimit: YOUTUBE_SEARCH_DAILY_LIMIT
     };
@@ -38,13 +41,19 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
   }
 
   async function reserveMainUnits(units, counters = {}, options = {}) {
+    const current = await getUsage();
+    if (current.googleQuotaExhaustedAt) {
+      const err = new Error(`Google reports the YouTube API quota exhausted for ${current.dayKey} (Pacific Time).`);
+      err.code = 'GOOGLE_YOUTUBE_QUOTA_EXHAUSTED';
+      throw err;
+    }
     const amount = Math.max(0, Math.floor(Number(units || 0)));
     if (!amount) return getUsage();
     const dayKey = pacificDayKey();
     const limit = Math.min(YOUTUBE_MAIN_DAILY_LIMIT, Math.max(1, Math.floor(Number(options.limit || YOUTUBE_MAIN_DAILY_LIMIT))));
     const inc = { mainUnits: amount };
     for (const [key, value] of Object.entries(counters || {})) {
-      if (['commandMessages', 'timerMessages', 'discoveryCalls', 'streamConnections', 'authCalls'].includes(key)) {
+      if (['commandMessages', 'timerMessages', 'discoveryCalls', 'streamConnections', 'authCalls', 'viewerCountCalls'].includes(key)) {
         inc[key] = Math.max(0, Math.floor(Number(value || 0)));
       }
     }
@@ -85,6 +94,22 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
     }
   }
 
+
+  async function markGoogleQuotaExceeded(error) {
+    const dayKey = pacificDayKey();
+    const message = String(error?.message || error || 'Google reported YouTube API quota exhausted.').replace(/<[^>]+>/g, '').slice(0, 1000);
+    const doc = await YouTubeQuotaUsage.findOneAndUpdate(
+      { projectKey, dayKey },
+      {
+        $setOnInsert: { projectKey, dayKey },
+        $set: { googleQuotaExhaustedAt: new Date(), googleQuotaError: message }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+    cached = normalize(doc, dayKey);
+    return { ...cached };
+  }
+
   async function noteAuthCall() {
     const dayKey = pacificDayKey();
     const doc = await YouTubeQuotaUsage.findOneAndUpdate(
@@ -95,7 +120,7 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
     cached = normalize(doc, dayKey);
   }
 
-  return { getUsage, reserveMainUnits, reserveSearchCall, noteAuthCall, pacificDayKey };
+  return { getUsage, reserveMainUnits, reserveSearchCall, noteAuthCall, markGoogleQuotaExceeded, pacificDayKey };
 }
 
 module.exports = { createYouTubeQuotaManager, pacificDayKey };

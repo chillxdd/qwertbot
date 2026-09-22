@@ -9,7 +9,10 @@ const youtubeQuotaUsageSchema = new mongoose.Schema({
   timerMessages: { type: Number, default: 0, min: 0 },
   discoveryCalls: { type: Number, default: 0, min: 0 },
   streamConnections: { type: Number, default: 0, min: 0 },
-  authCalls: { type: Number, default: 0, min: 0 }
+  authCalls: { type: Number, default: 0, min: 0 },
+  viewerCountCalls: { type: Number, default: 0, min: 0 },
+  googleQuotaExhaustedAt: { type: Date, default: null },
+  googleQuotaError: { type: String, default: '' }
 }, { timestamps: true });
 youtubeQuotaUsageSchema.index({ projectKey: 1, dayKey: 1 }, { unique: true });
 

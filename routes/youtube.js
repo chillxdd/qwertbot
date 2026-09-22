@@ -4,6 +4,7 @@ const path = require('node:path');
 const YouTubeCustomCommand = require('../models/YouTubeCustomCommand');
 const YouTubeCustomCommandSettings = require('../models/YouTubeCustomCommandSettings');
 const YouTubeChatTimer = require('../models/YouTubeChatTimer');
+const YouTubeConfig = require('../models/YouTubeConfig');
 const YouTubeNativeCommandConfig = require('../models/YouTubeNativeCommandConfig');
 const { normalizeCommandTrigger } = require('../features/youtube/pure');
 const { DEFAULT_NATIVE_RESPONSE } = require('../services/youtubeCommands');
@@ -207,7 +208,7 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
 
   app.post('/youtube/timers/list', requireModSession, async (req, res) => {
     if (!requireDb(res)) return;
-    try { return res.json({ success: true, timers: await YouTubeChatTimer.find({ channelKey }).sort({ name: 1 }).lean() }); }
+    try { return res.json({ success: true, timers: await youtubeManager.listTimers() }); }
     catch (err) { return res.status(500).json({ success: false, error: 'Could not load YouTube timers.' }); }
   });
 
@@ -215,17 +216,48 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
     if (!requireDb(res)) return;
     try {
       const responses = cleanResponses(req.body?.responses);
-      const intervalSeconds = Math.max(600, Math.min(86400, Math.floor(Number(req.body?.intervalSeconds ?? 900))));
-      const startDelaySeconds = Math.max(0, Math.min(86400, Math.floor(Number(req.body?.startDelaySeconds ?? intervalSeconds))));
+      const intervalSeconds = Number(req.body?.intervalSeconds ?? 900);
+      if (!Number.isFinite(intervalSeconds) || intervalSeconds < 30 || intervalSeconds > 86400) throw new Error('Interval must be between 30 and 86400 seconds.');
+
+      const config = await YouTubeConfig.findOne({ channelKey }).lean();
+      const globalStartDelaySeconds = Math.max(0, Math.min(86400, Math.floor(Number(config?.globalTimerStartDelaySeconds || 0))));
+      const rawStartDelay = req.body?.startDelaySeconds;
+      let startDelaySeconds = null;
+      if (rawStartDelay !== null && rawStartDelay !== undefined && String(rawStartDelay).trim() !== '') {
+        startDelaySeconds = Math.floor(Number(rawStartDelay));
+        if (!Number.isInteger(startDelaySeconds) || startDelaySeconds < globalStartDelaySeconds || startDelaySeconds > 86400) {
+          throw new Error(`Start Delay must be blank or a whole number from the global delay (${globalStartDelaySeconds}s) through 86400s.`);
+        }
+      }
+
+      const jitterSeconds = Math.floor(Number(req.body?.jitterSeconds ?? 0));
+      if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > 86400) throw new Error('Jitter must be between 0 and 86400 seconds.');
+      const minimumChatMessages = Math.floor(Number(req.body?.minimumChatMessages ?? 0));
+      if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > 100000) throw new Error('Min Messages must be between 0 and 100000.');
+      const minimumViewers = Math.floor(Number(req.body?.minimumViewers ?? 0));
+      if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > 1000000) throw new Error('Min Viewers must be between 0 and 1000000.');
+      const priority = ['high', 'normal', 'low'].includes(String(req.body?.priority || '').toLowerCase()) ? String(req.body.priority).toLowerCase() : 'normal';
+
       const responseMode = ['equal', 'weighted'].includes(req.body?.responseMode) ? req.body.responseMode : 'equal';
       const responseWeights = responseMode === 'weighted'
-        ? responses.map((_, index) => Math.max(0, Number(req.body?.responseWeights?.[index] ?? 1)))
+        ? responses.map((_, index) => {
+          const value = Number(req.body?.responseWeights?.[index] ?? 1);
+          if (!Number.isFinite(value) || value <= 0) throw new Error('Specified Weight values must be greater than 0.');
+          return value;
+        })
         : [];
+      const name = String(req.body?.name || '').trim();
+      if (!name) throw new Error('Timer Name is required.');
+      if (name.length > 80) throw new Error('Timer Name can contain at most 80 characters.');
       const update = {
         channelKey,
-        name: String(req.body?.name || 'YouTube Timer').trim().slice(0, 80),
+        name,
         intervalSeconds,
         startDelaySeconds,
+        jitterSeconds,
+        priority,
+        minimumChatMessages,
+        minimumViewers,
         responses,
         responseMode,
         responseWeights,

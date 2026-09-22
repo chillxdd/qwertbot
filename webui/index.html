@@ -1321,7 +1321,7 @@
         </div>
 
         <div class="recap-utility-card youtube-quota-card">
-          <div class="recap-card-title">YouTube Quota Safety</div><div class="detail">Internal conservative counters reset on the same Pacific-day boundary as YouTube's daily quota. They are safety estimates, not a replacement for Google Cloud's official quota page.</div>
+          <div class="recap-card-title">YouTube Quota Safety</div><div class="detail">Internal conservative counters reset on the Pacific-day boundary. StreamList pricing is not published in Google's quota table, so this is only a minimum estimate; Google Cloud quota usage is authoritative.</div>
           <div class="form-grid"><label>Pause timers at main units<input id="youtubeTimerQuotaStop" type="number" min="500" max="9900" value="7500"></label><label>Stop all bot sends at main units<input id="youtubeHardQuotaStop" type="number" min="550" max="10000" value="9000"></label><label>Discovery search safety limit<input id="youtubeSearchQuotaStop" type="number" min="1" max="100" value="90"></label></div>
           <div class="modal-actions"><button id="saveYoutubeQuotaBtn" class="secondary" type="button">Save Quota Safety</button><button id="refreshYoutubeDiagnosticsBtn" class="secondary" type="button">Refresh YouTube Status</button></div><div id="youtubeQuotaMsg" class="detail"></div>
         </div>

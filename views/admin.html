@@ -1366,7 +1366,6 @@
               <div class="duration-field"><input id="youtubeGlobalTimerStartDelay" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
             </div>
           </div>
-          <div class="detail">Minimum delay after the first YouTube live chat connects before any scheduled YouTube timer can fire. Per-timer start delays still apply; the longer delay wins.</div>
           <div id="youtubeTimerSettingsMsg" class="detail custom-field-message"></div>
         </div>
         <div id="youtubeTimersMsg" class="detail"></div>
@@ -1508,16 +1507,45 @@
 
         <div class="custom-editor-block">
           <strong class="custom-block-title">Schedule</strong>
-          <div class="timer-settings-grid youtube-timer-form-grid">
+          <div class="timer-settings-grid">
             <div>
-              <label class="prompt-label" for="youtubeTimerIntervalMinutes">Interval</label>
-              <div class="duration-field"><input id="youtubeTimerIntervalMinutes" type="number" min="10" max="1440" step="1" value="15"><span class="duration-unit">minutes</span></div>
+              <label class="prompt-label" for="youtubeTimerInterval">Interval</label>
+              <div class="duration-field"><input id="youtubeTimerInterval" type="number" min="30" max="86400" step="1" value="900"><span class="duration-unit">seconds</span></div>
             </div>
             <div>
-              <label class="prompt-label" for="youtubeTimerStartDelayMinutes">Start Delay</label>
-              <div class="duration-field"><input id="youtubeTimerStartDelayMinutes" type="number" min="0" max="1440" step="1" value="15"><span class="duration-unit">minutes</span></div>
+              <label class="prompt-label" for="youtubeTimerStartDelay">Start Delay (optional)</label>
+              <div class="duration-field"><input id="youtubeTimerStartDelay" type="number" min="0" max="86400" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeTimerJitter">Jitter (±)</label>
+              <div class="duration-field"><input id="youtubeTimerJitter" type="number" min="0" max="86400" step="1" value="0"><span class="duration-unit">seconds</span></div>
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeTimerPriority">Priority</label>
+              <select id="youtubeTimerPriority">
+                <option value="high">High</option>
+                <option value="normal" selected>Normal</option>
+                <option value="low">Low</option>
+              </select>
             </div>
           </div>
+          <div class="detail">Per-timer delay cannot be earlier than global; jitter recalculates after each fire.</div>
+          <div id="youtubeTimerScheduleMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-block">
+          <strong class="custom-block-title">Activity</strong>
+          <div class="timer-settings-grid">
+            <div>
+              <label class="prompt-label" for="youtubeTimerMinimumMessages">Min Messages (0 = off)</label>
+              <input id="youtubeTimerMinimumMessages" type="number" min="0" max="100000" step="1" value="0">
+            </div>
+            <div>
+              <label class="prompt-label" for="youtubeTimerMinimumViewers">Min Viewers (0 = off)</label>
+              <input id="youtubeTimerMinimumViewers" type="number" min="0" max="1000000" step="1" value="0">
+            </div>
+          </div>
+          <div id="youtubeTimerActivityMsg" class="detail custom-field-message"></div>
         </div>
 
         <div class="custom-editor-block">

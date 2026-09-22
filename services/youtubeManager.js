@@ -4,7 +4,7 @@ const YouTubeConfig = require('../models/YouTubeConfig');
 const { createYouTubeQuotaManager } = require('./youtubeQuota');
 const { createYouTubeAuthManager } = require('./youtubeAuth');
 const { createYouTubeDiscovery } = require('./youtubeDiscovery');
-const { createYouTubeChatStreamFactory } = require('./youtubeChatStream');
+const { createYouTubeChatStreamFactory, STREAMLIST_DAILY_SAFETY_CAP } = require('./youtubeChatStream');
 const { createYouTubeCommandManager } = require('./youtubeCommands');
 const { createYouTubeTimerManager } = require('./youtubeTimers');
 const { createYouTubeDeliveryQueue } = require('./youtubeDeliveryQueue');
@@ -14,6 +14,7 @@ const {
   YOUTUBE_BROADCASTER_CHANNEL_ID,
   YOUTUBE_BROADCASTER_HANDLE,
   YOUTUBE_INSERT_COST,
+  YOUTUBE_LIST_COST,
   YOUTUBE_DISCOVERY_DELAYS_MS
 } = require('../config/youtube');
 
@@ -45,6 +46,8 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
   const discoveryTimers = new Set();
   const workers = new Map();
   const workerStates = new Map();
+  const VIEWER_COUNT_CACHE_MS = 5 * 60 * 1000;
+  let viewerCountCache = { key: '', fetchedAtMs: 0, count: 0, available: false };
 
   const deliveryQueue = createYouTubeDeliveryQueue({
     getWorkerState: (liveChatId) => workerStates.get(String(liveChatId || ''))?.state || null,
@@ -60,7 +63,8 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     channelKey,
     sendToAllChats: (text, options) => sendToAllChats(text, options),
     isEnabled: () => Boolean(config.enabled && config.timersEnabled && twitchLive && !quiesced),
-    getGlobalStartDelaySeconds: () => Number(config.globalTimerStartDelaySeconds || 0)
+    getGlobalStartDelaySeconds: () => Number(config.globalTimerStartDelaySeconds || 0),
+    getViewerCount: () => getCurrentViewerCount()
   });
 
   function hasConnectedChat() {
@@ -72,12 +76,41 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     await timerManager.startSession();
   }
 
+  async function getCurrentViewerCount() {
+    const videoIds = [...new Set((discoveredBroadcasts || []).map((item) => String(item?.videoId || '')).filter(Boolean))].sort();
+    if (!videoIds.length) return { count: 0, available: false, fetchedAt: null };
+    const key = videoIds.join(',');
+    const now = Date.now();
+    if (viewerCountCache.key === key && viewerCountCache.fetchedAtMs && now - viewerCountCache.fetchedAtMs < VIEWER_COUNT_CACHE_MS) {
+      return { count: viewerCountCache.count, available: viewerCountCache.available, fetchedAt: new Date(viewerCountCache.fetchedAtMs).toISOString(), cached: true };
+    }
+
+    const token = await authManager.getValidAccessToken();
+    await quotaManager.reserveMainUnits(YOUTUBE_LIST_COST, { viewerCountCalls: 1 }, { limit: config.timerSafetyStopUnits });
+    const params = new URLSearchParams({ part: 'liveStreamingDetails', id: videoIds.join(',') });
+    const response = await fetch(`https://www.googleapis.com/youtube/v3/videos?${params.toString()}`, { headers: { authorization: `Bearer ${token}` } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err = new Error(data?.error?.message || `YouTube viewer-count request failed (${response.status}).`);
+      err.status = Number(response.status || 0);
+      err.reason = data?.error?.errors?.[0]?.reason || null;
+      if (String(err.reason || '').toLowerCase() === 'quotaexceeded') await quotaManager.markGoogleQuotaExceeded(err).catch(() => {});
+      throw err;
+    }
+    const rawCounts = (data.items || []).map((item) => item?.liveStreamingDetails?.concurrentViewers).filter((value) => value !== undefined && value !== null && String(value) !== '');
+    const available = rawCounts.length > 0;
+    const count = available ? rawCounts.reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0) : 0;
+    viewerCountCache = { key, fetchedAtMs: now, count, available };
+    return { count, available, fetchedAt: new Date(now).toISOString(), cached: false };
+  }
+
   const chatFactory = createYouTubeChatStreamFactory({
     authManager,
     quotaManager,
     onMessage: async (event) => {
       if (quiesced || !twitchLive || !config.enabled) return;
       if (botChannelId && String(event.author?.channelId || '') === botChannelId) return;
+      timerManager.noteChatMessage();
       if (!config.commandsEnabled) {
         commandManager.noteChatter(event.liveChatId, event.author?.displayName);
         return;
@@ -90,7 +123,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
         void maybeStartTimerSession().catch((err) => console.warn(`[YouTube Timers] Could not start timer session: ${err?.message || err}`));
         void deliveryQueue.flush(state.liveChatId).catch((err) => console.warn(`[YouTube Delivery] Could not flush ${state.liveChatId}: ${err?.message || err}`));
       }
-      if (state.state === 'ended') {
+      if (['ended', 'error', 'stopped'].includes(state.state)) {
         commandManager.clearChat(state.liveChatId);
         deliveryQueue.clearChat(state.liveChatId);
         if (!hasConnectedChat()) timerManager.stopSession();
@@ -145,6 +178,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     workerStates.clear();
     deliveryQueue.clearAll();
     discoveredBroadcasts = [];
+    viewerCountCache = { key: '', fetchedAtMs: 0, count: 0, available: false };
     timerManager.stopSession();
   }
 
@@ -154,8 +188,17 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       if (!liveChatId) continue;
       const existing = workers.get(liveChatId);
       if (existing) {
-        existing.updateBroadcasts(chat.broadcasts || []);
-        continue;
+        const existingState = workerStates.get(liveChatId)?.state || existing.getStatus()?.state;
+        if (!['ended', 'error', 'stopped'].includes(existingState)) {
+          existing.updateBroadcasts(chat.broadcasts || []);
+          continue;
+        }
+        // A terminal worker never self-retries. If a later bounded/manual
+        // discovery still says the chat is active, replace it with a fresh
+        // worker instead of leaving a dead object in the map.
+        try { existing.stop('rediscovery-replace'); } catch (_) {}
+        workers.delete(liveChatId);
+        workerStates.delete(liveChatId);
       }
       const worker = chatFactory.createWorker({ liveChatId, broadcasts: chat.broadcasts || [] });
       workers.set(liveChatId, worker);
@@ -185,6 +228,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
         lastDiscoveryAt = new Date().toISOString();
         lastDiscoveryError = null;
         discoveredBroadcasts = result.broadcasts || [];
+        viewerCountCache = { key: '', fetchedAtMs: 0, count: 0, available: false };
         await reconcileChats(result.chats || []);
         // Qwert normally has at most horizontal + vertical. Once both active
         // broadcasts are visible, later startup discovery checkpoints cannot
@@ -265,7 +309,14 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     const limit = kind === 'timer' ? config.timerSafetyStopUnits : config.hardSafetyStopUnits;
     await quotaManager.reserveMainUnits(YOUTUBE_INSERT_COST, kind === 'timer' ? { timerMessages: 1 } : { commandMessages: 1 }, { limit });
     const token = await authManager.getValidAccessToken();
-    return sendRaw(String(liveChatId), content, token);
+    try {
+      return await sendRaw(String(liveChatId), content, token);
+    } catch (err) {
+      if (String(err?.reason || '').toLowerCase() === 'quotaexceeded') {
+        await quotaManager.markGoogleQuotaExceeded(err).catch(() => {});
+      }
+      throw err;
+    }
   }
 
   async function sendMessage(liveChatId, text, options = {}) {
@@ -396,12 +447,13 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       commandsEnabled: config.commandsEnabled,
       timersEnabled: config.timersEnabled,
       globalTimerStartDelaySeconds: config.globalTimerStartDelaySeconds,
+      streamListDailySafetyCap: STREAMLIST_DAILY_SAFETY_CAP,
       twitchLive,
       streamStateKnown,
       broadcaster: { channelId: YOUTUBE_BROADCASTER_CHANNEL_ID || null, handle: YOUTUBE_BROADCASTER_HANDLE || null },
       bot: { channelId: botChannelId || null, displayName: botDisplayName || null },
       activeBroadcasts: discoveredBroadcasts,
-      distinctChats: [...workerStates.values()].filter((item) => !['stopped', 'ended'].includes(item.state)),
+      distinctChats: [...workers.values()].map((worker) => worker.getStatus()).filter((item) => !['stopped', 'ended'].includes(item.state)),
       pendingDeliveries: deliveryQueue.getStatus(),
       lastDiscoveryAt,
       lastDiscoveryError
@@ -410,6 +462,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
 
   async function rediscoverNow() { return discoverNow('admin'); }
   async function fireTimerNow(timerId) { return timerManager.fireNow(timerId); }
+  async function listTimers() { return timerManager.listTimers(); }
   function invalidateCommands() { commandManager.invalidate(); }
   async function reloadCommands() { await commandManager.reload(); }
   async function reloadTimers() { await timerManager.reload(); }
@@ -448,6 +501,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     reloadCommands,
     reloadTimers,
     fireTimerNow,
+    listTimers,
     quiesce,
     resume,
     shutdown,

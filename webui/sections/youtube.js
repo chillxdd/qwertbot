@@ -16,6 +16,13 @@ export function initYoutubeSection({ $, esc, postJson }) {
   const USER_LEVEL_LABELS = { everyone: 'Everyone', member: 'Member', moderator: 'Moderator', owner: 'Owner' };
 
   const fmtTime = (value) => value ? new Date(value).toLocaleString() : '—';
+  const formatInterval = (seconds) => {
+    const total = Math.max(0, Number(seconds || 0));
+    if (total >= 3600 && total % 3600 === 0) return `${total / 3600}h`;
+    if (total >= 60 && total % 60 === 0) return `${total / 60}m`;
+    return `${total}s`;
+  };
+  const priorityLabel = (value) => value === 'high' ? 'High' : value === 'low' ? 'Low' : 'Normal';
   const normalize = (value) => String(value || '').toLowerCase();
   const escAttr = (value) => String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const sortCompare = (a, b, direction = 'asc') => {
@@ -126,6 +133,16 @@ export function initYoutubeSection({ $, esc, postJson }) {
     if (connecting) stateParts.push(`${connecting} connecting`);
     if (errors) stateParts.push(`${errors} error`);
     if (Number(pending.total || 0)) stateParts.push(`${pending.total} pending send${Number(pending.total) === 1 ? '' : 's'}`);
+    const reconnectTotal = chats.reduce((sum, chat) => sum + Number(chat.reconnectCount || 0), 0);
+    const streamConnectionsThisProcess = chats.reduce((sum, chat) => sum + Number(chat.connectionCount || 0), 0);
+    if (streamConnectionsThisProcess) stateParts.push(`${streamConnectionsThisProcess} StreamList connection${streamConnectionsThisProcess === 1 ? '' : 's'} this process`);
+    const oldestActiveConnectionMs = chats.reduce((max, chat) => Math.max(max, Number(chat.currentConnectionAgeMs || 0)), 0);
+    const longestCompletedConnectionMs = chats.reduce((max, chat) => Math.max(max, Number(chat.longestConnectionDurationMs || 0)), 0);
+    if (oldestActiveConnectionMs >= 1000) stateParts.push(`oldest active StreamList ${formatInterval(Math.floor(oldestActiveConnectionMs / 1000))}`);
+    if (longestCompletedConnectionMs >= 1000) stateParts.push(`longest completed StreamList ${formatInterval(Math.floor(longestCompletedConnectionMs / 1000))}`);
+    if (reconnectTotal) stateParts.push(`${reconnectTotal} reconnect${reconnectTotal === 1 ? '' : 's'} this process`);
+    const nextReconnect = chats.map((chat) => chat.nextReconnectAt).filter(Boolean).sort()[0];
+    if (nextReconnect) stateParts.push(`next retry ${fmtTime(nextReconnect)}`);
     $('youtubeLiveDetail').textContent = status.twitchLive
       ? `${status.activeBroadcasts?.length || 0} active broadcast(s) · ${chats.length} distinct chat(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}${broadcastText ? ` · ${broadcastText}` : ''}${status.lastDiscoveryError ? ` · ${status.lastDiscoveryError}` : ''}`
       : 'Twitch is offline, so YouTube discovery and live-chat workers are asleep.';
@@ -148,9 +165,12 @@ export function initYoutubeSection({ $, esc, postJson }) {
     setValue('diagYoutubeChats', diagChatText, diagChatState);
     $('diagYoutubeChatsDetail').textContent = `${status.activeBroadcasts?.length || 0} broadcast(s) · ${chats.length} distinct chat worker(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}. Last discovery: ${status.lastDiscoveryAt ? fmtTime(status.lastDiscoveryAt) : 'not yet'}.`;
     const main = Number(quota.mainUnits || 0), mainLimit = Number(quota.mainLimit || 10000), searches = Number(quota.searchCalls || 0), searchLimit = Number(quota.searchLimit || 100);
-    const quotaState = main >= Number(cfg.hardSafetyStopUnits || 9000) ? 'bad' : main >= Number(cfg.timerSafetyStopUnits || 7500) ? 'warn' : 'good';
-    setValue('diagYoutubeQuota', `${main.toLocaleString()} / ${mainLimit.toLocaleString()}`, quotaState);
-    $('diagYoutubeQuotaDetail').textContent = `${searches}/${searchLimit} search calls · ${quota.commandMessages || 0} command sends · ${quota.timerMessages || 0} timer sends · day ${quota.dayKey || '—'} (Pacific Time).`;
+    const googleExhausted = Boolean(quota.googleQuotaExhaustedAt);
+    const quotaState = googleExhausted || main >= Number(cfg.hardSafetyStopUnits || 9000) ? 'bad' : main >= Number(cfg.timerSafetyStopUnits || 7500) ? 'warn' : 'good';
+    setValue('diagYoutubeQuota', googleExhausted ? 'GOOGLE QUOTA EXHAUSTED' : `~${main.toLocaleString()} / ${mainLimit.toLocaleString()} EST.`, quotaState);
+    const googleDetail = googleExhausted ? ` · Google returned quotaExceeded at ${fmtTime(quota.googleQuotaExhaustedAt)}` : '';
+    const streamSafetyCap = Number(status.streamListDailySafetyCap || 200);
+    $('diagYoutubeQuotaDetail').textContent = `${searches}/${searchLimit} search calls · ${quota.commandMessages || 0} command send attempts · ${quota.timerMessages || 0} timer send attempts · ${quota.streamConnections || 0}/${streamSafetyCap} StreamList connections (hard safety cap) · ${quota.discoveryCalls || 0} discovery call(s) · ${quota.viewerCountCalls || 0} viewer-count call(s) · day ${quota.dayKey || '—'} (Pacific Time)${googleDetail}. Internal usage is an estimate; Google Cloud is authoritative.`;
   }
 
   async function refreshAdminState({ messageTarget = null } = {}) {
@@ -194,7 +214,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const search = normalize(timerFilters.search);
     const list = timers.filter((timer) => {
       if (!search) return true;
-      const haystack = [timer.name, ...(timer.responses || [])].map(normalize).join(' ');
+      const haystack = [timer.name, timer.priority, timer.waitingFor, ...(timer.responses || [])].map(normalize).join(' ');
       return haystack.includes(search);
     });
     return [...list].sort((a, b) => {
@@ -540,9 +560,16 @@ export function initYoutubeSection({ $, esc, postJson }) {
     }
     list.innerHTML = items.map((item) => {
       const enabled = item.enabled !== false;
-      const intervalMinutes = Number(item.intervalSeconds || 0) / 60;
-      const startDelayMinutes = Number(item.startDelaySeconds || 0) / 60;
       const responseCount = Array.isArray(item.responses) ? item.responses.length : 0;
+      const jitter = Number(item.jitterSeconds || 0) > 0 ? ` · ±${formatInterval(item.jitterSeconds)} jitter` : '';
+      const activity = [];
+      if (Number(item.minimumChatMessages || 0) > 0) activity.push(`${Number(item.messagesSinceLastFire || 0)}/${Number(item.minimumChatMessages || 0)} chat messages`);
+      if (Number(item.minimumViewers || 0) > 0) activity.push(`${item.currentViewerCount === null || item.currentViewerCount === undefined ? '—' : Number(item.currentViewerCount)}/${Number(item.minimumViewers || 0)} viewers`);
+      const activityText = activity.length ? activity.join(' · ') : 'No activity minimums';
+      const startDelayText = item.startDelaySeconds === null || item.startDelaySeconds === undefined
+        ? `Global start delay (${formatInterval(item.effectiveStartDelaySeconds || 0)})`
+        : `Start delay ${formatInterval(item.startDelaySeconds)}`;
+      const waiting = item.waitingFor ? ` · Waiting for: ${item.waitingFor}` : '';
       return `
         <div class="custom-command-card timer-card" data-youtube-timer-id="${esc(item._id)}">
           <div class="custom-command-card-main">
@@ -550,8 +577,10 @@ export function initYoutubeSection({ $, esc, postJson }) {
               <strong class="custom-command-name">${esc(item.name || 'Timer')}</strong>
               <span class="custom-command-state ${enabled ? 'enabled' : 'disabled'}">${enabled ? 'Enabled' : 'Disabled'}</span>
             </div>
-            <div class="detail">Every ${intervalMinutes.toFixed(intervalMinutes % 1 ? 1 : 0)}m · Start delay ${startDelayMinutes.toFixed(startDelayMinutes % 1 ? 1 : 0)}m · ${responseCount} action${responseCount === 1 ? '' : 's'} · ${esc(responseModeLabel(item.responseMode))}</div>
-            <div class="detail">Last fired: ${esc(fmtTime(item.lastFiredAt))} · Times fired: ${Number(item.timesFired || 0)}</div>
+            <div class="detail">Every ${esc(formatInterval(item.intervalSeconds))}${esc(jitter)} · ${esc(priorityLabel(item.priority))} priority · ${responseCount} action${responseCount === 1 ? '' : 's'} · ${esc(responseModeLabel(item.responseMode))}</div>
+            <div class="detail">${esc(startDelayText)} · ${esc(activityText)}</div>
+            <div class="detail">Last fired: ${esc(fmtTime(item.lastFiredAt))} · Next eligible time: ${esc(fmtTime(item.nextDueAt))}${esc(waiting)}</div>
+            <div class="detail">Times fired: ${Number(item.timesFired || 0)}${item.lastResponse ? ` · Last action: ${esc(item.lastResponse)}` : ''}</div>
           </div>
           <div class="custom-command-actions timer-card-actions">
             <button class="secondary youtube-timer-fire-btn" type="button">Fire Now</button>
@@ -575,8 +604,13 @@ export function initYoutubeSection({ $, esc, postJson }) {
     $('youtubeTimerId').value = item?._id || '';
     $('youtubeTimerDialogTitle').textContent = item ? `Edit ${item.name}` : 'Add Timer';
     $('youtubeTimerName').value = item?.name || '';
-    $('youtubeTimerIntervalMinutes').value = Number(item?.intervalSeconds ?? 900) / 60;
-    $('youtubeTimerStartDelayMinutes').value = Number(item?.startDelaySeconds ?? 900) / 60;
+    $('youtubeTimerInterval').value = String(Number(item?.intervalSeconds ?? 900));
+    $('youtubeTimerStartDelay').value = item?.startDelaySeconds === null || item?.startDelaySeconds === undefined ? '' : String(Number(item.startDelaySeconds));
+    $('youtubeTimerStartDelay').min = String(Number(adminState?.config?.globalTimerStartDelaySeconds || 0));
+    $('youtubeTimerJitter').value = String(Number(item?.jitterSeconds || 0));
+    $('youtubeTimerPriority').value = ['high', 'normal', 'low'].includes(item?.priority) ? item.priority : 'normal';
+    $('youtubeTimerMinimumMessages').value = String(Number(item?.minimumChatMessages || 0));
+    $('youtubeTimerMinimumViewers').value = String(Number(item?.minimumViewers || 0));
     $('youtubeTimerResponseMode').value = item?.responseMode === 'weighted' ? 'weighted' : 'equal';
     $('youtubeTimerAvoidRepeat').checked = Boolean(item?.avoidImmediateRepeat);
     $('youtubeTimerEnabled').checked = item ? item.enabled !== false : true;
@@ -584,6 +618,8 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const values = Array.isArray(item?.responses) && item.responses.length ? item.responses : [''];
     values.forEach((value, index) => addYoutubeResponse('timer', value, item?.responseWeights?.[index] ?? 1));
     setMessage('youtubeTimerDialogMsg', '');
+    setMessage('youtubeTimerScheduleMsg', '');
+    setMessage('youtubeTimerActivityMsg', '');
     setMessage('youtubeTimerResponsesMsg', '');
     updateYoutubeResponseUi('timer');
     openDialog('youtubeTimerDialog');
@@ -593,15 +629,57 @@ export function initYoutubeSection({ $, esc, postJson }) {
 
   async function saveTimer() {
     setMessage('youtubeTimerDialogMsg', 'Saving...');
+    setMessage('youtubeTimerScheduleMsg', '');
+    setMessage('youtubeTimerActivityMsg', '');
+    const name = $('youtubeTimerName').value.trim();
+    if (!name) {
+      setMessage('youtubeTimerDialogMsg', 'Name is required.', true);
+      return;
+    }
+    if (name.length > 80) {
+      setMessage('youtubeTimerDialogMsg', 'Name can contain at most 80 characters.', true);
+      return;
+    }
     const payload = responsePayload('timer');
+    const intervalSeconds = Number($('youtubeTimerInterval').value);
+    const startDelayRaw = $('youtubeTimerStartDelay').value.trim();
+    const startDelaySeconds = startDelayRaw === '' ? null : Number(startDelayRaw);
+    const jitterSeconds = Number($('youtubeTimerJitter').value);
+    const minimumChatMessages = Number($('youtubeTimerMinimumMessages').value);
+    const minimumViewers = Number($('youtubeTimerMinimumViewers').value);
+    const globalDelay = Number(adminState?.config?.globalTimerStartDelaySeconds || 0);
+    if (!Number.isFinite(intervalSeconds) || intervalSeconds < 30 || intervalSeconds > 86400) {
+      setMessage('youtubeTimerDialogMsg', '');
+      return setMessage('youtubeTimerScheduleMsg', 'Interval must be between 30 and 86400 seconds.', true);
+    }
+    if (startDelaySeconds !== null && (!Number.isInteger(startDelaySeconds) || startDelaySeconds < globalDelay || startDelaySeconds > 86400)) {
+      setMessage('youtubeTimerDialogMsg', '');
+      return setMessage('youtubeTimerScheduleMsg', `Start Delay must be blank or a whole number from the global delay (${globalDelay}s) through 86400s.`, true);
+    }
+    if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > 86400) {
+      setMessage('youtubeTimerDialogMsg', '');
+      return setMessage('youtubeTimerScheduleMsg', 'Jitter must be a whole number between 0 and 86400 seconds.', true);
+    }
+    if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > 100000) {
+      setMessage('youtubeTimerDialogMsg', '');
+      return setMessage('youtubeTimerActivityMsg', 'Min Messages must be a whole number between 0 and 100000.', true);
+    }
+    if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > 1000000) {
+      setMessage('youtubeTimerDialogMsg', '');
+      return setMessage('youtubeTimerActivityMsg', 'Min Viewers must be a whole number between 0 and 1000000.', true);
+    }
     const body = {
       id: $('youtubeTimerId').value || undefined,
-      name: $('youtubeTimerName').value,
+      name,
       responses: payload.responses,
       responseWeights: payload.weights,
       responseMode: $('youtubeTimerResponseMode').value || 'equal',
-      intervalSeconds: Math.round(Number($('youtubeTimerIntervalMinutes').value || 15) * 60),
-      startDelaySeconds: Math.round(Number($('youtubeTimerStartDelayMinutes').value || 15) * 60),
+      intervalSeconds,
+      startDelaySeconds,
+      jitterSeconds,
+      priority: $('youtubeTimerPriority').value || 'normal',
+      minimumChatMessages,
+      minimumViewers,
       avoidImmediateRepeat: $('youtubeTimerAvoidRepeat').checked,
       enabled: $('youtubeTimerEnabled').checked
     };
@@ -621,7 +699,11 @@ export function initYoutubeSection({ $, esc, postJson }) {
       responseMode: timer.responseMode || 'equal',
       responseWeights: timer.responseWeights || [],
       intervalSeconds: Number(timer.intervalSeconds || 900),
-      startDelaySeconds: Number(timer.startDelaySeconds ?? timer.intervalSeconds ?? 900),
+      startDelaySeconds: timer.startDelaySeconds === null || timer.startDelaySeconds === undefined ? null : Number(timer.startDelaySeconds),
+      jitterSeconds: Number(timer.jitterSeconds || 0),
+      priority: timer.priority || 'normal',
+      minimumChatMessages: Number(timer.minimumChatMessages || 0),
+      minimumViewers: Number(timer.minimumViewers || 0),
       avoidImmediateRepeat: Boolean(timer.avoidImmediateRepeat),
       enabled: timer.enabled === false
     });
