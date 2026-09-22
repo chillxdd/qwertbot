@@ -3,6 +3,9 @@
 const COMMAND_TTL_MS = 90 * 1000;
 const TIMER_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PENDING_PER_CHAT = 100;
+const RETRY_BACKOFF_MS = [30000, 60000, 120000, 300000, 600000, 900000];
+const MAX_COMMAND_SEND_ATTEMPTS = 3;
+const MAX_TIMER_SEND_ATTEMPTS = 6;
 const QUEUEABLE_STATES = new Set(['connecting', 'priming', 'reconnecting']);
 
 function isTransientSendError(err) {
@@ -24,6 +27,15 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
 
   function ttlFor(kind) {
     return kind === 'timer' ? TIMER_TTL_MS : COMMAND_TTL_MS;
+  }
+
+  function maxAttemptsFor(kind) {
+    return kind === 'timer' ? MAX_TIMER_SEND_ATTEMPTS : MAX_COMMAND_SEND_ATTEMPTS;
+  }
+
+  function retryDelayFor(attempts) {
+    const index = Math.max(0, Math.min(RETRY_BACKOFF_MS.length - 1, Number(attempts || 1) - 1));
+    return RETRY_BACKOFF_MS[index];
   }
 
   function chatQueue(liveChatId, create = false) {
@@ -55,12 +67,19 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
 
   function scheduleFlush(liveChatId, delayMs = 10000) {
     const id = String(liveChatId || '');
-    if (!id || retryTimers.has(id)) return;
+    if (!id) return;
+    const delay = Math.max(1000, Number(delayMs || 10000));
+    const dueAt = now() + delay;
+    const existing = retryTimers.get(id);
+    // Keep the earliest pending retry. A new command should not wait behind an
+    // older timer's much later retry window.
+    if (existing && Number(existing.dueAt || 0) <= dueAt) return;
+    if (existing?.handle) clearTimeout(existing.handle);
     const handle = setTimeout(() => {
       retryTimers.delete(id);
       void flush(id).catch((err) => warn(`[YouTube Delivery] Retry flush failed for ${id}: ${err?.message || err}`));
-    }, Math.max(1000, Number(delayMs || 10000)));
-    retryTimers.set(id, handle);
+    }, delay);
+    retryTimers.set(id, { handle, dueAt });
   }
 
   function buildKey(kind, options = {}) {
@@ -70,7 +89,7 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     return `${kind || 'command'}:${now()}:${sequence}`;
   }
 
-  function enqueue(liveChatId, text, options = {}, reason = 'worker-unavailable') {
+  function enqueue(liveChatId, text, options = {}, reason = 'worker-unavailable', attempts = 0) {
     const id = String(liveChatId || '');
     const kind = options.kind === 'timer' ? 'timer' : 'command';
     const queue = chatQueue(id, true);
@@ -99,6 +118,8 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
       kind,
       queuedAt: now(),
       expiresAt: now() + ttlFor(kind),
+      attempts: Math.max(0, Math.floor(Number(attempts || 0))),
+      nextAttemptAt: attempts > 0 ? now() + retryDelayFor(attempts) : now(),
       reason
     });
     return { sent: false, queued: true, deduped: false, liveChatId: id, reason };
@@ -120,8 +141,8 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     } catch (err) {
       const latestState = String(getWorkerState(id) || '');
       if (isTransientSendError(err) && (latestState === 'connected' || QUEUEABLE_STATES.has(latestState))) {
-        const queued = enqueue(id, text, options, err?.message || 'transient-send-failure');
-        if (latestState === 'connected') scheduleFlush(id, 10000);
+        const queued = enqueue(id, text, options, err?.message || 'transient-send-failure', 1);
+        if (latestState === 'connected') scheduleFlush(id, retryDelayFor(1));
         return queued;
       }
       throw err;
@@ -139,10 +160,16 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     flushing.add(id);
     let sentCount = 0;
     try {
+      let soonestRetryAt = 0;
       for (const [key, item] of [...queue.entries()]) {
         if (String(getWorkerState(id) || '') !== 'connected') break;
-        if (Number(item.expiresAt || 0) <= now()) {
+        const current = now();
+        if (Number(item.expiresAt || 0) <= current) {
           queue.delete(key);
+          continue;
+        }
+        if (Number(item.nextAttemptAt || 0) > current) {
+          soonestRetryAt = !soonestRetryAt ? Number(item.nextAttemptAt) : Math.min(soonestRetryAt, Number(item.nextAttemptAt));
           continue;
         }
         try {
@@ -151,12 +178,24 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
           sentCount += 1;
         } catch (err) {
           if (isTransientSendError(err)) {
-            if (String(getWorkerState(id) || '') === 'connected') scheduleFlush(id, 30000);
+            item.attempts = Math.max(0, Number(item.attempts || 0)) + 1;
+            if (item.attempts >= maxAttemptsFor(item.kind)) {
+              queue.delete(key);
+              warn(`[YouTube Delivery] Dropped pending ${item.kind} for ${id} after ${item.attempts} transient send attempts: ${err?.message || err}`);
+            } else {
+              item.nextAttemptAt = current + retryDelayFor(item.attempts);
+              soonestRetryAt = !soonestRetryAt ? item.nextAttemptAt : Math.min(soonestRetryAt, item.nextAttemptAt);
+            }
+            // One transient transport/API failure is enough signal to stop this
+            // flush. Do not burst through the rest of the queue during an outage.
             break;
           }
           queue.delete(key);
           warn(`[YouTube Delivery] Dropped pending ${item.kind} for ${id}: ${err?.message || err}`);
         }
+      }
+      if (soonestRetryAt && String(getWorkerState(id) || '') === 'connected') {
+        scheduleFlush(id, Math.max(1000, soonestRetryAt - now()));
       }
     } finally {
       flushing.delete(id);
@@ -169,14 +208,14 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     const id = String(liveChatId || '');
     pendingByChat.delete(id);
     const retry = retryTimers.get(id);
-    if (retry) clearTimeout(retry);
+    if (retry?.handle) clearTimeout(retry.handle);
     retryTimers.delete(id);
   }
 
   function clearAll() {
     pendingByChat.clear();
     flushing.clear();
-    for (const retry of retryTimers.values()) clearTimeout(retry);
+    for (const retry of retryTimers.values()) if (retry?.handle) clearTimeout(retry.handle);
     retryTimers.clear();
   }
 
@@ -212,5 +251,8 @@ module.exports = {
   createYouTubeDeliveryQueue,
   isTransientSendError,
   COMMAND_TTL_MS,
-  TIMER_TTL_MS
+  TIMER_TTL_MS,
+  RETRY_BACKOFF_MS,
+  MAX_COMMAND_SEND_ATTEMPTS,
+  MAX_TIMER_SEND_ATTEMPTS
 };

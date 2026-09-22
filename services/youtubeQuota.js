@@ -1,7 +1,7 @@
 'use strict';
 
 const YouTubeQuotaUsage = require('../models/YouTubeQuotaUsage');
-const { YOUTUBE_MAIN_DAILY_LIMIT, YOUTUBE_SEARCH_DAILY_LIMIT } = require('../config/youtube');
+const { YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT, YOUTUBE_SEARCH_DAILY_LIMIT } = require('../config/youtube');
 
 function pacificDayKey(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -13,6 +13,18 @@ function pacificDayKey(now = new Date()) {
 
 function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
   let cached = null;
+  let mainDailyLimitUnits = YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT;
+
+  function normalizePositiveInteger(value, fallback) {
+    const parsed = Math.floor(Number(value));
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  function setLimits({ mainLimit } = {}) {
+    mainDailyLimitUnits = normalizePositiveInteger(mainLimit, mainDailyLimitUnits);
+    if (cached) cached = { ...cached, mainLimit: mainDailyLimitUnits };
+    return { mainLimit: mainDailyLimitUnits, searchLimit: YOUTUBE_SEARCH_DAILY_LIMIT };
+  }
 
   function normalize(doc, dayKey = pacificDayKey()) {
     return {
@@ -27,7 +39,7 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
       viewerCountCalls: Number(doc?.viewerCountCalls || 0),
       googleQuotaExhaustedAt: doc?.googleQuotaExhaustedAt ? new Date(doc.googleQuotaExhaustedAt).toISOString() : null,
       googleQuotaError: String(doc?.googleQuotaError || ''),
-      mainLimit: YOUTUBE_MAIN_DAILY_LIMIT,
+      mainLimit: mainDailyLimitUnits,
       searchLimit: YOUTUBE_SEARCH_DAILY_LIMIT
     };
   }
@@ -50,24 +62,84 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
     const amount = Math.max(0, Math.floor(Number(units || 0)));
     if (!amount) return getUsage();
     const dayKey = pacificDayKey();
-    const limit = Math.min(YOUTUBE_MAIN_DAILY_LIMIT, Math.max(1, Math.floor(Number(options.limit || YOUTUBE_MAIN_DAILY_LIMIT))));
+    const limit = normalizePositiveInteger(options.limit, mainDailyLimitUnits);
     const inc = { mainUnits: amount };
     for (const [key, value] of Object.entries(counters || {})) {
       if (['commandMessages', 'timerMessages', 'discoveryCalls', 'streamConnections', 'authCalls', 'viewerCountCalls'].includes(key)) {
         inc[key] = Math.max(0, Math.floor(Number(value || 0)));
       }
     }
+    const query = { projectKey, dayKey, mainUnits: { $lte: limit - amount } };
+    const update = { $setOnInsert: { projectKey, dayKey }, $inc: inc };
     try {
-      const doc = await YouTubeQuotaUsage.findOneAndUpdate(
-        { projectKey, dayKey, mainUnits: { $lte: limit - amount } },
-        { $setOnInsert: { projectKey, dayKey }, $inc: inc },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      ).lean();
+      let doc;
+      try {
+        doc = await YouTubeQuotaUsage.findOneAndUpdate(
+          query, update, { upsert: true, new: true, setDefaultsOnInsert: true }
+        ).lean();
+      } catch (err) {
+        if (err?.code !== 11000) throw err;
+        // Another request created today's row at the same instant. Retry
+        // against the now-existing row instead of treating that benign race as
+        // quota exhaustion.
+        doc = await YouTubeQuotaUsage.findOneAndUpdate(
+          query, { $inc: inc }, { upsert: false, new: true }
+        ).lean();
+      }
       if (!doc) throw new Error(`YouTube daily API safety budget would exceed ${limit} units.`);
       cached = normalize(doc, dayKey);
       return { ...cached };
     } catch (err) {
-      if (err?.code === 11000) throw new Error(`YouTube daily API safety budget would exceed ${limit} units.`);
+      throw err;
+    }
+  }
+
+
+  async function reserveStreamConnection({ dailySafetyCap = 200, estimatedMainUnits = 1 } = {}) {
+    const current = await getUsage();
+    if (current.googleQuotaExhaustedAt) {
+      const err = new Error(`Google reports the YouTube API quota exhausted for ${current.dayKey} (Pacific Time).`);
+      err.code = 'GOOGLE_YOUTUBE_QUOTA_EXHAUSTED';
+      throw err;
+    }
+    const cap = normalizePositiveInteger(dailySafetyCap, 200);
+    const amount = normalizePositiveInteger(estimatedMainUnits, 1);
+    const dayKey = pacificDayKey();
+    const limit = mainDailyLimitUnits;
+    const query = {
+      projectKey,
+      dayKey,
+      mainUnits: { $lte: limit - amount },
+      streamConnections: { $lt: cap }
+    };
+    const update = {
+      $setOnInsert: { projectKey, dayKey },
+      $inc: { mainUnits: amount, streamConnections: 1 }
+    };
+    try {
+      let doc;
+      try {
+        doc = await YouTubeQuotaUsage.findOneAndUpdate(
+          query, update, { upsert: true, new: true, setDefaultsOnInsert: true }
+        ).lean();
+      } catch (err) {
+        if (err?.code !== 11000) throw err;
+        doc = await YouTubeQuotaUsage.findOneAndUpdate(
+          query, { $inc: { mainUnits: amount, streamConnections: 1 } }, { upsert: false, new: true }
+        ).lean();
+      }
+      if (!doc) {
+        const fresh = await getUsage({ fresh: true });
+        if (Number(fresh.streamConnections || 0) >= cap) {
+          const capErr = new Error(`YouTube StreamList daily safety cap (${cap}) reached. Waiting for the next Pacific quota day.`);
+          capErr.code = 'YOUTUBE_STREAMLIST_DAILY_SAFETY_CAP';
+          throw capErr;
+        }
+        throw new Error(`YouTube daily API safety budget would exceed ${limit} units.`);
+      }
+      cached = normalize(doc, dayKey);
+      return { ...cached };
+    } catch (err) {
       throw err;
     }
   }
@@ -79,19 +151,22 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
     for (const [key, value] of Object.entries(counters || {})) {
       if (['discoveryCalls', 'authCalls'].includes(key)) inc[key] = Math.max(0, Math.floor(Number(value || 0)));
     }
+    const query = { projectKey, dayKey, searchCalls: { $lt: limit } };
+    const update = { $setOnInsert: { projectKey, dayKey }, $inc: inc };
+    let doc;
     try {
-      const doc = await YouTubeQuotaUsage.findOneAndUpdate(
-        { projectKey, dayKey, searchCalls: { $lt: limit } },
-        { $setOnInsert: { projectKey, dayKey }, $inc: inc },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+      doc = await YouTubeQuotaUsage.findOneAndUpdate(
+        query, update, { upsert: true, new: true, setDefaultsOnInsert: true }
       ).lean();
-      if (!doc) throw new Error(`YouTube daily search safety budget would exceed ${limit} calls.`);
-      cached = normalize(doc, dayKey);
-      return { ...cached };
     } catch (err) {
-      if (err?.code === 11000) throw new Error(`YouTube daily search safety budget would exceed ${limit} calls.`);
-      throw err;
+      if (err?.code !== 11000) throw err;
+      doc = await YouTubeQuotaUsage.findOneAndUpdate(
+        query, { $inc: inc }, { upsert: false, new: true }
+      ).lean();
     }
+    if (!doc) throw new Error(`YouTube daily search safety budget would exceed ${limit} calls.`);
+    cached = normalize(doc, dayKey);
+    return { ...cached };
   }
 
 
@@ -120,7 +195,7 @@ function createYouTubeQuotaManager({ projectKey = 'youtube' } = {}) {
     cached = normalize(doc, dayKey);
   }
 
-  return { getUsage, reserveMainUnits, reserveSearchCall, noteAuthCall, markGoogleQuotaExceeded, pacificDayKey };
+  return { getUsage, reserveMainUnits, reserveStreamConnection, reserveSearchCall, noteAuthCall, markGoogleQuotaExceeded, setLimits, pacificDayKey };
 }
 
 module.exports = { createYouTubeQuotaManager, pacificDayKey };

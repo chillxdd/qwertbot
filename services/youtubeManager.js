@@ -13,6 +13,7 @@ const {
   YOUTUBE_CLIENT_SECRET,
   YOUTUBE_BROADCASTER_CHANNEL_ID,
   YOUTUBE_BROADCASTER_HANDLE,
+  YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT,
   YOUTUBE_INSERT_COST,
   YOUTUBE_LIST_COST,
   YOUTUBE_DISCOVERY_DELAYS_MS
@@ -23,6 +24,7 @@ const DEFAULT_CONFIG = Object.freeze({
   commandsEnabled: true,
   timersEnabled: true,
   globalTimerStartDelaySeconds: 0,
+  mainDailyLimitUnits: YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT,
   timerSafetyStopUnits: 7500,
   hardSafetyStopUnits: 9000,
   searchSafetyStopCalls: 90
@@ -142,10 +144,12 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       commandsEnabled: doc?.commandsEnabled !== false,
       timersEnabled: doc?.timersEnabled !== false,
       globalTimerStartDelaySeconds: Number(doc?.globalTimerStartDelaySeconds ?? DEFAULT_CONFIG.globalTimerStartDelaySeconds),
+      mainDailyLimitUnits: Number(doc?.mainDailyLimitUnits ?? DEFAULT_CONFIG.mainDailyLimitUnits),
       timerSafetyStopUnits: Number(doc?.timerSafetyStopUnits ?? DEFAULT_CONFIG.timerSafetyStopUnits),
       hardSafetyStopUnits: Number(doc?.hardSafetyStopUnits ?? DEFAULT_CONFIG.hardSafetyStopUnits),
       searchSafetyStopCalls: Number(doc?.searchSafetyStopCalls ?? DEFAULT_CONFIG.searchSafetyStopCalls)
     };
+    quotaManager.setLimits({ mainLimit: config.mainDailyLimitUnits });
     return { ...config };
   }
 
@@ -352,15 +356,28 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
   }
 
   async function saveConfig(input = {}) {
-    const timerSafetyStopUnits = Math.max(500, Math.min(9900, Math.floor(Number(input.timerSafetyStopUnits ?? config.timerSafetyStopUnits))));
-    const hardSafetyStopUnits = Math.max(timerSafetyStopUnits + 50, Math.min(10000, Math.floor(Number(input.hardSafetyStopUnits ?? config.hardSafetyStopUnits))));
-    const searchSafetyStopCalls = Math.max(1, Math.min(100, Math.floor(Number(input.searchSafetyStopCalls ?? config.searchSafetyStopCalls))));
-    const globalTimerStartDelaySeconds = Math.max(0, Math.min(86400, Math.floor(Number(input.globalTimerStartDelaySeconds ?? config.globalTimerStartDelaySeconds))));
+    const mainDailyLimitUnits = Math.floor(Number(input.mainDailyLimitUnits ?? config.mainDailyLimitUnits));
+    const timerSafetyStopUnits = Math.floor(Number(input.timerSafetyStopUnits ?? config.timerSafetyStopUnits));
+    const hardSafetyStopUnits = Math.floor(Number(input.hardSafetyStopUnits ?? config.hardSafetyStopUnits));
+    const searchSafetyStopCalls = Math.floor(Number(input.searchSafetyStopCalls ?? config.searchSafetyStopCalls));
+    const globalTimerStartDelaySeconds = Math.floor(Number(input.globalTimerStartDelaySeconds ?? config.globalTimerStartDelaySeconds));
+
+    if (!Number.isSafeInteger(mainDailyLimitUnits) || mainDailyLimitUnits < 550) throw new Error('Daily main quota limit must be a whole number of at least 550 units.');
+    if (!Number.isSafeInteger(timerSafetyStopUnits) || timerSafetyStopUnits < 500 || timerSafetyStopUnits > mainDailyLimitUnits - 50) {
+      throw new Error(`Pause timers must be between 500 and ${Math.max(500, mainDailyLimitUnits - 50)} main units.`);
+    }
+    if (!Number.isSafeInteger(hardSafetyStopUnits) || hardSafetyStopUnits < timerSafetyStopUnits + 50 || hardSafetyStopUnits > mainDailyLimitUnits) {
+      throw new Error(`Stop all bot sends must be at least 50 units above the timer stop and no higher than the daily main quota limit (${mainDailyLimitUnits}).`);
+    }
+    if (!Number.isSafeInteger(searchSafetyStopCalls) || searchSafetyStopCalls < 1 || searchSafetyStopCalls > 100) throw new Error('Discovery search safety limit must be between 1 and 100 calls.');
+    if (!Number.isSafeInteger(globalTimerStartDelaySeconds) || globalTimerStartDelaySeconds < 0 || globalTimerStartDelaySeconds > 86400) throw new Error('Global timer start delay must be between 0 and 86400 seconds.');
+
     const update = {
       enabled: input.enabled !== false,
       commandsEnabled: input.commandsEnabled !== false,
       timersEnabled: input.timersEnabled !== false,
       globalTimerStartDelaySeconds,
+      mainDailyLimitUnits,
       timerSafetyStopUnits,
       hardSafetyStopUnits,
       searchSafetyStopCalls
@@ -370,6 +387,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     const wereTimersEnabled = config.timersEnabled;
     const previousGlobalTimerStartDelaySeconds = Number(config.globalTimerStartDelaySeconds || 0);
     config = update;
+    quotaManager.setLimits({ mainLimit: config.mainDailyLimitUnits });
     if (wasEnabled && !config.enabled) await stopWorkers('youtube-disabled');
     if (config.enabled && !config.commandsEnabled) deliveryQueue.dropKind('command');
     if (config.enabled && !config.timersEnabled) deliveryQueue.dropKind('timer');

@@ -154,6 +154,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
     $('youtubeCommandsEnabled').checked = cfg.commandsEnabled !== false;
     $('youtubeTimersEnabled').checked = cfg.timersEnabled !== false;
     if ($('youtubeGlobalTimerStartDelay')) $('youtubeGlobalTimerStartDelay').value = Number(cfg.globalTimerStartDelaySeconds ?? 0);
+    $('youtubeMainQuotaLimit').value = Number(cfg.mainDailyLimitUnits ?? 10000);
     $('youtubeTimerQuotaStop').value = Number(cfg.timerSafetyStopUnits ?? 7500);
     $('youtubeHardQuotaStop').value = Number(cfg.hardSafetyStopUnits ?? 9000);
     $('youtubeSearchQuotaStop').value = Number(cfg.searchSafetyStopCalls ?? 90);
@@ -166,13 +167,13 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const diagChatState = !status.twitchLive ? 'good' : activeChats && connected === activeChats && !errors ? 'good' : errors ? 'bad' : 'warn';
     setValue('diagYoutubeChats', diagChatText, diagChatState);
     $('diagYoutubeChatsDetail').textContent = `${status.activeBroadcasts?.length || 0} broadcast(s) · ${chats.length} distinct chat worker(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}. Last discovery: ${status.lastDiscoveryAt ? fmtTime(status.lastDiscoveryAt) : 'not yet'}.`;
-    const main = Number(quota.mainUnits || 0), mainLimit = Number(quota.mainLimit || 10000), searches = Number(quota.searchCalls || 0), searchLimit = Number(quota.searchLimit || 100);
+    const main = Number(quota.mainUnits || 0), mainLimit = Number(quota.mainLimit || cfg.mainDailyLimitUnits || 10000), searches = Number(quota.searchCalls || 0), searchLimit = Number(quota.searchLimit || 100);
     const googleExhausted = Boolean(quota.googleQuotaExhaustedAt);
     const quotaState = googleExhausted || main >= Number(cfg.hardSafetyStopUnits || 9000) ? 'bad' : main >= Number(cfg.timerSafetyStopUnits || 7500) ? 'warn' : 'good';
     setValue('diagYoutubeQuota', googleExhausted ? 'GOOGLE QUOTA EXHAUSTED' : `~${main.toLocaleString()} / ${mainLimit.toLocaleString()} EST.`, quotaState);
     const googleDetail = googleExhausted ? ` · Google returned quotaExceeded at ${fmtTime(quota.googleQuotaExhaustedAt)}` : '';
     const streamSafetyCap = Number(status.streamListDailySafetyCap || 200);
-    $('diagYoutubeQuotaDetail').textContent = `${searches}/${searchLimit} search calls · ${quota.commandMessages || 0} command send attempts · ${quota.timerMessages || 0} timer send attempts · ${quota.streamConnections || 0}/${streamSafetyCap} StreamList connections (hard safety cap) · ${quota.discoveryCalls || 0} discovery call(s) · ${quota.viewerCountCalls || 0} viewer-count call(s) · day ${quota.dayKey || '—'} (Pacific Time)${googleDetail}. Internal usage is an estimate; Google Cloud is authoritative.`;
+    $('diagYoutubeQuotaDetail').textContent = `${searches}/${searchLimit} search calls · ${quota.commandMessages || 0} command send attempts · ${quota.timerMessages || 0} timer send attempts · ${quota.streamConnections || 0}/${streamSafetyCap} StreamList connections (runaway fuse) · ${quota.discoveryCalls || 0} discovery call(s) · ${quota.viewerCountCalls || 0} viewer-count call(s) · configured main allocation ${mainLimit.toLocaleString()} · timer stop ${Number(cfg.timerSafetyStopUnits || 7500).toLocaleString()} · send stop ${Number(cfg.hardSafetyStopUnits || 9000).toLocaleString()} · day ${quota.dayKey || '—'} (Pacific Time)${googleDetail}. Internal usage is an estimate; Google Cloud is authoritative.`;
   }
 
   async function refreshAdminState({ messageTarget = null } = {}) {
@@ -879,12 +880,21 @@ export function initYoutubeSection({ $, esc, postJson }) {
 
   async function saveQuotaSafety() {
     const cfg = adminState?.config || {};
+    const mainDailyLimitUnits = Number($('youtubeMainQuotaLimit').value);
+    const timerSafetyStopUnits = Number($('youtubeTimerQuotaStop').value);
+    const hardSafetyStopUnits = Number($('youtubeHardQuotaStop').value);
+    const searchSafetyStopCalls = Number($('youtubeSearchQuotaStop').value);
+    if (!Number.isSafeInteger(mainDailyLimitUnits) || mainDailyLimitUnits < 550) return setMessage('youtubeQuotaMsg', 'Daily main quota limit must be a whole number of at least 550.', true);
+    if (!Number.isSafeInteger(timerSafetyStopUnits) || timerSafetyStopUnits < 500 || timerSafetyStopUnits > mainDailyLimitUnits - 50) return setMessage('youtubeQuotaMsg', `Pause timers must be between 500 and ${Math.max(500, mainDailyLimitUnits - 50)}.`, true);
+    if (!Number.isSafeInteger(hardSafetyStopUnits) || hardSafetyStopUnits < timerSafetyStopUnits + 50 || hardSafetyStopUnits > mainDailyLimitUnits) return setMessage('youtubeQuotaMsg', `Stop all bot sends must be at least 50 above the timer stop and no higher than ${mainDailyLimitUnits}.`, true);
+    if (!Number.isSafeInteger(searchSafetyStopCalls) || searchSafetyStopCalls < 1 || searchSafetyStopCalls > 100) return setMessage('youtubeQuotaMsg', 'Discovery search safety limit must be between 1 and 100.', true);
     setMessage('youtubeQuotaMsg', 'Saving...');
     const d = await postJson('/youtube/admin/config', {
       ...cfg,
-      timerSafetyStopUnits: Number($('youtubeTimerQuotaStop').value),
-      hardSafetyStopUnits: Number($('youtubeHardQuotaStop').value),
-      searchSafetyStopCalls: Number($('youtubeSearchQuotaStop').value)
+      mainDailyLimitUnits,
+      timerSafetyStopUnits,
+      hardSafetyStopUnits,
+      searchSafetyStopCalls
     });
     setMessage('youtubeQuotaMsg', d.success ? 'Saved.' : d.error, !d.success);
     if (d.success) await refreshAdminState().catch(() => {});

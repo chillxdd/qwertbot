@@ -8,7 +8,7 @@ const YOUTUBE_REDIRECT_URI = `${PUBLIC_BASE_URL}/auth/youtube/callback`;
 const YOUTUBE_BROADCASTER_CHANNEL_ID = String(process.env.YOUTUBE_BROADCASTER_CHANNEL_ID || 'UCtEfKCmCxHi1NZ5npTvEuBg').trim();
 const YOUTUBE_BROADCASTER_HANDLE = String(process.env.YOUTUBE_BROADCASTER_HANDLE || 'generalqwert').replace(/^@/, '').trim();
 const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
-const YOUTUBE_MAIN_DAILY_LIMIT = 10000;
+const YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT = 10000;
 const YOUTUBE_SEARCH_DAILY_LIMIT = 100;
 const YOUTUBE_INSERT_COST = 50;
 const YOUTUBE_LIST_COST = 1;
@@ -24,7 +24,9 @@ module.exports = {
   YOUTUBE_BROADCASTER_CHANNEL_ID,
   YOUTUBE_BROADCASTER_HANDLE,
   YOUTUBE_SCOPE,
-  YOUTUBE_MAIN_DAILY_LIMIT,
+  YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT,
+  // Backward-compatible alias. This is the default allocation, not a hard ceiling.
+  YOUTUBE_MAIN_DAILY_LIMIT: YOUTUBE_DEFAULT_MAIN_DAILY_LIMIT,
   YOUTUBE_SEARCH_DAILY_LIMIT,
   YOUTUBE_INSERT_COST,
   YOUTUBE_LIST_COST,

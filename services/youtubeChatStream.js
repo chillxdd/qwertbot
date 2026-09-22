@@ -265,15 +265,15 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       nextReconnectAt = null;
       emit();
 
-      const usage = await quotaManager.getUsage();
-      if (Number(usage?.streamConnections || 0) >= STREAMLIST_DAILY_SAFETY_CAP) {
-        const err = new Error(`YouTube StreamList daily safety cap (${STREAMLIST_DAILY_SAFETY_CAP}) reached. Waiting for the next Pacific quota day.`);
-        err.code = 'YOUTUBE_STREAMLIST_DAILY_SAFETY_CAP';
-        throw err;
-      }
       const token = await authManager.getValidAccessToken();
       if (stopped || generation !== streamGeneration) return;
-      await quotaManager.reserveMainUnits(1, { streamConnections: 1 });
+      // Reserve the daily StreamList fuse and the conservative main-unit
+      // estimate atomically. Two simultaneous chat workers cannot race past
+      // the fuse even if they reconnect at the same instant.
+      await quotaManager.reserveStreamConnection({
+        dailySafetyCap: STREAMLIST_DAILY_SAFETY_CAP,
+        estimatedMainUnits: 1
+      });
       if (stopped || generation !== streamGeneration) return;
 
       const client = getClient();
