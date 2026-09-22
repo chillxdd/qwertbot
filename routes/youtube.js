@@ -292,7 +292,12 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
     if (!requireDb(res)) return;
     try {
       const doc = await YouTubeNativeCommandConfig.findOne({ channelKey }).lean();
-      return res.json({ success: true, config: { commandsEnabled: doc?.commandsEnabled !== false, commandsResponse: doc?.commandsResponse || DEFAULT_NATIVE_RESPONSE } });
+      return res.json({
+        success: true,
+        config: { commandsEnabled: doc?.commandsEnabled !== false, commandsResponse: doc?.commandsResponse || DEFAULT_NATIVE_RESPONSE },
+        defaults: { commandsEnabled: true, commandsResponse: DEFAULT_NATIVE_RESPONSE },
+        maxLength: MAX_MESSAGE_LENGTH
+      });
     } catch (err) { return res.status(500).json({ success: false, error: 'Could not load YouTube native command.' }); }
   });
 

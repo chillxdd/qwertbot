@@ -1388,16 +1388,51 @@
       </div>
 
       <div id="youtubeNativeCommandsView" class="subsection-view youtube-subview">
-        <h3>Native Commands</h3>
-        <div class="box wide youtube-native-card">
-          <div class="label">!commands</div>
-          <label class="inline-check"><input id="youtubeNativeCommandsEnabled" type="checkbox" checked> Enabled</label>
-          <label class="prompt-label" for="youtubeNativeCommandsResponse">Response</label>
-          <input id="youtubeNativeCommandsResponse" maxlength="200" placeholder="Commands page URL">
-          <div class="detail">Links viewers to the public YouTube command directory.</div>
-          <button id="saveYoutubeNativeBtn" type="button">Save !commands</button>
-          <div id="youtubeNativeMsg" class="detail"></div>
+        <div class="custom-command-header">
+          <div>
+            <h3>Native Commands</h3>
+          </div>
         </div>
+
+        <div id="youtubeNativeCommandList" class="native-command-list">
+          <div class="native-command-card" data-youtube-native-command="commands" data-user-level="everyone">
+            <div class="native-command-main">
+              <div class="native-command-title">
+                <code>!commands</code>
+                <span class="user-level-badge user-level-everyone">Everyone</span>
+                <span id="youtubeNativeCommandStatus" class="native-command-status enabled">Enabled</span>
+              </div>
+              <div class="detail">Opens the public YouTube command directory.</div>
+            </div>
+            <div class="custom-command-actions"><button id="youtubeNativeResponseEditBtn" class="secondary" type="button">Responses</button></div>
+          </div>
+        </div>
+        <div id="youtubeNativeListMsg" class="detail"></div>
+
+        <dialog id="youtubeNativeResponseDialog" class="custom-variables-dialog native-response-dialog">
+          <div class="custom-dialog-header">
+            <div>
+              <h3>!commands Responses</h3>
+            </div>
+            <button id="closeYoutubeNativeResponseDialogBtn" class="secondary" type="button">Close</button>
+          </div>
+          <div class="native-response-fields">
+            <div class="native-response-field">
+              <label class="prompt-label" for="youtubeNativeCommandsEnabled">Command Status</label>
+              <label class="inline-check"><input id="youtubeNativeCommandsEnabled" type="checkbox" checked> Enabled</label>
+            </div>
+            <div class="native-response-field">
+              <label class="prompt-label" for="youtubeNativeCommandsResponse">Response</label>
+              <textarea id="youtubeNativeCommandsResponse" maxlength="200" rows="3" placeholder="YouTube commands response"></textarea>
+              <div class="detail">Sent when a viewer uses <code>!commands</code>.</div>
+            </div>
+          </div>
+          <div class="custom-editor-actions">
+            <button id="saveYoutubeNativeBtn" type="button">Save Responses</button>
+            <button id="resetYoutubeNativeBtn" class="secondary" type="button">Reset Command to Default</button>
+          </div>
+          <div id="youtubeNativeMsg" class="detail"></div>
+        </dialog>
       </div>
 
       <dialog id="youtubeCommandDialog" class="custom-command-editor entity-editor-dialog">

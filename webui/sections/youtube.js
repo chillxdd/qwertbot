@@ -8,6 +8,8 @@ export function initYoutubeSection({ $, esc, postJson }) {
   let timerFilters = { search: '', sort: 'created_asc' };
   let commandPage = 1;
   let timerPage = 1;
+  let nativeConfig = { commandsEnabled: true, commandsResponse: '' };
+  let nativeDefaults = { commandsEnabled: true, commandsResponse: '' };
 
   const PAGE_SIZES = new Set([10, 25, 50]);
   const MAX_RESPONSES = 25;
@@ -728,11 +730,50 @@ export function initYoutubeSection({ $, esc, postJson }) {
     await Promise.all([loadTimers(), refreshAdminState().catch(() => {})]);
   }
 
-  async function loadNative() {
+  function renderNativeCard() {
+    const enabled = nativeConfig?.commandsEnabled !== false;
+    const status = $('youtubeNativeCommandStatus');
+    if (status) {
+      status.textContent = enabled ? 'Enabled' : 'Disabled';
+      status.classList.toggle('enabled', enabled);
+    }
+  }
+
+  function populateNativeDialog(config = nativeConfig) {
+    $('youtubeNativeCommandsEnabled').checked = config?.commandsEnabled !== false;
+    $('youtubeNativeCommandsResponse').value = config?.commandsResponse || nativeDefaults.commandsResponse || '';
+  }
+
+  async function loadNative({ populateDialog = false } = {}) {
     const d = await postJson('/youtube/native/get', {});
     if (!d.success) throw new Error(d.error || 'Could not load !commands.');
-    $('youtubeNativeCommandsEnabled').checked = d.config?.commandsEnabled !== false;
-    $('youtubeNativeCommandsResponse').value = d.config?.commandsResponse || '';
+    nativeConfig = {
+      commandsEnabled: d.config?.commandsEnabled !== false,
+      commandsResponse: d.config?.commandsResponse || ''
+    };
+    nativeDefaults = {
+      commandsEnabled: d.defaults?.commandsEnabled !== false,
+      commandsResponse: d.defaults?.commandsResponse || nativeConfig.commandsResponse || ''
+    };
+    renderNativeCard();
+    if (populateDialog) populateNativeDialog(nativeConfig);
+    return nativeConfig;
+  }
+
+  async function openNativeDialog() {
+    setMessage('youtubeNativeListMsg', '');
+    setMessage('youtubeNativeMsg', 'Loading...');
+    try {
+      await loadNative({ populateDialog: true });
+      setMessage('youtubeNativeMsg', '');
+      openDialog('youtubeNativeResponseDialog');
+    } catch (err) {
+      setMessage('youtubeNativeListMsg', err.message || 'Could not load !commands.', true);
+    }
+  }
+
+  function closeNativeDialog() {
+    closeDialog('youtubeNativeResponseDialog');
   }
 
   async function saveNative() {
@@ -741,7 +782,23 @@ export function initYoutubeSection({ $, esc, postJson }) {
       commandsEnabled: $('youtubeNativeCommandsEnabled').checked,
       commandsResponse: $('youtubeNativeCommandsResponse').value
     });
-    setMessage('youtubeNativeMsg', d.success ? 'Saved.' : d.error, !d.success);
+    if (!d.success) {
+      setMessage('youtubeNativeMsg', d.error || 'Could not save !commands.', true);
+      return;
+    }
+    nativeConfig = {
+      commandsEnabled: d.config?.commandsEnabled !== false,
+      commandsResponse: d.config?.commandsResponse || ''
+    };
+    populateNativeDialog(nativeConfig);
+    renderNativeCard();
+    setMessage('youtubeNativeMsg', 'Saved.');
+    setMessage('youtubeNativeListMsg', '');
+  }
+
+  function resetNative() {
+    populateNativeDialog(nativeDefaults);
+    setMessage('youtubeNativeMsg', 'Defaults loaded. Save to apply them.');
   }
 
   function selectAutomationView(view) {
@@ -756,7 +813,7 @@ export function initYoutubeSection({ $, esc, postJson }) {
     }
     if (view === 'commands') void loadCommands().catch((e) => setMessage('youtubeCommandsMsg', e.message, true));
     if (view === 'timers') void loadTimers().catch((e) => setMessage('youtubeTimersMsg', e.message, true));
-    if (view === 'native') void loadNative().catch((e) => setMessage('youtubeNativeMsg', e.message, true));
+    if (view === 'native') void loadNative().catch((e) => setMessage('youtubeNativeListMsg', e.message, true));
   }
 
   async function saveGlobalTimerSettings() {
@@ -881,7 +938,12 @@ export function initYoutubeSection({ $, esc, postJson }) {
   $('youtubeTimerResponseMode').addEventListener('change', () => updateYoutubeResponseUi('timer'));
   $('addYoutubeTimerResponseBtn').onclick = () => addYoutubeResponse('timer');
 
+  $('youtubeNativeResponseEditBtn').onclick = () => void openNativeDialog();
+  $('closeYoutubeNativeResponseDialogBtn').onclick = closeNativeDialog;
   $('saveYoutubeNativeBtn').onclick = () => void saveNative();
+  $('resetYoutubeNativeBtn').onclick = resetNative;
+  $('youtubeNativeResponseDialog').addEventListener('click', (e) => { if (e.target === $('youtubeNativeResponseDialog')) closeNativeDialog(); });
+  $('youtubeNativeResponseDialog').addEventListener('close', () => $('youtubeNativeResponseDialog').classList.remove('open'));
   $('youtubeAuthorizeBtn').onclick = () => { location.href = '/auth/youtube/start'; };
   $('youtubeDisconnectBtn').onclick = async () => {
     if (!confirm('Disconnect SqwertArmyBot from YouTube OAuth?')) return;
