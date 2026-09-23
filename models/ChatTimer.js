@@ -47,6 +47,11 @@ const chatTimerSchema = new mongoose.Schema({
     min: 0,
     max: 1000000
   },
+  advancedFilterId: {
+    type: String,
+    default: '',
+    trim: true
+  },
   priority: {
     type: String,
     enum: ['high', 'normal', 'low'],

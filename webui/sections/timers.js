@@ -1,4 +1,4 @@
-export function initTimersSection({ $, esc, postJson, config = {} }) {
+export function initTimersSection({ $, esc, postJson, config = {}, advancedFilters = null }) {
   const maxTimerNameLength = Number(config.maxTimerNameLength || 80);
   const minIntervalSeconds = Number(config.minIntervalSeconds || 30);
   const maxIntervalSeconds = Number(config.maxIntervalSeconds || 86400);
@@ -28,6 +28,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const editorMsgEl = $('timerEditorMsg');
   const scheduleMsgEl = $('timerScheduleMsg');
   const activityMsgEl = $('timerActivityMsg');
+  const filterMsgEl = $('timerAdvancedFilterMsg');
   const responseMsgEl = $('timerResponseMsg');
 
   function setMessage(el, text, isError = false) {
@@ -40,7 +41,50 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   const setEditorMessage = (text, isError = false) => setMessage(editorMsgEl, text, isError);
   const setScheduleMessage = (text, isError = false) => setMessage(scheduleMsgEl, text, isError);
   const setActivityMessage = (text, isError = false) => setMessage(activityMsgEl, text, isError);
+  const setFilterMessage = (text, isError = false) => setMessage(filterMsgEl, text, isError);
   const setResponseMessage = (text, isError = false) => setMessage(responseMsgEl, text, isError);
+
+  function availableAdvancedFilters() {
+    return typeof advancedFilters?.getFilters === 'function' ? advancedFilters.getFilters() : [];
+  }
+
+  function populateAdvancedFilterSelect(selectedId = '') {
+    const select = $('timerAdvancedFilterId');
+    const selected = String(selectedId || '').trim();
+    const rows = availableAdvancedFilters();
+    select.innerHTML = '<option value="">Choose filter...</option>';
+    rows.forEach((filter) => {
+      const option = document.createElement('option');
+      option.value = String(filter.id || '');
+      option.textContent = String(filter.name || 'Filter');
+      select.appendChild(option);
+    });
+    if (selected && !rows.some((filter) => String(filter.id || '') === selected)) {
+      const option = document.createElement('option');
+      option.value = selected;
+      option.textContent = 'Missing filter';
+      select.appendChild(option);
+    }
+    select.value = selected;
+  }
+
+  function syncAdvancedFilterUi() {
+    const useFilter = $('timerUseAdvancedFilter').checked;
+    $('timerAdvancedFilterSelectWrap').hidden = !useFilter;
+    if (!useFilter) {
+      setFilterMessage('');
+      return;
+    }
+    const rows = availableAdvancedFilters();
+    if (!rows.length) setFilterMessage('No Advanced Filters exist yet. Create one under General Settings → Advanced Filters.', true);
+    else setFilterMessage('');
+  }
+
+  async function refreshAdvancedFilterOptions(selectedId = '') {
+    if (typeof advancedFilters?.ensureLoaded === 'function') await advancedFilters.ensureLoaded();
+    populateAdvancedFilterSelect(selectedId);
+    syncAdvancedFilterUi();
+  }
 
   function formatInterval(seconds) {
     const total = Math.max(0, Number(seconds || 0));
@@ -117,6 +161,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       timer?.responseMode,
       timer?.lastResponse,
       timer?.waitingFor,
+      timer?.advancedFilterName,
       ...(Array.isArray(timer?.responses) ? timer.responses : [])
     ].filter(Boolean).join(' ').toLocaleLowerCase();
     return haystack.includes(query);
@@ -168,6 +213,11 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       const overrideText = timer.startDelaySeconds === null ? `Global start delay (${formatInterval(timer.effectiveStartDelaySeconds || 0)})` : `Start delay ${formatInterval(timer.startDelaySeconds)}`;
       const nextLabel = timer.nextRetryAt ? 'Next retry' : 'Next eligible time';
       const waiting = timer.waitingFor ? ` · Waiting for: ${timer.waitingFor}` : '';
+      let filterDetail = 'Filter: None';
+      if (timer.advancedFilterId) {
+        if (timer.advancedFilterExists === false) filterDetail = 'Filter: Missing';
+        else filterDetail = `Filter: ${timer.advancedFilterName || 'Advanced Filter'} · ${timer.advancedFilterMatched ? 'MATCH' : 'WAITING'}`;
+      }
 
       card.innerHTML = `
         <div class="custom-command-card-main">
@@ -177,6 +227,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
           </div>
           <div class="detail">Every ${esc(formatInterval(timer.intervalSeconds))}${jitter} · ${esc(priorityLabel(timer.priority))} priority · ${responseCount} action${responseCount === 1 ? '' : 's'} · ${esc(modeLabel(timer.responseMode))}</div>
           <div class="detail">${esc(overrideText)} · ${esc(activityText)}</div>
+          <div class="detail">${esc(filterDetail)}</div>
           <div class="detail">Last fired: ${esc(formatDate(timer.lastFiredAt))} · ${esc(nextLabel)}: ${esc(formatDate(timer.nextRetryAt || timer.nextDueAt))}${esc(waiting)}</div>
           <div class="detail">Times fired: ${Number(timer.timesFired || 0)}${timer.lastResponse ? ` · Last action: ${esc(timer.lastResponse)}` : ''}</div>
           <details class="timer-history"><summary>Recent fire history</summary>${renderHistory(timer)}</details>
@@ -324,6 +375,9 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     $('timerPriority').value = 'normal';
     $('timerMinimumMessages').value = '0';
     $('timerMinimumViewers').value = '0';
+    $('timerUseAdvancedFilter').checked = false;
+    populateAdvancedFilterSelect('');
+    $('timerAdvancedFilterSelectWrap').hidden = true;
     $('timerResponseMode').value = 'equal';
     $('timerAvoidImmediateRepeat').checked = false;
     $('timerEnabled').checked = true;
@@ -332,6 +386,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     setEditorMessage('');
     setScheduleMessage('');
     setActivityMessage('');
+    setFilterMessage('');
     setResponseMessage('');
     syncResponseMode();
     applySettingsToUi();
@@ -349,6 +404,11 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       $('timerPriority').value = ['high', 'normal', 'low'].includes(timer.priority) ? timer.priority : 'normal';
       $('timerMinimumMessages').value = String(timer.minimumChatMessages || 0);
       $('timerMinimumViewers').value = String(timer.minimumViewers || 0);
+      const filterId = String(timer.advancedFilterId || '').trim();
+      $('timerUseAdvancedFilter').checked = Boolean(filterId);
+      populateAdvancedFilterSelect(filterId);
+      syncAdvancedFilterUi();
+      void refreshAdvancedFilterOptions(filterId);
       $('timerResponseMode').value = timer.responseMode === 'weighted' ? 'weighted' : 'equal';
       $('timerAvoidImmediateRepeat').checked = timer.avoidImmediateRepeat === true;
       $('timerEnabled').checked = timer.enabled !== false;
@@ -356,6 +416,8 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       const responses = Array.isArray(timer.responses) && timer.responses.length ? timer.responses : [''];
       responses.forEach((response, index) => makeResponseRow(response, timer.responseWeights?.[index] ?? 1, timer.actionTypes?.[index] || 'chat_message', timer.actionColors?.[index] || 'primary'));
       syncResponseMode();
+    } else {
+      void refreshAdvancedFilterOptions('');
     }
     editorEl.classList.add('open');
     if (typeof editorEl.showModal === 'function' && !editorEl.open) editorEl.showModal();
@@ -382,6 +444,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     setEditorMessage('');
     setScheduleMessage('');
     setActivityMessage('');
+    setFilterMessage('');
     setResponseMessage('');
 
     const name = $('timerName').value.trim();
@@ -413,6 +476,10 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
       return setActivityMessage(`Min Viewers must be a whole number between 0 and ${maxMinimumViewers}.`, true);
     }
 
+    const useAdvancedFilter = $('timerUseAdvancedFilter').checked;
+    const advancedFilterId = useAdvancedFilter ? String($('timerAdvancedFilterId').value || '').trim() : '';
+    if (useAdvancedFilter && !advancedFilterId) return setFilterMessage('Choose an Advanced Filter, or turn Use filter off.', true);
+
     const rows = collectResponses();
     const nonblank = rows.filter((row) => row.response);
     if (!nonblank.length) return setResponseMessage('Add at least one action.', true);
@@ -435,6 +502,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
         priority,
         minimumChatMessages,
         minimumViewers,
+        advancedFilterId,
         responses: nonblank.map((row) => row.response),
         responseMode,
         responseWeights: nonblank.map((row) => responseMode === 'weighted' ? row.weight : 1),
@@ -550,6 +618,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
     makeResponseRow();
   };
   $('timerResponseMode').onchange = syncResponseMode;
+  $('timerUseAdvancedFilter').onchange = syncAdvancedFilterUi;
   $('saveTimerBtn').onclick = saveTimer;
   $('cancelTimerBtn').onclick = closeEditor;
   $('closeTimerEditorBtn').onclick = closeEditor;
@@ -562,6 +631,15 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
   $('closeTimerPreviewBtn').onclick = () => $('timerPreviewDialog').close();
   $('timerPreviewDialog').addEventListener('click', (event) => { if (event.target === $('timerPreviewDialog')) $('timerPreviewDialog').close(); });
 
+  if (typeof advancedFilters?.subscribe === 'function') {
+    advancedFilters.subscribe(() => {
+      const selected = String($('timerAdvancedFilterId')?.value || '').trim();
+      populateAdvancedFilterSelect(selected);
+      syncAdvancedFilterUi();
+      if (loaded) void loadTimers();
+    });
+  }
+
   clearEditor();
   editorEl.classList.remove('open');
 
@@ -572,6 +650,7 @@ export function initTimersSection({ $, esc, postJson, config = {} }) {
         if (editorEl.classList.contains('open')) closeEditor();
         return;
       }
+      if (typeof advancedFilters?.ensureLoaded === 'function') void advancedFilters.ensureLoaded().then(() => { if (loaded) renderList(); });
       void loadTimers();
     }
   };

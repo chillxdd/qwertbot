@@ -31,6 +31,7 @@
     <div class="section-nav platform-nav" role="tablist" aria-label="Bot platform sections">
       <button id="twitchTab" class="secondary" type="button">Twitch</button>
       <button id="youtubeTab" class="secondary" type="button">YouTube</button>
+      <button id="generalTab" class="secondary" type="button">General Settings</button>
       <button id="diagnosticsTab" class="secondary" type="button">Diagnostics</button>
     </div>
     <div id="twitchSubNav" class="subsection-nav platform-subnav twitch-platform-subnav" role="tablist" aria-label="Twitch sections" hidden>
@@ -468,6 +469,17 @@
             <div id="timerActivityMsg" class="detail custom-field-message"></div>
           </div>
 
+          <div class="custom-editor-block timer-filter-block">
+            <strong class="custom-block-title">Advanced Filter</strong>
+            <label class="inline-check timer-use-filter-check"><input id="timerUseAdvancedFilter" type="checkbox"> Use filter</label>
+            <div id="timerAdvancedFilterSelectWrap" class="timer-filter-select-wrap" hidden>
+              <label class="prompt-label" for="timerAdvancedFilterId">Filter</label>
+              <select id="timerAdvancedFilterId"></select>
+              <div class="detail">Filters are created under General Settings → Advanced Filters. The timer only fires while its selected filter matches the current Twitch stream.</div>
+            </div>
+            <div id="timerAdvancedFilterMsg" class="detail custom-field-message"></div>
+          </div>
+
           <div class="custom-editor-block">
             <div class="custom-response-heading">
               <strong>Actions</strong>
@@ -590,7 +602,7 @@
           <div class="custom-response-bottom-actions persistent-banner-add-row">
             <button id="addPersistentPinBannerBtn" class="secondary" type="button">Add Banner</button>
           </div>
-          <div class="detail persistent-banner-behavior-note">With exactly one enabled banner, duration settings are ignored and that banner stays pinned indefinitely. With 2+ enabled banners, a banner-specific duration is optional and can only extend that banner; blank values, or values at/below the global duration, use the global duration. A recap may temporarily replace the active banner; recap display time is deducted from that banner's remaining slot. Manual or other pins are never automatically replaced by the rotation.</div>
+          <div class="detail persistent-banner-behavior-note">Each banner can optionally use a reusable Advanced Filter from General Settings. Ineligible banners are skipped automatically. With exactly one eligible enabled banner, duration settings are ignored and that banner stays pinned indefinitely. With 2+ eligible enabled banners, a banner-specific duration is optional and can only extend that banner; blank values, or values at/below the global duration, use the global duration. A recap may temporarily replace the active banner; recap display time is deducted from that banner's remaining slot. Manual or other pins are never automatically replaced by the rotation.</div>
           <div class="custom-editor-actions">
             <button id="savePersistentPinBtn" type="button">Save</button>
             <button id="cancelPersistentPinBtn" class="secondary" type="button">Cancel</button>
@@ -1614,6 +1626,64 @@
         <div class="box"><div class="label">YouTube Live Chats</div><div id="youtubeLiveStatus" class="value warn">Checking...</div><div id="youtubeLiveDetail" class="detail"></div><div class="oauth-action"><button id="youtubeRediscoverBtn" class="secondary" type="button">Discover Chats Now</button></div></div>
         <div class="box wide"><div class="label">YouTube Bot Controls</div><div class="youtube-control-row"><label class="inline-check"><input id="youtubeBotEnabled" type="checkbox" checked> YouTube subsystem enabled</label><label class="inline-check"><input id="youtubeCommandsEnabled" type="checkbox" checked> YouTube commands engine + chat listening</label><label class="inline-check"><input id="youtubeTimersEnabled" type="checkbox" checked> Timers enabled</label></div><button id="saveYoutubeControlsBtn" class="secondary" type="button">Save Controls</button><div class="detail"><strong>Commands engine OFF</strong> disables both custom and native YouTube commands and shuts down StreamList chat listeners completely. Timers still send one-way messages to discovered live chats. Timers with Min Messages above 0 cannot advance while listening is off. When Twitch is offline, the entire YouTube subsystem sleeps.</div></div>
       </div><div id="youtubeOauthMsg" class="detail"></div>
+    </div>
+
+    <div id="generalSettingsPanel" class="section-panel">
+      <div class="section-intro">
+        <h3>General Settings</h3>
+        <div class="detail">Shared settings that can be reused across QwertBot features.</div>
+      </div>
+
+      <div class="custom-command-section advanced-filters-section">
+        <div class="custom-command-header">
+          <div>
+            <h3>Advanced Filters</h3>
+            <div class="detail">Create reusable Twitch stream rules, then assign a filter to individual timers or rotating pinned banners.</div>
+          </div>
+          <div class="custom-command-header-actions">
+            <button id="refreshAdvancedFiltersBtn" class="secondary" type="button">Refresh</button>
+            <button id="addAdvancedFilterBtn" type="button">Add Filter</button>
+          </div>
+        </div>
+        <div class="detail advanced-filter-help">Rules are capitalization- and accent-insensitive, so <b>pokemon</b> matches <b>Pokémon</b>. Groups act like parentheses; use the AND/OR dropdowns between rules and groups to control the logic.</div>
+        <div id="advancedFiltersCurrentStream" class="detail advanced-filter-current-stream"></div>
+        <div id="advancedFiltersMsg" class="detail"></div>
+        <div id="advancedFilterList" class="custom-command-list"></div>
+      </div>
+
+      <dialog id="advancedFilterEditor" class="custom-command-editor entity-editor-dialog advanced-filter-editor-dialog">
+        <div class="custom-editor-header">
+          <h3 id="advancedFilterEditorTitle">Add Advanced Filter</h3>
+          <div class="custom-editor-header-actions">
+            <button id="closeAdvancedFilterEditorBtn" class="secondary" type="button">Close</button>
+          </div>
+        </div>
+
+        <div class="custom-editor-block">
+          <label class="prompt-label" for="advancedFilterName">Filter Name</label>
+          <input id="advancedFilterName" type="text" maxlength="80" placeholder="Example: Pokémon Kaizo">
+        </div>
+
+        <div class="custom-editor-block">
+          <div class="advanced-filter-builder-heading">
+            <div>
+              <strong class="custom-block-title">Rules</strong>
+              <div class="detail">Each group contains one or more stream-title/category rules. Choose AND or OR in the separator between each rule and group.</div>
+            </div>
+            <div id="advancedFilterBuilderCount" class="detail"></div>
+          </div>
+          <div id="advancedFilterGroups" class="advanced-filter-groups"></div>
+          <div class="advanced-filter-add-group-row">
+            <button id="addAdvancedFilterGroupBtn" class="secondary" type="button">+ Add Group</button>
+          </div>
+        </div>
+
+        <div class="custom-editor-actions">
+          <button id="saveAdvancedFilterBtn" type="button">Save Filter</button>
+          <button id="cancelAdvancedFilterBtn" class="secondary" type="button">Cancel</button>
+          <div id="advancedFilterEditorMsg" class="detail"></div>
+        </div>
+      </dialog>
     </div>
 
     <div id="renderLogsPanel" class="section-panel">

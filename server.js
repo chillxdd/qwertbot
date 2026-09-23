@@ -24,6 +24,7 @@ const { createChatTimerManager } = require('./services/chatTimers');
 const { createEventSubReactionManager } = require('./services/eventSubReactions');
 const { createAutomationSpacingManager } = require('./services/automationSpacing');
 const { createPersistentPinManager } = require('./services/persistentStreamPin');
+const { createAdvancedFilterManager } = require('./services/advancedFilters');
 const { createClipCommandManager } = require('./services/clipCommands');
 const { REQUIRED_CLIPS_SCOPE } = require('./services/twitchClips');
 const { getEventReactionHoldStatus } = require('./services/eventReactionHold');
@@ -50,6 +51,7 @@ const { registerDashboardRoutes } = require('./routes/dashboard');
 const { registerEventSubRoutes } = require('./routes/eventSub');
 const { registerEventSubReactionRoutes } = require('./routes/eventSubReactions');
 const { registerAutomationRoutes } = require('./routes/automation');
+const { registerAdvancedFilterRoutes } = require('./routes/advancedFilters');
 const { registerMemoryRoutes } = require('./routes/memory');
 const { registerRecapRoutes } = require('./routes/recap');
 const { registerNativeCommandRoutes } = require('./routes/nativeCommands');
@@ -111,6 +113,7 @@ let customCommandManager = null;
 let chatTimerManager = null;
 let eventSubReactionManager = null;
 let automationSpacingManager = null;
+let advancedFilterManager = null;
 let persistentPinManager = null;
 let clipCommandManager = null;
 let botPersonalityManager = null;
@@ -202,6 +205,11 @@ youtubeManager = createYouTubeManager({ channelKey: channelName || 'generalqwert
 
 automationSpacingManager = createAutomationSpacingManager({ channelName });
 
+advancedFilterManager = createAdvancedFilterManager({
+  channelName,
+  getStreamStatus: () => recapManager?.getStatus?.() || {}
+});
+
 persistentPinManager = createPersistentPinManager({
   channelName,
   sendMessageViaApi: (message) => sendChatMessageViaApi(message),
@@ -210,7 +218,9 @@ persistentPinManager = createPersistentPinManager({
   unpinChatMessage,
   beginPriorityAutomationHold: (engine) => automationSpacingManager?.beginPriorityHold?.(engine),
   endPriorityAutomationHold: (engine) => automationSpacingManager?.endPriorityHold?.(engine),
-  getStreamStatus: () => recapManager?.getStatus?.() || {}
+  getStreamStatus: () => recapManager?.getStatus?.() || {},
+  getAdvancedFilterById: (id) => advancedFilterManager?.getFilterById?.(id) || null,
+  evaluateAdvancedFilter: (id, status) => advancedFilterManager?.evaluateById?.(id, status) || { exists: false, matched: false, filterId: String(id || '') }
 });
 
 customCommandManager = createCustomCommandManager({
@@ -228,7 +238,9 @@ chatTimerManager = createChatTimerManager({
   getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] }),
   getEventReactionHoldStatus,
   getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
-  tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: true })
+  tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: true }),
+  getAdvancedFilterById: (id) => advancedFilterManager?.getFilterById?.(id) || null,
+  evaluateAdvancedFilter: (id, status) => advancedFilterManager?.evaluateById?.(id, status) || { exists: false, matched: false, filterId: String(id || '') }
 });
 
 eventSubReactionManager = createEventSubReactionManager({
@@ -373,6 +385,12 @@ registerAutomationRoutes(app, {
   getAutomationSpacingManager: () => automationSpacingManager
 });
 
+registerAdvancedFilterRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => isDatabaseConnected(),
+  getAdvancedFilterManager: () => advancedFilterManager
+});
+
 registerEventSubReactionRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => isDatabaseConnected(),
@@ -434,6 +452,7 @@ async function syncYouTubeFailOpen(streamStatus, context = 'live-state sync') {
 
 async function activateBot() {
   await automationSpacingManager.initialize();
+  await advancedFilterManager.initialize();
   await persistentPinManager.initialize();
   await customCommandManager.initialize();
   await eventSubReactionManager.initialize();

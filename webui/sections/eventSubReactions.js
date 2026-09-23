@@ -1,4 +1,4 @@
-export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) {
+export function initEventSubReactionsSection({ $, esc, postJson, config = {}, advancedFilters = null }) {
   let reactions = [];
   let eventTypes = [];
   let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300, maxDiscordEmbedFields: 10, maxDiscordEmbedButtons: 5 };
@@ -58,7 +58,12 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       return persistentPin.banners.map((banner) => ({
         message: String(banner?.message || '').trim(),
         enabled: banner?.enabled !== false,
-        durationSeconds: Number(banner?.durationSeconds) > 0 ? Number(banner.durationSeconds) : null
+        durationSeconds: Number(banner?.durationSeconds) > 0 ? Number(banner.durationSeconds) : null,
+        filterId: String(banner?.filterId || '').trim(),
+        filterName: String(banner?.filterName || '').trim(),
+        filterExists: banner?.filterExists !== false,
+        filterMatched: banner?.filterMatched !== false,
+        eligible: banner?.eligible !== false
       })).filter((banner) => banner.message);
     }
     const messages = Array.isArray(persistentPin.messages) && persistentPin.messages.length
@@ -66,11 +71,59 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
       : (String(persistentPin.message || '').trim() ? [persistentPin.message] : []);
     const enabled = Array.isArray(persistentPin.bannerEnabled) ? persistentPin.bannerEnabled : [];
     const durations = Array.isArray(persistentPin.bannerDurations) ? persistentPin.bannerDurations : [];
+    const filterIds = Array.isArray(persistentPin.bannerFilterIds) ? persistentPin.bannerFilterIds : [];
     return messages.map((message, index) => ({
       message: String(message || '').trim(),
       enabled: enabled[index] !== false,
-      durationSeconds: Number(durations[index]) > 0 ? Number(durations[index]) : null
+      durationSeconds: Number(durations[index]) > 0 ? Number(durations[index]) : null,
+      filterId: String(filterIds[index] || '').trim()
     })).filter((banner) => banner.message);
+  }
+
+  function availableAdvancedFilters() {
+    return typeof advancedFilters?.getFilters === 'function' ? advancedFilters.getFilters() : [];
+  }
+
+  function populateBannerFilterSelect(row, selectedId = '') {
+    const select = row?.querySelector('.persistent-banner-filter-select');
+    if (!select) return;
+    const selected = String(selectedId || '').trim();
+    const filters = availableAdvancedFilters();
+    select.innerHTML = '<option value="">Choose filter...</option>';
+    filters.forEach((filter) => {
+      const option = document.createElement('option');
+      option.value = String(filter.id || '');
+      option.textContent = String(filter.name || 'Filter');
+      select.appendChild(option);
+    });
+    if (selected && !filters.some((filter) => String(filter.id || '') === selected)) {
+      const option = document.createElement('option');
+      option.value = selected;
+      option.textContent = 'Missing filter';
+      select.appendChild(option);
+    }
+    select.value = selected;
+  }
+
+  function syncBannerFilterUi(row) {
+    const use = row?.querySelector('.persistent-banner-use-filter');
+    const wrap = row?.querySelector('.persistent-banner-filter-select-wrap');
+    if (!use || !wrap) return;
+    wrap.hidden = !use.checked;
+  }
+
+  function refreshBannerFilterOptions() {
+    persistentPinBannerList.querySelectorAll('.persistent-banner-row').forEach((row) => {
+      const select = row.querySelector('.persistent-banner-filter-select');
+      const selected = String(select?.value || row.dataset.filterId || '').trim();
+      populateBannerFilterSelect(row, selected);
+      syncBannerFilterUi(row);
+    });
+  }
+
+  async function ensureBannerFiltersLoaded() {
+    if (typeof advancedFilters?.ensureLoaded === 'function') await advancedFilters.ensureLoaded();
+    refreshBannerFilterOptions();
   }
 
   function currentGlobalBannerDuration() {
@@ -104,7 +157,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     $('addPersistentPinBannerBtn').disabled = rows.length >= maxPersistentPinMessages;
   }
 
-  function createPersistentBannerRow(banner = { message: '', enabled: true, durationSeconds: null }) {
+  function createPersistentBannerRow(banner = { message: '', enabled: true, durationSeconds: null, filterId: '' }) {
     const row = document.createElement('div');
     row.className = 'persistent-banner-row';
     row.innerHTML = `
@@ -113,6 +166,12 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
         <label class="inline-check"><input class="persistent-banner-enabled" type="checkbox"> Enabled</label>
       </div>
       <textarea class="persistent-banner-message" maxlength="${maxPersistentPinMessageLength}" placeholder="Pinned banner message..."></textarea>
+      <div class="persistent-banner-filter-controls">
+        <label class="inline-check"><input class="persistent-banner-use-filter" type="checkbox"> Use filter</label>
+        <div class="persistent-banner-filter-select-wrap" hidden>
+          <select class="persistent-banner-filter-select" aria-label="Advanced Filter"></select>
+        </div>
+      </div>
       <div class="persistent-banner-row-footer">
         <label class="persistent-banner-duration-label">Banner Duration <span class="detail">(optional)</span>
           <div class="duration-field"><input class="persistent-banner-duration" type="number" min="0" max="${maxPersistentPinRotationSeconds}" step="1" placeholder="Global"><span class="duration-unit">seconds</span></div>
@@ -124,31 +183,43 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     const messageInput = row.querySelector('.persistent-banner-message');
     const enabledInput = row.querySelector('.persistent-banner-enabled');
     const durationInput = row.querySelector('.persistent-banner-duration');
+    const useFilterInput = row.querySelector('.persistent-banner-use-filter');
+    const filterId = String(banner?.filterId || '').trim();
+    row.dataset.filterId = filterId;
     messageInput.value = String(banner?.message || '');
     enabledInput.checked = banner?.enabled !== false;
     durationInput.value = Number(banner?.durationSeconds) > 0 ? String(Math.round(Number(banner.durationSeconds))) : '';
+    useFilterInput.checked = Boolean(filterId);
+    populateBannerFilterSelect(row, filterId);
+    syncBannerFilterUi(row);
+    useFilterInput.addEventListener('change', () => syncBannerFilterUi(row));
     enabledInput.addEventListener('change', updatePersistentBannerListState);
     durationInput.addEventListener('input', updatePersistentBannerListState);
     row.querySelector('.persistent-banner-remove').onclick = () => {
       row.remove();
-      if (!persistentPinBannerList.children.length) addPersistentBanner({ message: '', enabled: true, durationSeconds: null });
+      if (!persistentPinBannerList.children.length) addPersistentBanner({ message: '', enabled: true, durationSeconds: null, filterId: '' });
       updatePersistentBannerListState();
     };
     return row;
   }
 
-  function addPersistentBanner(banner = { message: '', enabled: true, durationSeconds: null }) {
+  function addPersistentBanner(banner = { message: '', enabled: true, durationSeconds: null, filterId: '' }) {
     if (persistentPinBannerList.children.length >= maxPersistentPinMessages) return;
     persistentPinBannerList.appendChild(createPersistentBannerRow(banner));
     updatePersistentBannerListState();
   }
 
   function collectPersistentPinBanners() {
-    return [...persistentPinBannerList.querySelectorAll('.persistent-banner-row')].map((row) => ({
-      message: row.querySelector('.persistent-banner-message').value.trim(),
-      enabled: row.querySelector('.persistent-banner-enabled').checked,
-      durationSeconds: row.querySelector('.persistent-banner-duration').value.trim()
-    }));
+    return [...persistentPinBannerList.querySelectorAll('.persistent-banner-row')].map((row) => {
+      const useFilter = row.querySelector('.persistent-banner-use-filter').checked;
+      return {
+        message: row.querySelector('.persistent-banner-message').value.trim(),
+        enabled: row.querySelector('.persistent-banner-enabled').checked,
+        durationSeconds: row.querySelector('.persistent-banner-duration').value.trim(),
+        useFilter,
+        filterId: useFilter ? String(row.querySelector('.persistent-banner-filter-select').value || '').trim() : ''
+      };
+    });
   }
 
   function applyPersistentPinToUi() {
@@ -160,12 +231,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     $('persistentPinStartupHold').max = String(maxPersistentPinHoldSeconds);
     persistentPinBannerList.replaceChildren();
     const banners = persistentPinBanners();
-    (banners.length ? banners : [{ message: '', enabled: true, durationSeconds: null }]).forEach(addPersistentBanner);
+    (banners.length ? banners : [{ message: '', enabled: true, durationSeconds: null, filterId: '' }]).forEach(addPersistentBanner);
     updatePersistentBannerListState();
   }
 
   function openPersistentPinEditor() {
     applyPersistentPinToUi();
+    void ensureBannerFiltersLoaded();
     setPersistentPinMsg('');
     persistentPinEditor.classList.add('open');
     if (typeof persistentPinEditor.showModal === 'function' && !persistentPinEditor.open) persistentPinEditor.showModal();
@@ -221,6 +293,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
         return false;
       }
       const rawDuration = String(banner.durationSeconds ?? '').trim();
+      const useFilter = banner.useFilter === true || Boolean(String(banner.filterId || '').trim());
+      const filterId = useFilter ? String(banner.filterId || '').trim() : '';
+      if (useFilter && !filterId) {
+        const error = `Banner ${index + 1}: choose an Advanced Filter, or turn Use filter off.`;
+        if (persistentPinEditor.open) setPersistentPinMsg(error, true); else setMsg(error, true);
+        return false;
+      }
       let durationSeconds = null;
       if (rawDuration) {
         const parsed = Number(rawDuration);
@@ -233,7 +312,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
         // intentionally saved as "use global".
         durationSeconds = parsed > globalSeconds ? parsed : null;
       }
-      banners.push({ message, enabled: banner.enabled !== false, durationSeconds });
+      banners.push({ message, enabled: banner.enabled !== false, durationSeconds, filterId });
     }
 
     if (enabled && !banners.length) {
@@ -631,16 +710,21 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
 
     const pinBanners = persistentPinBanners();
     const activePinBanners = pinBanners.filter((banner) => banner.enabled !== false);
+    const eligiblePinBannerCount = Number.isFinite(Number(persistentPin.eligibleBannerCount))
+      ? Number(persistentPin.eligibleBannerCount)
+      : pinBanners.filter((banner) => banner.enabled !== false && banner.eligible !== false).length;
     const globalPinDuration = Number(persistentPin.rotationSeconds || defaultPersistentPinRotationSeconds);
     const customDurationCount = pinBanners.filter((banner) => Number(banner.durationSeconds) > globalPinDuration).length;
+    const filteredBannerCount = pinBanners.filter((banner) => String(banner.filterId || '').trim()).length;
     const customDurationLabel = customDurationCount ? ` · ${customDurationCount} extended duration${customDurationCount===1?'':'s'}` : '';
-    const durationSummary = activePinBanners.length === 1
-      ? 'pinned indefinitely'
+    const filterSummary = filteredBannerCount ? ` · ${filteredBannerCount} filtered banner${filteredBannerCount===1?'':'s'}` : '';
+    const durationSummary = eligiblePinBannerCount === 1
+      ? 'one eligible banner pinned indefinitely'
       : `${globalPinDuration}s global${customDurationLabel}`;
     const persistentPinCard = `<div class="custom-command-card event-reaction-card persistent-pin-reaction-card" data-system="persistent-pin">
       <div class="custom-command-card-main">
         <div class="custom-command-title-row"><strong class="custom-command-name">Rotating Pinned Banners</strong><span class="custom-command-state ${persistentPin.enabled?'enabled':'disabled'}">${persistentPin.enabled?'Enabled':'Disabled'}</span></div>
-        <div class="detail">Stream Online · ${activePinBanners.length}/${pinBanners.length} active banner${pinBanners.length===1?'':'s'} · ${durationSummary} · bypasses global post-hold</div>
+        <div class="detail">Stream Online · ${activePinBanners.length}/${pinBanners.length} enabled banner${pinBanners.length===1?'':'s'} · ${eligiblePinBannerCount} eligible now${filterSummary} · ${durationSummary} · bypasses global post-hold</div>
       </div>
       <div class="custom-command-actions">
         <button class="secondary persistent-pin-edit" type="button">Edit</button>
@@ -726,7 +810,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
     }
   });
   $('addPersistentPinBannerBtn').onclick = () => {
-    addPersistentBanner({ message: '', enabled: true, durationSeconds: null });
+    addPersistentBanner({ message: '', enabled: true, durationSeconds: null, filterId: '' });
     persistentPinBannerList.lastElementChild?.querySelector('.persistent-banner-message')?.focus();
   };
   $('persistentPinRotation').addEventListener('input', updatePersistentBannerListState);
@@ -764,6 +848,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
   $('eventReactionPrevPage').onclick = ()=>{ page=Math.max(1,page-1); render(); };
   $('eventReactionNextPage').onclick = ()=>{ page+=1; render(); };
 
+  if (typeof advancedFilters?.subscribe === 'function') {
+    advancedFilters.subscribe(() => {
+      refreshBannerFilterOptions();
+      if (loaded) void load();
+    });
+  }
+
   $('saveEventReactionBtn').onclick = async () => {
     setEditorMsg('');
     const holdError = validateHold();
@@ -786,6 +877,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {} }) 
   return {
     onVisibilityChange(visible) {
       if (!visible) { if (variablesDialog.open && typeof variablesDialog.close === 'function') variablesDialog.close(); if (editor.open) closeEditor(); if (persistentPinEditor.open) closePersistentPinEditor(); return; }
+      if (typeof advancedFilters?.ensureLoaded === 'function') void advancedFilters.ensureLoaded().then(() => { if (loaded) render(); });
       if (!loaded) void load();
     },
     load

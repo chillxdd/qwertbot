@@ -35,6 +35,10 @@ const persistentPinConfigSchema = new mongoose.Schema({
     type: [Number],
     default: []
   },
+  bannerFilterIds: {
+    type: [String],
+    default: []
+  },
   rotationSeconds: {
     type: Number,
     default: 180,

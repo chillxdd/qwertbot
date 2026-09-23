@@ -77,6 +77,8 @@ function normalizeInput(input = {}, settings = {}) {
     throw new Error(`Minimum viewers must be between 0 and ${MAX_MINIMUM_VIEWERS}.`);
   }
 
+  const advancedFilterId = String(input.advancedFilterId || '').trim();
+
   const jitterSeconds = wholeNumber(input.jitterSeconds, 0);
   if (jitterSeconds < 0 || jitterSeconds > MAX_JITTER_SECONDS) {
     throw new Error(`Random timing variation must be between 0 and ${MAX_JITTER_SECONDS} seconds.`);
@@ -122,6 +124,7 @@ function normalizeInput(input = {}, settings = {}) {
     startDelaySeconds,
     minimumChatMessages,
     minimumViewers,
+    advancedFilterId,
     jitterSeconds,
     priority,
     responses,
@@ -244,7 +247,7 @@ async function renderTimerResponse(template, getRandomChatters) {
   return Array.from(output).slice(0, MAX_TIMER_RESPONSE_LENGTH).join('').trim();
 }
 
-function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = null, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null }) {
+function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = null, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null, getAdvancedFilterById = null, evaluateAdvancedFilter = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   let settings = {
@@ -298,8 +301,21 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       live: status.streamLive !== undefined ? Boolean(status.streamLive) : Boolean(status.live),
       streamId: String(status.currentStreamId || status.streamId || '').trim(),
       startedAt: Number(status.twitchStreamStartedAt || status.startedAt || 0) || 0,
-      viewerCount: Math.max(0, wholeNumber(status.currentViewerCount ?? status.viewerCount, 0))
+      viewerCount: Math.max(0, wholeNumber(status.currentViewerCount ?? status.viewerCount, 0)),
+      title: String(status.currentStreamTitle || status.title || '').trim(),
+      category: String(status.currentStreamCategory || status.category || status.gameName || '').trim()
     };
+  }
+
+  function filterEvaluation(timer, status = streamStatus()) {
+    const filterId = String(timer?.advancedFilterId || '').trim();
+    if (!filterId) return { exists: true, matched: true, filterId: '', filterName: '' };
+    if (typeof evaluateAdvancedFilter === 'function') {
+      try { return evaluateAdvancedFilter(filterId, status) || { exists: false, matched: false, filterId, filterName: '' }; }
+      catch (_) { return { exists: false, matched: false, filterId, filterName: '' }; }
+    }
+    const filter = typeof getAdvancedFilterById === 'function' ? getAdvancedFilterById(filterId) : null;
+    return { exists: Boolean(filter), matched: Boolean(filter), filterId, filterName: String(filter?.name || '') };
   }
 
 
@@ -375,6 +391,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const effectiveDelay = effectiveStartDelay(timer, settings);
     const missingMessages = Math.max(0, wholeNumber(timer.minimumChatMessages, 0) - wholeNumber(timer.messagesSinceLastFire, 0));
     const missingViewers = Math.max(0, wholeNumber(timer.minimumViewers, 0) - status.viewerCount);
+    const filter = filterEvaluation(timer, status);
     const automationStatus = automationSpacingStatus();
     const spacingRemainingMs = Math.max(0, Number(automationStatus.remainingMs || 0));
     const startNotBefore = status.startedAt ? status.startedAt + effectiveDelay * 1000 : 0;
@@ -387,6 +404,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     else if (dueAt > now) waitingFor = timer.nextRetryAt ? 'Retry delay' : 'Interval';
     else if (missingMessages > 0) waitingFor = `${missingMessages} more chat message${missingMessages === 1 ? '' : 's'}`;
     else if (missingViewers > 0) waitingFor = `${missingViewers} more viewer${missingViewers === 1 ? '' : 's'}`;
+    else if (!filter.exists) waitingFor = 'Advanced filter unavailable';
+    else if (!filter.matched) waitingFor = 'Advanced filter';
     else if (automationStatus.active) waitingFor = 'Automation spacing';
 
     return {
@@ -400,6 +419,10 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       effectiveStartDelaySeconds: effectiveDelay,
       minimumChatMessages: wholeNumber(timer.minimumChatMessages, 0),
       minimumViewers: wholeNumber(timer.minimumViewers, 0),
+      advancedFilterId: String(timer.advancedFilterId || ''),
+      advancedFilterName: filter.filterName || '',
+      advancedFilterExists: filter.exists !== false,
+      advancedFilterMatched: filter.matched !== false,
       priority: TIMER_PRIORITIES.includes(timer.priority) ? timer.priority : 'normal',
       jitterSeconds: wholeNumber(timer.jitterSeconds, 0),
       responses: Array.isArray(timer.responses) ? timer.responses : [],
@@ -442,6 +465,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (now < startNotBefore) return false;
     if (wholeNumber(timer.messagesSinceLastFire, 0) < wholeNumber(timer.minimumChatMessages, 0)) return false;
     if (status.viewerCount < wholeNumber(timer.minimumViewers, 0)) return false;
+    if (!filterEvaluation(timer, status).matched) return false;
     if (automationSpacingStatus().active) return false;
     return true;
   }
@@ -697,6 +721,9 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     await context.assertOperation();
     await loadSettings();
     const normalized = normalizeInput(input, settings);
+    if (normalized.advancedFilterId && typeof getAdvancedFilterById === 'function' && !getAdvancedFilterById(normalized.advancedFilterId)) {
+      throw new Error('Selected Advanced Filter was not found. Refresh the filter list and choose another filter.');
+    }
     const id = String(input.id || '').trim();
     let saved;
     if (id) {
