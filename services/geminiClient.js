@@ -266,7 +266,7 @@ function streamEventFailure(event) {
   return err;
 }
 
-async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal = null, model = GEMINI_MODEL }) {
+async function performStreamingGeminiRequest(prompt, { timeoutMs, hardTimeoutMs = 0, label, retryOnTimeout, cancelSignal = null, model = GEMINI_MODEL }) {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
 
@@ -276,8 +276,13 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
   if (cancelSignal && !cancelSignal.aborted) cancelSignal.addEventListener('abort', onExternalAbort, { once: true });
   if (externallyCancelled) controller.abort();
   const timeoutLimitMs = Math.max(1000, Number(timeoutMs) || DEFAULT_TIMEOUT_MS);
+  const hardTimeoutLimitMs = Number.isFinite(Number(hardTimeoutMs)) && Number(hardTimeoutMs) > 0
+    ? Math.max(1000, Number(hardTimeoutMs))
+    : 0;
   const startedAt = Date.now();
   let timeout = null;
+  let hardTimeout = null;
+  let hardDeadlineTriggered = false;
   let lastActivityAt = startedAt;
   let timeoutPhase = 'waiting for response';
   const armTimeout = (phase = timeoutPhase) => {
@@ -287,7 +292,14 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
     timeout = setTimeout(() => controller.abort(), timeoutLimitMs);
   };
   armTimeout('waiting for response');
-  const watchdog = setTimeout(() => { timeoutPhase = 'maximum stream duration (10 minutes)'; controller.abort(); }, 600000);
+  const watchdogLimitMs = hardTimeoutLimitMs > 0 ? Math.min(600000, hardTimeoutLimitMs) : 600000;
+  hardTimeout = setTimeout(() => {
+    hardDeadlineTriggered = hardTimeoutLimitMs > 0 && hardTimeoutLimitMs <= 600000;
+    timeoutPhase = hardTimeoutLimitMs > 0 && hardTimeoutLimitMs <= 600000
+      ? 'hard total request deadline'
+      : 'maximum stream duration (10 minutes)';
+    controller.abort();
+  }, watchdogLimitMs);
   let response;
   let reader;
 
@@ -427,23 +439,28 @@ async function performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOn
       wrapped.elapsedMs = Date.now() - startedAt;
       wrapped.idleMs = idleMs;
       wrapped.timeoutPhase = timeoutPhase;
+      wrapped.hardDeadline = hardDeadlineTriggered;
+      if (hardDeadlineTriggered) wrapped.retryable = false;
       console.warn(`[Gemini] ${label} streaming request timed out after ${(idleMs / 1000).toFixed(1)}s of inactivity while ${timeoutPhase} (total ${(wrapped.elapsedMs / 1000).toFixed(1)}s)${retryOnTimeout === false ? '; timeout retries disabled' : ''}.`);
-      await noteTemporaryFailure(wrapped);
+      // An application-imposed total deadline is intentional latency control,
+      // not evidence that Gemini itself is unhealthy. Do not feed it into the
+      // shared temporary-failure backoff circuit.
+      if (!hardDeadlineTriggered) await noteTemporaryFailure(wrapped);
       throw wrapped;
     }
     await noteTemporaryFailure(err);
     throw err;
   } finally {
     if (timeout) clearTimeout(timeout);
-    clearTimeout(watchdog);
+    if (hardTimeout) clearTimeout(hardTimeout);
     if (reader) { try { await reader.cancel(); } catch (_) {} try { reader.releaseLock(); } catch (_) {} }
     if (cancelSignal) cancelSignal.removeEventListener('abort', onExternalAbort);
   }
 }
 
-async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, label = 'gemini', retryOnTimeout = true, stream = false, cancelSignal = null, model = GEMINI_MODEL } = {}) {
+async function performGeminiRequest(prompt, { timeoutMs = DEFAULT_TIMEOUT_MS, hardTimeoutMs = 0, label = 'gemini', retryOnTimeout = true, stream = false, cancelSignal = null, model = GEMINI_MODEL } = {}) {
   operationContext.throwIfCancelled();
-  if (stream === true) return performStreamingGeminiRequest(prompt, { timeoutMs, label, retryOnTimeout, cancelSignal, model });
+  if (stream === true) return performStreamingGeminiRequest(prompt, { timeoutMs, hardTimeoutMs, label, retryOnTimeout, cancelSignal, model });
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set.');
   const startedAt = Date.now();
@@ -573,8 +590,13 @@ async function processQueue() {
           pruneRequestStartTimes(startedAt); lastRequestStartedAt = startedAt; requestStartTimes.push(startedAt);
           const ledgerId = recordRequestStart(job, startedAt);
           try {
+            const configuredHardTimeoutMs = Number(job.options.hardTimeoutMs || 0);
+            const effectiveHardTimeoutMs = configuredHardTimeoutMs > 0
+              ? Math.min(configuredHardTimeoutMs, totalRemaining)
+              : 0;
             const result = await performGeminiRequest(job.prompt, { ...job.options,
               timeoutMs: Math.min(Number(job.options.timeoutMs) || DEFAULT_TIMEOUT_MS, totalRemaining),
+              hardTimeoutMs: Number.isFinite(effectiveHardTimeoutMs) ? effectiveHardTimeoutMs : configuredHardTimeoutMs,
               cancelSignal: job.cancelController.signal });
             recordRequestFinish(ledgerId);
             return result;
