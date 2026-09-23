@@ -28,12 +28,12 @@
 <main>
   <article class="card">
     <h1>SqwertArmyBot Privacy Policy</h1>
-    <div class="meta">Last updated: September 22, 2026</div>
+    <div class="meta">Last updated: September 23, 2026</div>
 
-    <p>This Privacy Policy explains how <strong>SqwertArmyBot</strong>, a livestream chat automation bot used for GeneralQwert's Twitch and YouTube streams, accesses, uses, stores, and shares information. The YouTube integration is used to connect the SqwertArmyBot YouTube channel to active livestream chats so the bot can respond to configured commands and post configured timer messages.</p>
+    <p>This Privacy Policy explains how <strong>SqwertArmyBot</strong>, a livestream chat automation bot used for GeneralQwert's Twitch and YouTube streams, accesses, uses, stores, and shares information. Features differ by platform: YouTube API data is used for the YouTube chat integration, while Twitch data may also be used by the AI-assisted features described below.</p>
 
     <div class="notice">
-      SqwertArmyBot does not sell Google or YouTube user data, use it for advertising, or use YouTube live chat data to train AI models. The YouTube integration is intentionally separate from QwertBot's Gemini recap, Tagged Questions, Viewer Profiles, and memory systems.
+      SqwertArmyBot does not sell personal information or use it for advertising. YouTube live chat data is not sent to Google Gemini or used for Twitch recaps, Tagged Questions, current-stream memory, Stream Lore, or Viewer Profiles. On Twitch, selected public chat, stream context, and Twitch events may be processed by Google Gemini to operate those AI-assisted features.
     </div>
 
     <h2>1. Google and YouTube data we access</h2>
@@ -46,7 +46,7 @@
     </ul>
 
     <h2>2. How we use Google and YouTube data</h2>
-    <p>SqwertArmyBot uses this information only to provide its livestream chat features, including:</p>
+    <p>SqwertArmyBot uses YouTube API data only to provide its YouTube livestream chat features, including:</p>
     <ul>
       <li>Verifying that OAuth is connected to the intended SqwertArmyBot YouTube channel.</li>
       <li>Finding active GeneralQwert YouTube livestreams and connecting to their live chats.</li>
@@ -55,39 +55,68 @@
       <li>Displaying connection, quota, and diagnostic status to the bot operator.</li>
       <li>Refreshing OAuth access when needed so the bot can remain connected without repeated sign-in.</li>
     </ul>
+    <p>YouTube live chat data is not used for the Twitch AI-assisted features described in Sections 3 and 4.</p>
 
-    <h2>3. Storage and retention</h2>
+    <h2>3. Twitch data and AI-assisted features</h2>
+    <p>For GeneralQwert's Twitch channel, SqwertArmyBot may process public chat messages and related Twitch information such as usernames/display names, Twitch user IDs, message IDs and timestamps, reply or Shared Chat context, moderator/broadcaster status, stream metadata, and supported stream events.</p>
+    <p>When the relevant feature is enabled, selected Twitch chat, stream context, and event information may be sent to <strong>Google Gemini</strong> for AI processing. This supports features such as:</p>
     <ul>
-      <li>OAuth access and refresh tokens are encrypted by the application before being stored in the application's MongoDB database.</li>
+      <li>Hourly or on-demand stream recaps.</li>
+      <li>Tagged Questions and other configured AI-assisted answers.</li>
+      <li>Temporary current-stream memory used to answer questions about the same stream.</li>
+      <li>Stream Lore extraction and learning.</li>
+      <li>Viewer Profile learning, evidence checking, and profile-aware responses when that feature is enabled.</li>
+    </ul>
+    <p>SqwertArmyBot does not operate or train its own general-purpose AI model. Gemini is used as an external processing service for the features above.</p>
+
+    <h2>4. Viewer Profiles, learning, and opt-out / opt-in</h2>
+    <p>Viewer Profiles are a Twitch-only feature. When automatic learning is enabled, eligible public Twitch chat may be analyzed to identify durable viewer-specific observations such as recurring habits, preferences, behaviors, or community context. A Viewer Profile may store the viewer's Twitch username/display name, Twitch user ID, known aliases, moderator-added notes, command-use counts, AI-generated observations and evidence metadata, and Viewer Profile preference/status information.</p>
+    <ul>
+      <li><code>!optout</code> stops Viewer Profile learning and profile use for that Twitch viewer immediately.</li>
+      <li>If a profile already exists, its profile content is retained for up to 30 days so the viewer can change their mind without losing it immediately.</li>
+      <li>After that 30-day retention period, stored profile content such as aliases, notes, learned observations, and command-use history is purged. A minimal identity and opt-out record is retained so automatic learning does not silently recreate a profile for someone who opted out.</li>
+      <li><code>!optin</code> enables Viewer Profile participation again. If used within the 30-day retention period, the retained profile can be reactivated; after profile content has been purged, the profile starts fresh.</li>
+    </ul>
+    <p>The <code>!optout</code> / <code>!optin</code> choice applies specifically to Viewer Profile learning and use. Public Twitch chat may still be processed by other enabled stream features, such as recaps or current-stream memory, because those features operate independently of Viewer Profiles.</p>
+
+    <h2>5. Storage and retention</h2>
+    <ul>
+      <li>Google OAuth access and refresh tokens are encrypted by the application before being stored in the application's MongoDB database.</li>
       <li>The connected YouTube channel ID, channel display name, granted scopes, token expiration time, and update timestamps are stored while the YouTube connection remains configured.</li>
-      <li>YouTube live chat message text and chat-author details are processed in memory for command handling and are not persistently stored by the YouTube subsystem.</li>
-      <li>Recent chatter names and recently seen message IDs may be held temporarily in process memory for command features and duplicate protection. They are discarded when the relevant live-chat session ends or the process restarts.</li>
-      <li>Configured commands, timers, cooldowns, and related bot settings may be stored in the application database. These settings are created by the bot operator and are not Google account data.</li>
+      <li>YouTube live chat message text and chat-author details are processed in memory for command handling and are not persistently stored by the YouTube subsystem. Recent chatter names and recently seen message IDs may be held temporarily in process memory for command features and duplicate protection.</li>
+      <li>Twitch chat and event snapshots may be stored temporarily in MongoDB during an active stream for recap recovery and delayed learning. Pending learning snapshots are removed after the relevant learning work completes.</li>
+      <li>Temporary current-stream memory and internal recap history are cleared when the stream session ends. A short-lived stream-session tombstone may remain for up to 7 days without the cleared chat or memory content so late writes from an old process cannot recreate the session.</li>
+      <li>Viewer Profiles may remain stored while a viewer participates in that feature. The Viewer Profile opt-out retention behavior is described in Section 4.</li>
+      <li>Stream Lore and other operator-approved channel-level learning may remain stored until the operator edits or deletes it.</li>
+      <li>Configured commands, timers, cooldowns, AI settings, and related bot settings may be stored in the application database.</li>
     </ul>
 
-    <h2>4. Sharing and disclosure</h2>
-    <p>SqwertArmyBot does not sell personal information or Google user data. Information is disclosed only as necessary to operate the service:</p>
+    <h2>6. Sharing and disclosure</h2>
+    <p>SqwertArmyBot does not sell personal information or platform user data. Information is disclosed only as necessary to operate the service:</p>
     <ul>
-      <li>To Google/YouTube when making authorized YouTube API requests and sending live-chat messages.</li>
+      <li>To Twitch when connecting to Twitch services and sending bot messages.</li>
+      <li>To Google/YouTube when making authorized YouTube API requests and sending YouTube live-chat messages.</li>
+      <li>To Google Gemini when an enabled Twitch AI-assisted feature needs selected Twitch chat, stream context, or event information for processing.</li>
       <li>To infrastructure providers used to run the application, including Render for application hosting and MongoDB for application data storage, to the extent technically necessary to provide the service.</li>
       <li>When required by law or necessary to protect the security and integrity of the service.</li>
     </ul>
-    <p>YouTube live chat data accessed by this integration is not provided to advertisers, data brokers, or information resellers.</p>
+    <p>YouTube live chat data accessed by the YouTube integration is not provided to Gemini, advertisers, data brokers, or information resellers.</p>
 
-    <h2>5. Security</h2>
-    <p>SqwertArmyBot uses HTTPS for web and API traffic. Stored Google OAuth credentials are encrypted by the application before database storage. Access to administrative controls is restricted to the bot operator. No security measure is perfect, but the application is designed to minimize the amount of Google user data retained.</p>
+    <h2>7. Security</h2>
+    <p>SqwertArmyBot uses HTTPS for web and API traffic. Stored Google OAuth credentials are encrypted by the application before database storage. Access to administrative controls is restricted to the bot operator. No security measure is perfect, but the application is designed to limit retained data to what is needed for enabled features and operational recovery.</p>
 
-    <h2>6. Your choices and deletion</h2>
+    <h2>8. Your choices and deletion</h2>
+    <p>Twitch viewers can use <code>!optout</code> and <code>!optin</code> in GeneralQwert's Twitch chat to control Viewer Profile learning and use as described in Section 4. Privacy or deletion questions can also be directed to the SqwertArmyBot operator.</p>
     <p>The bot operator can disconnect YouTube OAuth from SqwertArmyBot's YouTube OAuth Management page. Disconnecting removes the stored YouTube OAuth credential record from the application database. Access can also be revoked from the connected Google account's third-party access/security settings.</p>
     <p>For privacy or deletion questions, contact the SqwertArmyBot operator using the support contact shown on the Google OAuth consent screen or through the <a href="https://www.youtube.com/@SqwertArmyBot" rel="noopener noreferrer">SqwertArmyBot YouTube channel</a>.</p>
 
-    <h2>7. Children's privacy</h2>
-    <p>SqwertArmyBot is a livestream chat automation tool and is not designed to knowingly collect personal information from children. The application processes YouTube live-chat content supplied through YouTube's services only as described above.</p>
+    <h2>9. Children's privacy</h2>
+    <p>SqwertArmyBot is a livestream chat automation tool and is not designed to knowingly collect personal information from children. It processes public livestream chat and related platform information only for the features described in this policy.</p>
 
-    <h2>8. Changes to this policy</h2>
+    <h2>10. Changes to this policy</h2>
     <p>This policy may be updated if SqwertArmyBot's features or data practices change. The "Last updated" date at the top of this page will be revised when material changes are made.</p>
 
-    <h2>9. Google API Services</h2>
+    <h2>11. Google API Services</h2>
     <p>SqwertArmyBot's use and transfer of information received from Google APIs will adhere to the applicable Google API Services User Data Policy and YouTube API policies.</p>
 
     <nav class="footer" aria-label="Legal and navigation links">
