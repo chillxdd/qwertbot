@@ -3,6 +3,7 @@ import { $, esc } from './shared.js';
 const PAGE_SIZES = new Set([10, 25, 50]);
 let customCommands = [];
 let nativeCommands = [];
+let commandsEngineEnabled = true;
 let customPage = 1;
 let nativePage = 1;
 
@@ -76,7 +77,9 @@ function renderCustomCommands() {
   });
   const visible = filtered.slice((page - 1) * size, page * size);
 
-  if (!customCommands.length) {
+  if (!commandsEngineEnabled) {
+    list.innerHTML = '<div class="coming-soon custom-empty-state">YouTube commands are currently disabled.</div>';
+  } else if (!customCommands.length) {
     list.innerHTML = '<div class="coming-soon custom-empty-state">No commands are available right now.</div>';
   } else if (!visible.length) {
     list.innerHTML = '<div class="coming-soon custom-empty-state">No commands match the current filters.</div>';
@@ -114,7 +117,9 @@ function renderNativeCommands() {
     paginationId: 'readonlyNativeCommandPagination'
   });
   const visible = filtered.slice((page - 1) * size, page * size);
-  list.innerHTML = visible.length
+  list.innerHTML = !commandsEngineEnabled
+    ? '<div class="coming-soon custom-empty-state">YouTube commands are currently disabled.</div>'
+    : visible.length
     ? visible.map((command) => `<div class="native-command-card"><div class="native-command-main"><div class="native-command-title"><code>${esc(command.name)}</code>${userLevelBadgeHtml(command.userLevel)}</div><div class="detail">${esc(command.description)}</div></div></div>`).join('')
     : '<div class="coming-soon custom-empty-state">No commands match the current filters.</div>';
   const filteredView = Boolean(query || levelFilter !== 'all');
@@ -128,6 +133,7 @@ async function loadCommands() {
     const response = await fetch('/youtube-public-commands', { cache: 'no-store' });
     const data = await response.json();
     if (!data.success) throw new Error(data.error || 'Could not load public commands.');
+    commandsEngineEnabled = data.commandsEngineEnabled !== false;
     customCommands = Array.isArray(data.customCommands) ? data.customCommands : [];
     nativeCommands = Array.isArray(data.nativeCommands) ? data.nativeCommands : [];
     customPage = 1;

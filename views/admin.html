@@ -1612,7 +1612,7 @@
       <div class="oauth-grid">
         <div class="box"><div class="label">SqwertArmyBot OAuth</div><div id="youtubeOauthStatus" class="value warn">Checking...</div><div id="youtubeOauthDetail" class="detail"></div><div class="oauth-action"><button id="youtubeAuthorizeBtn" type="button">Authorize / Reauthorize YouTube Bot</button><button id="youtubeDisconnectBtn" class="secondary" type="button">Disconnect</button></div></div>
         <div class="box"><div class="label">YouTube Live Chats</div><div id="youtubeLiveStatus" class="value warn">Checking...</div><div id="youtubeLiveDetail" class="detail"></div><div class="oauth-action"><button id="youtubeRediscoverBtn" class="secondary" type="button">Discover Chats Now</button></div></div>
-        <div class="box wide"><div class="label">YouTube Bot Controls</div><div class="youtube-control-row"><label class="inline-check"><input id="youtubeBotEnabled" type="checkbox" checked> YouTube subsystem enabled</label><label class="inline-check"><input id="youtubeCommandsEnabled" type="checkbox" checked> Commands enabled</label><label class="inline-check"><input id="youtubeTimersEnabled" type="checkbox" checked> Timers enabled</label></div><button id="saveYoutubeControlsBtn" class="secondary" type="button">Save Controls</button><div class="detail">When Twitch is offline, the YouTube subsystem sleeps regardless of these settings.</div></div>
+        <div class="box wide"><div class="label">YouTube Bot Controls</div><div class="youtube-control-row"><label class="inline-check"><input id="youtubeBotEnabled" type="checkbox" checked> YouTube subsystem enabled</label><label class="inline-check"><input id="youtubeCommandsEnabled" type="checkbox" checked> YouTube commands engine + chat listening</label><label class="inline-check"><input id="youtubeTimersEnabled" type="checkbox" checked> Timers enabled</label></div><button id="saveYoutubeControlsBtn" class="secondary" type="button">Save Controls</button><div class="detail"><strong>Commands engine OFF</strong> disables both custom and native YouTube commands and shuts down StreamList chat listeners completely. Timers still send one-way messages to discovered live chats. Timers with Min Messages above 0 cannot advance while listening is off. When Twitch is offline, the entire YouTube subsystem sleeps.</div></div>
       </div><div id="youtubeOauthMsg" class="detail"></div>
     </div>
 
@@ -1659,7 +1659,7 @@
           <div class="detail">YouTube live-chat connectivity, quota, and preflight controls.</div>
         </div>
         <div class="runtime-diagnostics-grid" aria-label="YouTube diagnostics">
-          <div class="box"><div class="label">YouTube Live Chats</div><div id="diagYoutubeChats" class="value warn">Checking...</div><div id="diagYoutubeChatsDetail" class="detail"></div></div>
+          <div class="box wide"><div class="label">YouTube Live Chats / StreamList</div><div id="diagYoutubeChats" class="value warn">Checking...</div><div id="diagYoutubeChatsDetail" class="detail"></div><div id="diagYoutubeWorkersDetail" class="detail"></div></div>
           <div class="box"><div class="label">YouTube API Quota</div><div id="diagYoutubeQuota" class="value warn">Checking...</div><div id="diagYoutubeQuotaDetail" class="detail"></div></div>
         </div>
 

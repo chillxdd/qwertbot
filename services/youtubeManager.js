@@ -42,6 +42,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
   let lastDiscoveryAt = null;
   let lastDiscoveryError = null;
   let discoveredBroadcasts = [];
+  let discoveredChats = [];
   let discoveryPromise = null;
   let initialized = false;
   let quiesced = false;
@@ -52,7 +53,14 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
   let viewerCountCache = { key: '', fetchedAtMs: 0, count: 0, available: false };
 
   const deliveryQueue = createYouTubeDeliveryQueue({
-    getWorkerState: (liveChatId) => workerStates.get(String(liveChatId || ''))?.state || null,
+    // Timer delivery is intentionally independent of StreamList. A discovered
+    // liveChatId is enough to send one-way timer messages even when the global
+    // YouTube commands engine (and therefore chat listening) is disabled.
+    getWorkerState: (liveChatId, kind = 'command') => {
+      const id = String(liveChatId || '');
+      if (kind === 'timer' && isTimerSendTarget(id)) return 'connected';
+      return workerStates.get(id)?.state || null;
+    },
     sendNow: (liveChatId, text, options) => attemptSendNow(liveChatId, text, options)
   });
 
@@ -69,12 +77,29 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     getViewerCount: () => getCurrentViewerCount()
   });
 
-  function hasConnectedChat() {
-    return [...workerStates.values()].some((state) => state?.state === 'connected');
+  function discoveredChatIds() {
+    return new Set((discoveredChats || []).map((chat) => String(chat?.liveChatId || '')).filter(Boolean));
+  }
+
+  function hasTimerSendTargets() {
+    return discoveredChatIds().size > 0;
+  }
+
+  function isTimerSendTarget(liveChatId) {
+    const id = String(liveChatId || '');
+    return Boolean(id && !quiesced && twitchLive && config.enabled && config.timersEnabled && discoveredChatIds().has(id));
   }
 
   async function maybeStartTimerSession() {
-    if (!config.enabled || !config.timersEnabled || !twitchLive || quiesced || !hasConnectedChat()) return;
+    if (!config.enabled || !config.timersEnabled || !twitchLive || quiesced || !hasTimerSendTargets()) return;
+    await timerManager.startSession();
+  }
+
+  async function reconcileTimerSession() {
+    if (!config.enabled || !config.timersEnabled || !twitchLive || quiesced || !hasTimerSendTargets()) {
+      timerManager.stopSession();
+      return;
+    }
     await timerManager.startSession();
   }
 
@@ -113,10 +138,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       if (quiesced || !twitchLive || !config.enabled) return;
       if (botChannelId && String(event.author?.channelId || '') === botChannelId) return;
       timerManager.noteChatMessage();
-      if (!config.commandsEnabled) {
-        commandManager.noteChatter(event.liveChatId, event.author?.displayName);
-        return;
-      }
+      if (!config.commandsEnabled) return;
       await commandManager.handleTextMessage(event);
     },
     onWorkerState: (state) => {
@@ -127,8 +149,9 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       }
       if (['ended', 'error', 'stopped'].includes(state.state)) {
         commandManager.clearChat(state.liveChatId);
-        deliveryQueue.clearChat(state.liveChatId);
-        if (!hasConnectedChat()) timerManager.stopSession();
+        // A read-side StreamList failure must not kill or discard one-way timer
+        // delivery. Only command deliveries depend on a listening worker.
+        deliveryQueue.dropChatKind(state.liveChatId, 'command');
       }
     }
   });
@@ -172,21 +195,48 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     discoveryTimers.clear();
   }
 
-  async function stopWorkers(reason = 'twitch-offline') {
-    clearDiscoveryTimers();
+  async function stopCommandWorkers(reason = 'commands-engine-disabled') {
     for (const [liveChatId, worker] of workers.entries()) {
       try { worker.stop(reason); } catch (_) {}
       commandManager.clearChat(liveChatId);
     }
     workers.clear();
     workerStates.clear();
+    deliveryQueue.dropKind('command');
+  }
+
+  async function stopWorkers(reason = 'twitch-offline') {
+    clearDiscoveryTimers();
+    await stopCommandWorkers(reason);
     deliveryQueue.clearAll();
     discoveredBroadcasts = [];
+    discoveredChats = [];
     viewerCountCache = { key: '', fetchedAtMs: 0, count: 0, available: false };
     timerManager.stopSession();
   }
 
+  function updateDiscoveredChats(nextChats) {
+    const next = Array.isArray(nextChats) ? nextChats : [];
+    const oldIds = discoveredChatIds();
+    const nextIds = new Set(next.map((chat) => String(chat?.liveChatId || '')).filter(Boolean));
+    for (const oldId of oldIds) if (!nextIds.has(oldId)) deliveryQueue.clearChat(oldId);
+    discoveredChats = next;
+  }
+
   async function reconcileChats(chats) {
+    if (!config.commandsEnabled) {
+      await stopCommandWorkers('commands-engine-disabled');
+      return;
+    }
+    const activeIds = new Set((Array.isArray(chats) ? chats : []).map((chat) => String(chat?.liveChatId || '')).filter(Boolean));
+    for (const [liveChatId, worker] of [...workers.entries()]) {
+      if (activeIds.has(liveChatId)) continue;
+      try { worker.stop('chat-no-longer-discovered'); } catch (_) {}
+      workers.delete(liveChatId);
+      workerStates.delete(liveChatId);
+      commandManager.clearChat(liveChatId);
+      deliveryQueue.dropChatKind(liveChatId, 'command');
+    }
     for (const chat of Array.isArray(chats) ? chats : []) {
       const liveChatId = String(chat.liveChatId || '');
       if (!liveChatId) continue;
@@ -232,8 +282,10 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
         lastDiscoveryAt = new Date().toISOString();
         lastDiscoveryError = null;
         discoveredBroadcasts = result.broadcasts || [];
+        updateDiscoveredChats(result.chats || []);
         viewerCountCache = { key: '', fetchedAtMs: 0, count: 0, available: false };
-        await reconcileChats(result.chats || []);
+        await reconcileChats(discoveredChats);
+        await reconcileTimerSession();
         // Qwert normally has at most horizontal + vertical. Once both active
         // broadcasts are visible, later startup discovery checkpoints cannot
         // add a third expected feed, so cancel them and save search quota.
@@ -328,18 +380,17 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
   }
 
   async function sendToAllChats(text, { kind = 'timer', timerId = '', manual = false } = {}) {
-    const active = [...workers.entries()].filter(([id]) => {
-      const state = workerStates.get(id)?.state;
-      return state && !['stopped', 'ended', 'error'].includes(state);
-    });
-    if (!active.length) return { sentCount: 0, queuedCount: 0, dedupedCount: 0, failedCount: 0, failures: [] };
     if (kind === 'timer' && !config.timersEnabled) return { sentCount: 0, queuedCount: 0, dedupedCount: 0, failedCount: 0, failures: [] };
+    const targetIds = kind === 'timer'
+      ? [...discoveredChatIds()]
+      : [...workers.entries()].filter(([id]) => workerStates.get(id)?.state === 'connected').map(([id]) => id);
+    if (!targetIds.length) return { sentCount: 0, queuedCount: 0, dedupedCount: 0, failedCount: 0, failures: [] };
 
     const failures = [];
     let sentCount = 0;
     let queuedCount = 0;
     let dedupedCount = 0;
-    for (const [liveChatId] of active) {
+    for (const liveChatId of targetIds) {
       const retryKey = kind === 'timer' && timerId
         ? (manual ? `timer:${timerId}:manual:${Date.now()}:${liveChatId}` : `timer:${timerId}`)
         : '';
@@ -384,18 +435,30 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     };
     await YouTubeConfig.findOneAndUpdate({ channelKey }, { $set: update, $setOnInsert: { channelKey } }, { upsert: true, setDefaultsOnInsert: true });
     const wasEnabled = config.enabled;
+    const wereCommandsEnabled = config.commandsEnabled;
     const wereTimersEnabled = config.timersEnabled;
     const previousGlobalTimerStartDelaySeconds = Number(config.globalTimerStartDelaySeconds || 0);
     config = update;
     quotaManager.setLimits({ mainLimit: config.mainDailyLimitUnits });
-    if (wasEnabled && !config.enabled) await stopWorkers('youtube-disabled');
-    if (config.enabled && !config.commandsEnabled) deliveryQueue.dropKind('command');
-    if (config.enabled && !config.timersEnabled) deliveryQueue.dropKind('timer');
-    if (!wasEnabled && config.enabled && twitchLive) {
-      startDiscoveryWindow();
-    } else if (config.enabled && twitchLive) {
-      if (wereTimersEnabled && !config.timersEnabled) timerManager.stopSession();
-      if (!wereTimersEnabled && config.timersEnabled) await maybeStartTimerSession();
+
+    if (wasEnabled && !config.enabled) {
+      await stopWorkers('youtube-disabled');
+    } else if (config.enabled) {
+      if (!config.commandsEnabled) {
+        await stopCommandWorkers('commands-engine-disabled');
+      } else if (!wereCommandsEnabled && config.commandsEnabled && twitchLive) {
+        if (discoveredChats.length) await reconcileChats(discoveredChats);
+        else startDiscoveryWindow();
+      }
+
+      if (!config.timersEnabled) {
+        deliveryQueue.dropKind('timer');
+        timerManager.stopSession();
+      } else if ((!wereTimersEnabled && config.timersEnabled) || (wasEnabled && config.enabled)) {
+        await reconcileTimerSession();
+      }
+
+      if (!wasEnabled && config.enabled && twitchLive) startDiscoveryWindow();
     }
     if (previousGlobalTimerStartDelaySeconds !== config.globalTimerStartDelaySeconds) timerManager.applyGlobalStartDelay();
     return { ...config };
@@ -436,7 +499,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
 
     try {
       const result = chatFactory.preflight();
-      checks.liveChatClient = { ok: true, detail: `StreamList client loaded for ${result.endpoint}.` };
+      checks.liveChatClient = { ok: true, detail: `StreamList client loaded for ${result.endpoint}; workers use ${result.channelMode || 'default'} gRPC channels.` };
     } catch (err) {
       checks.liveChatClient = { ok: false, detail: err?.message || String(err) };
     }
@@ -471,6 +534,10 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       broadcaster: { channelId: YOUTUBE_BROADCASTER_CHANNEL_ID || null, handle: YOUTUBE_BROADCASTER_HANDLE || null },
       bot: { channelId: botChannelId || null, displayName: botDisplayName || null },
       activeBroadcasts: discoveredBroadcasts,
+      discoveredChats,
+      timerSendTargetCount: discoveredChatIds().size,
+      chatListeningEnabled: Boolean(config.commandsEnabled),
+      streamListChannelMode: 'dedicated-per-chat',
       distinctChats: [...workers.values()].map((worker) => worker.getStatus()).filter((item) => !['stopped', 'ended'].includes(item.state)),
       pendingDeliveries: deliveryQueue.getStatus(),
       lastDiscoveryAt,

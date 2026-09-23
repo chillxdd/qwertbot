@@ -19,6 +19,9 @@ const CHURN_COOLDOWN_MS = 15 * 60 * 1000;
 // deliberately generous but prevents a future transport bug from generating
 // thousands of StreamList requests in one Google quota day.
 const STREAMLIST_DAILY_SAFETY_CAP = 200;
+// Give grpc-js a brief moment to emit the final `status` event after a clean
+// `end` so diagnostics can distinguish gRPC OK/EOF from transport failures.
+const END_STATUS_GRACE_MS = 100;
 const TERMINAL_GRPC_CODES = new Set([3, 5, 7, 9]);
 
 function loadGrpcService() {
@@ -53,6 +56,17 @@ function errorText(reason) {
   return String(reason?.details || reason?.message || reason || '');
 }
 
+function grpcStatusName(code) {
+  const names = [
+    'OK', 'CANCELLED', 'UNKNOWN', 'INVALID_ARGUMENT', 'DEADLINE_EXCEEDED',
+    'NOT_FOUND', 'ALREADY_EXISTS', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED',
+    'FAILED_PRECONDITION', 'ABORTED', 'OUT_OF_RANGE', 'UNIMPLEMENTED',
+    'INTERNAL', 'UNAVAILABLE', 'DATA_LOSS', 'UNAUTHENTICATED'
+  ];
+  const value = Number(code);
+  return Number.isInteger(value) && value >= 0 && value < names.length ? names[value] : 'UNKNOWN_STATUS';
+}
+
 function isGoogleQuotaError(reason) {
   if (String(reason?.code || '') === 'GOOGLE_YOUTUBE_QUOTA_EXHAUSTED') return true;
   // Google's StreamList documentation uses RESOURCE_EXHAUSTED (8) for the
@@ -82,20 +96,29 @@ function deterministicJitter(baseMs, id, attempt) {
 
 function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, onWorkerState, grpcLoader = loadGrpcService }) {
   let grpcBundle = null;
-  let sharedClient = null;
+  const workerClients = new Set();
 
-  function getClient() {
+  function createDedicatedClient() {
     if (!grpcBundle) grpcBundle = grpcLoader();
-    if (!sharedClient) sharedClient = new grpcBundle.Service('dns:///youtube.googleapis.com:443', grpcBundle.grpc.credentials.createSsl());
-    return sharedClient;
+    const client = new grpcBundle.Service('dns:///youtube.googleapis.com:443', grpcBundle.grpc.credentials.createSsl());
+    workerClients.add(client);
+    return client;
+  }
+
+  function closeClient(client) {
+    if (!client) return;
+    workerClients.delete(client);
+    try { client.close?.(); } catch (_) {}
   }
 
   function createWorker({ liveChatId, broadcasts = [] }) {
     const id = String(liveChatId || '');
     if (!id) throw new Error('liveChatId is required.');
     let stopped = false;
+    let client = null;
     let call = null;
     let reconnectTimer = null;
+    let endStatusGraceTimer = null;
     let stableConnectionTimer = null;
     let pageToken = '';
     let reconnectAttempt = 0;
@@ -114,7 +137,25 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
     let state = 'idle';
     let lastMessageAt = null;
     let lastError = null;
+    let lastGrpcStatusCode = null;
+    let lastGrpcStatusName = null;
+    let lastGrpcStatusDetails = null;
+    let lastGrpcStatusAt = null;
+    let lastGrpcMetadataKeys = [];
+    let lastTerminalEvent = null;
+    let lastTerminalAt = null;
+    let currentResponseCount = 0;
+    let lastResponseCount = 0;
+    let totalResponseCount = 0;
+    let currentPageTokenCount = 0;
+    let lastPageTokenCount = 0;
+    let totalPageTokenCount = 0;
     let historyGate = createInitialHistoryGate();
+
+    function getWorkerClient() {
+      if (!client) client = createDedicatedClient();
+      return client;
+    }
 
     function currentConnectionAgeMs() {
       return callStartedAtMs ? Math.max(0, Date.now() - callStartedAtMs) : 0;
@@ -136,6 +177,21 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         currentConnectionAgeMs: currentConnectionAgeMs(),
         lastConnectionDurationMs,
         longestConnectionDurationMs,
+        transport: 'grpc-streamlist',
+        grpcChannelMode: 'dedicated-per-chat',
+        lastGrpcStatusCode,
+        lastGrpcStatusName,
+        lastGrpcStatusDetails,
+        lastGrpcStatusAt,
+        lastGrpcMetadataKeys,
+        lastTerminalEvent,
+        lastTerminalAt,
+        currentResponseCount,
+        lastResponseCount,
+        totalResponseCount,
+        currentPageTokenCount,
+        lastPageTokenCount,
+        totalPageTokenCount,
         ...extra
       };
     }
@@ -155,7 +211,16 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       if (!callStartedAtMs) return;
       lastConnectionDurationMs = Math.max(0, Date.now() - callStartedAtMs);
       longestConnectionDurationMs = Math.max(longestConnectionDurationMs, lastConnectionDurationMs);
+      lastResponseCount = currentResponseCount;
+      lastPageTokenCount = currentPageTokenCount;
+      currentResponseCount = 0;
+      currentPageTokenCount = 0;
       callStartedAtMs = 0;
+    }
+
+    function clearEndStatusGraceTimer() {
+      if (endStatusGraceTimer) clearTimeout(endStatusGraceTimer);
+      endStatusGraceTimer = null;
     }
 
     function clearStableResetTimer() {
@@ -189,6 +254,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
     function terminate(reason, terminalState = 'error') {
       if (stopped) return;
       stopped = true;
+      clearEndStatusGraceTimer();
       clearStableResetTimer();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -199,6 +265,8 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       ++streamGeneration;
       try { call?.cancel?.(); } catch (_) {}
       call = null;
+      closeClient(client);
+      client = null;
       emit({ terminal: true });
     }
 
@@ -236,6 +304,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         return;
       }
 
+      clearEndStatusGraceTimer();
       clearStableResetTimer();
       recordConnectionDuration();
       state = 'reconnecting';
@@ -276,7 +345,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       });
       if (stopped || generation !== streamGeneration) return;
 
-      const client = getClient();
+      const streamClient = getWorkerClient();
       const metadata = new grpcBundle.grpc.Metadata();
       metadata.set('authorization', `Bearer ${token}`);
       const hadPageTokenAtConnect = Boolean(pageToken);
@@ -288,23 +357,39 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         max_results: 200
       };
       if (pageToken) request.page_token = pageToken;
-      const streamMethod = typeof client.StreamList === 'function' ? client.StreamList : client.streamList;
+      const streamMethod = typeof streamClient.StreamList === 'function' ? streamClient.StreamList : streamClient.streamList;
       if (typeof streamMethod !== 'function') throw new Error('YouTube StreamList gRPC method is unavailable.');
 
-      call = streamMethod.call(client, request, metadata);
+      const activeCall = streamMethod.call(streamClient, request, metadata);
+      call = activeCall;
       callStartedAtMs = Date.now();
+      currentResponseCount = 0;
+      currentPageTokenCount = 0;
+      lastGrpcStatusCode = null;
+      lastGrpcStatusName = null;
+      lastGrpcStatusDetails = null;
+      lastGrpcStatusAt = null;
+      lastGrpcMetadataKeys = [];
       noteConnectionStart(callStartedAtMs);
       connectionCount += 1;
       historyGate = createInitialHistoryGate({ hasContinuation: hadPageTokenAtConnect });
       state = hadPageTokenAtConnect ? 'reconnecting' : 'priming';
       emit();
 
-      call.on('data', (response) => {
+      activeCall.on('data', (response) => {
         if (stopped || generation !== streamGeneration) return;
         lastDataAt = new Date().toISOString();
-        if (response?.next_page_token) pageToken = String(response.next_page_token);
+        currentResponseCount += 1;
+        totalResponseCount += 1;
+        if (response?.next_page_token) {
+          pageToken = String(response.next_page_token);
+          currentPageTokenCount += 1;
+          totalPageTokenCount += 1;
+        }
         if (response?.offline_at) {
           lastError = `YouTube live chat ended at ${response.offline_at}.`;
+          lastTerminalEvent = 'offline_at';
+          lastTerminalAt = new Date().toISOString();
           terminate(lastError, 'ended');
           return;
         }
@@ -353,15 +438,45 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         }
       });
 
-      call.on('error', (err) => {
+      activeCall.on('status', (status) => {
         if (stopped || generation !== streamGeneration) return;
+        const code = Number(status?.code);
+        lastGrpcStatusCode = Number.isFinite(code) ? code : null;
+        lastGrpcStatusName = lastGrpcStatusCode === null ? null : grpcStatusName(lastGrpcStatusCode);
+        lastGrpcStatusDetails = String(status?.details || '');
+        lastGrpcStatusAt = new Date().toISOString();
+        try {
+          const map = status?.metadata?.getMap?.() || {};
+          lastGrpcMetadataKeys = Object.keys(map).sort();
+        } catch (_) {
+          lastGrpcMetadataKeys = [];
+        }
+        emit({ grpcStatusObserved: true });
+      });
+
+      activeCall.on('error', (err) => {
+        if (stopped || generation !== streamGeneration || reconnectTimer) return;
+        clearEndStatusGraceTimer();
+        lastTerminalEvent = 'error';
+        lastTerminalAt = new Date().toISOString();
         call = null;
         scheduleReconnect(err);
       });
-      call.on('end', () => {
-        if (stopped || generation !== streamGeneration) return;
+      activeCall.on('end', () => {
+        if (stopped || generation !== streamGeneration || reconnectTimer || endStatusGraceTimer) return;
+        lastTerminalEvent = 'end';
+        lastTerminalAt = new Date().toISOString();
         call = null;
-        scheduleReconnect('YouTube live chat stream ended unexpectedly.');
+        endStatusGraceTimer = setTimeout(() => {
+          endStatusGraceTimer = null;
+          if (stopped || generation !== streamGeneration || reconnectTimer) return;
+          const statusText = lastGrpcStatusCode === null
+            ? 'final gRPC status was not observed'
+            : `gRPC ${lastGrpcStatusCode} ${lastGrpcStatusName || grpcStatusName(lastGrpcStatusCode)}${lastGrpcStatusDetails ? `: ${lastGrpcStatusDetails}` : ''}`;
+          const reason = new Error(`YouTube StreamList ended after ${statusText}.`);
+          if (lastGrpcStatusCode !== null) reason.code = lastGrpcStatusCode;
+          scheduleReconnect(reason);
+        }, END_STATUS_GRACE_MS);
       });
     }
 
@@ -401,12 +516,11 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
     if (!bundle?.grpc || typeof bundle?.Service !== 'function') {
       throw new Error('YouTube StreamList gRPC client could not be loaded.');
     }
-    return { ok: true, transport: 'grpc', endpoint: 'dns:///youtube.googleapis.com:443' };
+    return { ok: true, transport: 'grpc', endpoint: 'dns:///youtube.googleapis.com:443', channelMode: 'dedicated-per-chat' };
   }
 
   function shutdown() {
-    try { sharedClient?.close?.(); } catch (_) {}
-    sharedClient = null;
+    for (const client of [...workerClients]) closeClient(client);
   }
 
   return { createWorker, preflight, shutdown };
@@ -422,5 +536,7 @@ module.exports = {
   CHURN_WINDOW_MS,
   CHURN_CONNECTION_LIMIT,
   CHURN_COOLDOWN_MS,
-  STREAMLIST_DAILY_SAFETY_CAP
+  STREAMLIST_DAILY_SAFETY_CAP,
+  END_STATUS_GRACE_MS,
+  grpcStatusName
 };

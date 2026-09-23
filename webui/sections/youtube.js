@@ -112,6 +112,8 @@ export function initYoutubeSection({ $, esc, postJson }) {
     $('youtubeDisconnectBtn').disabled = !oauthReady;
 
     const chats = Array.isArray(status.distinctChats) ? status.distinctChats : [];
+    const listeningEnabled = status.chatListeningEnabled !== false && cfg.commandsEnabled !== false;
+    const timerSendTargets = Math.max(0, Number(status.timerSendTargetCount || 0));
     const connected = chats.filter((chat) => chat.state === 'connected').length;
     const reconnecting = chats.filter((chat) => chat.state === 'reconnecting').length;
     const connecting = chats.filter((chat) => chat.state === 'connecting' || chat.state === 'priming').length;
@@ -120,7 +122,10 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const pending = status.pendingDeliveries || {};
     let liveText = 'SLEEPING'; let liveState = 'warn';
     if (status.twitchLive) {
-      if (activeChats) {
+      if (!listeningEnabled) {
+        liveText = timerSendTargets ? `${timerSendTargets} SEND TARGET${timerSendTargets === 1 ? '' : 'S'}` : 'LISTENING OFF';
+        liveState = timerSendTargets ? 'good' : status.lastDiscoveryError ? 'bad' : 'warn';
+      } else if (activeChats) {
         liveText = `${activeChats} CHAT${activeChats === 1 ? '' : 'S'} ACTIVE`;
         liveState = connected === activeChats && !errors ? 'good' : errors ? 'bad' : 'warn';
       } else if (errors) { liveText = 'CHAT ERROR'; liveState = 'bad'; }
@@ -130,10 +135,12 @@ export function initYoutubeSection({ $, esc, postJson }) {
     setValue('youtubeLiveStatus', liveText, liveState);
     const broadcastText = (status.activeBroadcasts || []).map((item) => item.title || item.videoId).filter(Boolean).join(' · ');
     const stateParts = [];
+    if (!listeningEnabled && status.twitchLive) stateParts.push('commands engine OFF / StreamList listeners stopped');
     if (connected) stateParts.push(`${connected} connected`);
     if (reconnecting) stateParts.push(`${reconnecting} reconnecting`);
     if (connecting) stateParts.push(`${connecting} connecting`);
     if (errors) stateParts.push(`${errors} error`);
+    if (timerSendTargets) stateParts.push(`${timerSendTargets} timer send target${timerSendTargets === 1 ? '' : 's'}`);
     if (Number(pending.total || 0)) stateParts.push(`${pending.total} pending send${Number(pending.total) === 1 ? '' : 's'}`);
     const reconnectTotal = chats.reduce((sum, chat) => sum + Number(chat.reconnectCount || 0), 0);
     const streamConnectionsThisProcess = chats.reduce((sum, chat) => sum + Number(chat.connectionCount || 0), 0);
@@ -146,8 +153,8 @@ export function initYoutubeSection({ $, esc, postJson }) {
     const nextReconnect = chats.map((chat) => chat.nextReconnectAt).filter(Boolean).sort()[0];
     if (nextReconnect) stateParts.push(`next retry ${fmtTime(nextReconnect)}`);
     $('youtubeLiveDetail').textContent = status.twitchLive
-      ? `${status.activeBroadcasts?.length || 0} active broadcast(s) · ${chats.length} distinct chat(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}${broadcastText ? ` · ${broadcastText}` : ''}${status.lastDiscoveryError ? ` · ${status.lastDiscoveryError}` : ''}`
-      : 'Twitch is offline, so YouTube discovery and live-chat workers are asleep.';
+      ? `${status.activeBroadcasts?.length || 0} active broadcast(s) · ${listeningEnabled ? `${chats.length} distinct chat worker(s)` : `${timerSendTargets} one-way timer target(s)`}${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}${broadcastText ? ` · ${broadcastText}` : ''}${status.lastDiscoveryError ? ` · ${status.lastDiscoveryError}` : ''}`
+      : 'Twitch is offline, so YouTube discovery, StreamList listeners, and timers are asleep.';
     $('youtubeRediscoverBtn').disabled = !status.twitchLive || !oauthReady || !cfg.enabled;
 
     $('youtubeBotEnabled').checked = cfg.enabled !== false;
@@ -161,12 +168,42 @@ export function initYoutubeSection({ $, esc, postJson }) {
 
     const diagChatText = !status.twitchLive
       ? 'SLEEPING'
-      : activeChats
-        ? `${activeChats} ACTIVE`
-        : errors ? 'CHAT ERROR' : 'NO CHAT';
-    const diagChatState = !status.twitchLive ? 'good' : activeChats && connected === activeChats && !errors ? 'good' : errors ? 'bad' : 'warn';
+      : !listeningEnabled
+        ? (timerSendTargets ? 'LISTENING OFF · SEND-ONLY' : 'LISTENING OFF')
+        : activeChats
+          ? `${activeChats} ACTIVE`
+          : errors ? 'CHAT ERROR' : 'NO CHAT';
+    const diagChatState = !status.twitchLive
+      ? 'good'
+      : !listeningEnabled
+        ? (timerSendTargets ? 'good' : status.lastDiscoveryError ? 'bad' : 'warn')
+        : activeChats && connected === activeChats && !errors ? 'good' : errors ? 'bad' : 'warn';
     setValue('diagYoutubeChats', diagChatText, diagChatState);
-    $('diagYoutubeChatsDetail').textContent = `${status.activeBroadcasts?.length || 0} broadcast(s) · ${chats.length} distinct chat worker(s)${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}. Last discovery: ${status.lastDiscoveryAt ? fmtTime(status.lastDiscoveryAt) : 'not yet'}.`;
+    $('diagYoutubeChatsDetail').textContent = `${status.activeBroadcasts?.length || 0} broadcast(s) · ${timerSendTargets} timer send target(s) · ${chats.length} StreamList worker(s) · channel mode ${status.streamListChannelMode || 'unknown'}${stateParts.length ? ` · ${stateParts.join(' · ')}` : ''}. Last discovery: ${status.lastDiscoveryAt ? fmtTime(status.lastDiscoveryAt) : 'not yet'}.`;
+
+    const workerDetail = $('diagYoutubeWorkersDetail');
+    if (workerDetail) {
+      if (!status.twitchLive) {
+        workerDetail.innerHTML = '<div>StreamList diagnostics will appear while Twitch is live.</div>';
+      } else if (!listeningEnabled) {
+        workerDetail.innerHTML = `<div><strong>Commands engine OFF:</strong> no YouTube chat is being read and no StreamList workers should be running. Timers remain send-only to ${timerSendTargets} discovered target${timerSendTargets === 1 ? '' : 's'}. Timers with Min Messages &gt; 0 will wait until listening is re-enabled.</div>`;
+      } else if (!chats.length) {
+        workerDetail.innerHTML = '<div>No StreamList worker diagnostics are available yet.</div>';
+      } else {
+        workerDetail.innerHTML = chats.map((chat, index) => {
+          const title = (chat.broadcasts || []).map((item) => item.title || item.videoId).filter(Boolean).join(' / ') || `Chat ${index + 1}`;
+          const grpcCode = chat.lastGrpcStatusCode === null || chat.lastGrpcStatusCode === undefined ? 'not observed' : `${chat.lastGrpcStatusCode} ${chat.lastGrpcStatusName || ''}`.trim();
+          const grpcDetails = chat.lastGrpcStatusDetails ? ` · ${chat.lastGrpcStatusDetails}` : '';
+          const lastDuration = Number(chat.lastConnectionDurationMs || 0) >= 1000 ? formatInterval(Math.floor(Number(chat.lastConnectionDurationMs) / 1000)) : `${Number(chat.lastConnectionDurationMs || 0)}ms`;
+          const longestDuration = Number(chat.longestConnectionDurationMs || 0) >= 1000 ? formatInterval(Math.floor(Number(chat.longestConnectionDurationMs) / 1000)) : `${Number(chat.longestConnectionDurationMs || 0)}ms`;
+          const terminal = chat.lastTerminalEvent ? `${chat.lastTerminalEvent}${chat.lastTerminalAt ? ` @ ${fmtTime(chat.lastTerminalAt)}` : ''}` : 'none';
+          const error = chat.lastError || 'none';
+          return `<div style="margin-top:8px"><strong>${esc(title)}</strong> · ${esc(chat.state || 'unknown')} · dedicated gRPC channel<br>`
+            + `connections ${Number(chat.connectionCount || 0)} · reconnects ${Number(chat.reconnectCount || 0)} · last duration ${esc(lastDuration)} · longest ${esc(longestDuration)} · responses last/current/total ${Number(chat.lastResponseCount || 0)}/${Number(chat.currentResponseCount || 0)}/${Number(chat.totalResponseCount || 0)}<br>`
+            + `final gRPC status ${esc(grpcCode + grpcDetails)} · terminal event ${esc(terminal)} · last error ${esc(error)}</div>`;
+        }).join('');
+      }
+    }
     const main = Number(quota.mainUnits || 0), mainLimit = Number(quota.mainLimit || cfg.mainDailyLimitUnits || 10000), searches = Number(quota.searchCalls || 0), searchLimit = Number(quota.searchLimit || 100);
     const googleExhausted = Boolean(quota.googleQuotaExhaustedAt);
     const quotaState = googleExhausted || main >= Number(cfg.hardSafetyStopUnits || 9000) ? 'bad' : main >= Number(cfg.timerSafetyStopUnits || 7500) ? 'warn' : 'good';

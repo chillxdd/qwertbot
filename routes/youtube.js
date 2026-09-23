@@ -56,10 +56,12 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
   app.get('/youtube-public-commands', async (req, res) => {
     if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'Commands are temporarily unavailable.' });
     try {
-      const [commands, native] = await Promise.all([
+      const [commands, native, globalConfig] = await Promise.all([
         YouTubeCustomCommand.find({ channelKey, enabled: true }).sort({ normalizedTrigger: 1 }).select('name triggers normalizedTrigger trigger publicDescription cooldownSeconds userLevel probability').lean(),
-        YouTubeNativeCommandConfig.findOne({ channelKey }).lean()
+        YouTubeNativeCommandConfig.findOne({ channelKey }).lean(),
+        YouTubeConfig.findOne({ channelKey }).select('commandsEnabled').lean()
       ]);
+      const commandsEngineEnabled = globalConfig?.commandsEnabled !== false;
       const customCommands = commands.map((command) => {
         const triggers = (Array.isArray(command.triggers) && command.triggers.length
           ? command.triggers
@@ -77,18 +79,19 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
           probability: Number(command.probability ?? 100)
         };
       });
-      const nativeCommands = native?.commandsEnabled === false ? [] : [{
+      const nativeCommands = !commandsEngineEnabled || native?.commandsEnabled === false ? [] : [{
         name: '!commands',
         userLevel: 'everyone',
         description: 'Links to this public SqwertArmyBot YouTube command directory.'
       }];
       // Keep the legacy flat shape available for any old cached page while the
       // standardized public directory uses the richer split collections.
+      const effectiveCustomCommands = commandsEngineEnabled ? customCommands : [];
       const items = [
         ...nativeCommands.map((command) => ({ trigger: command.name, description: command.description })),
-        ...customCommands.flatMap((command) => command.triggers.map((item) => ({ trigger: item.trigger, description: command.publicDescription })))
+        ...effectiveCustomCommands.flatMap((command) => command.triggers.map((item) => ({ trigger: item.trigger, description: command.publicDescription })))
       ];
-      return res.json({ success: true, commands: items, customCommands, nativeCommands });
+      return res.json({ success: true, commandsEngineEnabled, commands: items, customCommands: effectiveCustomCommands, nativeCommands });
     } catch (err) {
       return res.status(500).json({ success: false, error: 'Could not load YouTube commands.' });
     }

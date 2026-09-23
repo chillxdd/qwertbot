@@ -25,6 +25,11 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
   const retryTimers = new Map();
   let sequence = 0;
 
+
+  function deliveryState(liveChatId, kind = 'command') {
+    return String(getWorkerState(String(liveChatId || ''), kind === 'timer' ? 'timer' : 'command') || '');
+  }
+
   function ttlFor(kind) {
     return kind === 'timer' ? TIMER_TTL_MS : COMMAND_TTL_MS;
   }
@@ -127,7 +132,8 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
 
   async function deliver(liveChatId, text, options = {}) {
     const id = String(liveChatId || '');
-    const state = String(getWorkerState(id) || '');
+    const kind = options.kind === 'timer' ? 'timer' : 'command';
+    const state = deliveryState(id, kind);
     if (QUEUEABLE_STATES.has(state)) return enqueue(id, text, options, state);
     if (state !== 'connected') {
       const err = new Error('YouTube live chat worker is not available.');
@@ -139,7 +145,7 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
       const data = await sendNow(id, text, options);
       return { sent: true, queued: false, liveChatId: id, data };
     } catch (err) {
-      const latestState = String(getWorkerState(id) || '');
+      const latestState = deliveryState(id, kind);
       if (isTransientSendError(err) && (latestState === 'connected' || QUEUEABLE_STATES.has(latestState))) {
         const queued = enqueue(id, text, options, err?.message || 'transient-send-failure', 1);
         if (latestState === 'connected') scheduleFlush(id, retryDelayFor(1));
@@ -152,7 +158,8 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
   async function flush(liveChatId) {
     const id = String(liveChatId || '');
     if (!id || flushing.has(id)) return { sentCount: 0, remaining: chatQueue(id, false)?.size || 0 };
-    if (String(getWorkerState(id) || '') !== 'connected') return { sentCount: 0, remaining: chatQueue(id, false)?.size || 0 };
+    const queueForState = chatQueue(id, false);
+    if (queueForState?.size && ![...queueForState.values()].some((item) => deliveryState(id, item.kind) === 'connected')) return { sentCount: 0, remaining: queueForState.size };
     pruneChat(id);
     const queue = chatQueue(id, false);
     if (!queue?.size) return { sentCount: 0, remaining: 0 };
@@ -162,7 +169,7 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     try {
       let soonestRetryAt = 0;
       for (const [key, item] of [...queue.entries()]) {
-        if (String(getWorkerState(id) || '') !== 'connected') break;
+        if (deliveryState(id, item.kind) !== 'connected') continue;
         const current = now();
         if (Number(item.expiresAt || 0) <= current) {
           queue.delete(key);
@@ -194,7 +201,7 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
           warn(`[YouTube Delivery] Dropped pending ${item.kind} for ${id}: ${err?.message || err}`);
         }
       }
-      if (soonestRetryAt && String(getWorkerState(id) || '') === 'connected') {
+      if (soonestRetryAt && [...queue.values()].some((item) => deliveryState(id, item.kind) === 'connected')) {
         scheduleFlush(id, Math.max(1000, soonestRetryAt - now()));
       }
     } finally {
@@ -227,6 +234,20 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     }
   }
 
+  function dropChatKind(liveChatId, kind) {
+    const id = String(liveChatId || '');
+    const normalized = kind === 'timer' ? 'timer' : 'command';
+    const queue = chatQueue(id, false);
+    if (!queue) return;
+    for (const [key, item] of queue.entries()) if (item.kind === normalized) queue.delete(key);
+    if (!queue.size) {
+      pendingByChat.delete(id);
+      const retry = retryTimers.get(id);
+      if (retry?.handle) clearTimeout(retry.handle);
+      retryTimers.delete(id);
+    }
+  }
+
   function getStatus() {
     pruneAll();
     let commands = 0;
@@ -244,7 +265,7 @@ function createYouTubeDeliveryQueue({ getWorkerState, sendNow, now = () => Date.
     return { total: commands + timers, commands, timers, chats };
   }
 
-  return { deliver, flush, clearChat, clearAll, dropKind, getStatus };
+  return { deliver, flush, clearChat, clearAll, dropKind, dropChatKind, getStatus };
 }
 
 module.exports = {
