@@ -62,19 +62,21 @@ export function initAdvancedFiltersSection({ $, esc, postJson }) {
 
   function filterUsageText(filter) {
     const timerCount = Array.isArray(filter?.usage?.timers) ? filter.usage.timers.length : 0;
+    const youtubeTimerCount = Array.isArray(filter?.usage?.youtubeTimers) ? filter.usage.youtubeTimers.length : 0;
     const bannerCount = Array.isArray(filter?.usage?.banners) ? filter.usage.banners.length : 0;
-    if (!timerCount && !bannerCount) return 'Not currently assigned';
+    if (!timerCount && !youtubeTimerCount && !bannerCount) return 'Not currently assigned';
     const parts = [];
-    if (timerCount) parts.push(`${timerCount} timer${timerCount === 1 ? '' : 's'}`);
+    if (timerCount) parts.push(`${timerCount} Twitch timer${timerCount === 1 ? '' : 's'}`);
+    if (youtubeTimerCount) parts.push(`${youtubeTimerCount} YouTube timer${youtubeTimerCount === 1 ? '' : 's'}`);
     if (bannerCount) parts.push(`${bannerCount} banner${bannerCount === 1 ? '' : 's'}`);
     return `Used by ${parts.join(' · ')}`;
   }
 
   function streamSummary() {
-    if (!currentStream?.live) return 'Current Twitch stream: offline. Filters will be evaluated when the stream is live.';
+    if (!currentStream?.live) return 'Current shared stream context (from Twitch): offline. Filters will be evaluated when the stream is live.';
     const title = currentStream.title || 'Unknown title';
     const category = currentStream.category || 'Unknown category';
-    return `Current Twitch stream: “${title}” · ${category}`;
+    return `Current shared stream context (from Twitch): “${title}” · ${category}`;
   }
 
   function renderList() {
@@ -82,7 +84,7 @@ export function initAdvancedFiltersSection({ $, esc, postJson }) {
     if (!listEl) return;
     listEl.innerHTML = '';
     if (!filters.length) {
-      listEl.innerHTML = '<div class="custom-empty-state detail">No Advanced Filters yet. Create one, then assign it to a timer or pinned banner.</div>';
+      listEl.innerHTML = '<div class="custom-empty-state detail">No Advanced Filters yet. Create one, then assign it to a Twitch/YouTube timer or pinned banner.</div>';
       return;
     }
 

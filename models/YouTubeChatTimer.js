@@ -9,6 +9,7 @@ const youtubeChatTimerSchema = new mongoose.Schema({
   priority: { type: String, enum: ['high', 'normal', 'low'], default: 'normal' },
   minimumChatMessages: { type: Number, default: 0, min: 0, max: 100000 },
   minimumViewers: { type: Number, default: 0, min: 0, max: 1000000 },
+  advancedFilterId: { type: String, default: '', trim: true },
   responses: {
     type: [String], required: true,
     validate: { validator: (values) => Array.isArray(values) && values.length >= 1 && values.length <= 25 && values.every((v) => typeof v === 'string' && v.trim().length && v.length <= 200), message: 'A timer needs 1-25 non-empty responses up to 200 characters each.' }

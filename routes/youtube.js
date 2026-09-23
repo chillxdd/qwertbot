@@ -38,7 +38,7 @@ function cleanResponses(values) {
   return responses;
 }
 
-function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, youtubeManager, channelKey, viewsDir }) {
+function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, youtubeManager, channelKey, viewsDir, getAdvancedFilterManager = null }) {
   const requireDb = (res) => {
     if (getDatabaseConnected()) return true;
     res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
@@ -239,6 +239,11 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
       if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > 100000) throw new Error('Min Messages must be between 0 and 100000.');
       const minimumViewers = Math.floor(Number(req.body?.minimumViewers ?? 0));
       if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > 1000000) throw new Error('Min Viewers must be between 0 and 1000000.');
+      const advancedFilterId = String(req.body?.advancedFilterId || '').trim();
+      if (advancedFilterId) {
+        const manager = typeof getAdvancedFilterManager === 'function' ? getAdvancedFilterManager() : null;
+        if (!manager?.getFilterById?.(advancedFilterId)) throw new Error('Selected Advanced Filter was not found. Refresh the filter list and choose another filter.');
+      }
       const priority = ['high', 'normal', 'low'].includes(String(req.body?.priority || '').toLowerCase()) ? String(req.body.priority).toLowerCase() : 'normal';
 
       const responseMode = ['equal', 'weighted'].includes(req.body?.responseMode) ? req.body.responseMode : 'equal';
@@ -261,6 +266,7 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
         priority,
         minimumChatMessages,
         minimumViewers,
+        advancedFilterId,
         responses,
         responseMode,
         responseWeights,

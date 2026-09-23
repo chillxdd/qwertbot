@@ -450,7 +450,7 @@
                 </select>
               </div>
             </div>
-            <div class="detail">Per-timer delay cannot be earlier than global; jitter recalculates after each fire.</div>
+            <div class="detail">Start Delay controls the first scheduled fire; interval and jitter begin after the first successful fire. Per-timer delay cannot be earlier than global.</div>
             <div id="timerScheduleMsg" class="detail custom-field-message"></div>
           </div>
 
@@ -475,7 +475,7 @@
             <div id="timerAdvancedFilterSelectWrap" class="timer-filter-select-wrap" hidden>
               <label class="prompt-label" for="timerAdvancedFilterId">Filter</label>
               <select id="timerAdvancedFilterId"></select>
-              <div class="detail">Filters are created under General Settings → Advanced Filters. The timer only fires while its selected filter matches the current Twitch stream.</div>
+              <div class="detail">Filters are created under General Settings → Advanced Filters. The timer only fires while its selected filter matches the shared stream title/category context.</div>
             </div>
             <div id="timerAdvancedFilterMsg" class="detail custom-field-message"></div>
           </div>
@@ -1576,7 +1576,7 @@
               </select>
             </div>
           </div>
-          <div class="detail">Per-timer delay cannot be earlier than global; jitter recalculates after each fire.</div>
+          <div class="detail">Start Delay controls the first scheduled fire; interval and jitter begin after the first successful fire. Per-timer delay cannot be earlier than global.</div>
           <div id="youtubeTimerScheduleMsg" class="detail custom-field-message"></div>
         </div>
 
@@ -1593,6 +1593,17 @@
             </div>
           </div>
           <div id="youtubeTimerActivityMsg" class="detail custom-field-message"></div>
+        </div>
+
+        <div class="custom-editor-block">
+          <strong class="custom-block-title">Advanced Filter</strong>
+          <label class="inline-check timer-use-filter-check"><input id="youtubeTimerUseAdvancedFilter" type="checkbox"> Use filter</label>
+          <div id="youtubeTimerAdvancedFilterSelectWrap" class="timer-filter-select-wrap" hidden>
+            <label class="prompt-label" for="youtubeTimerAdvancedFilterId">Filter</label>
+            <select id="youtubeTimerAdvancedFilterId"></select>
+          </div>
+          <div class="detail">Uses the shared stream title/category context from General Settings → Advanced Filters.</div>
+          <div id="youtubeTimerAdvancedFilterMsg" class="detail custom-field-message"></div>
         </div>
 
         <div class="custom-editor-block">
@@ -1638,7 +1649,7 @@
         <div class="custom-command-header">
           <div>
             <h3>Advanced Filters</h3>
-            <div class="detail">Create reusable Twitch stream rules, then assign a filter to individual timers or rotating pinned banners.</div>
+            <div class="detail">Create reusable stream rules, then assign a filter to Twitch timers, YouTube timers, or rotating pinned banners. The shared title/category context comes from Qwert's current Twitch stream, so this adds no extra YouTube polling.</div>
           </div>
           <div class="custom-command-header-actions">
             <button id="refreshAdvancedFiltersBtn" class="secondary" type="button">Refresh</button>

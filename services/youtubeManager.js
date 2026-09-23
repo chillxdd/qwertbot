@@ -30,12 +30,13 @@ const DEFAULT_CONFIG = Object.freeze({
   searchSafetyStopCalls: 90
 });
 
-function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
+function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = null, getAdvancedFilterById = null, evaluateAdvancedFilter = null } = {}) {
   const quotaManager = createYouTubeQuotaManager();
   const authManager = createYouTubeAuthManager({ quotaManager });
   const discovery = createYouTubeDiscovery({ authManager, quotaManager });
   let config = { ...DEFAULT_CONFIG };
   let twitchLive = false;
+  let twitchStreamStartedAt = 0;
   let streamStateKnown = false;
   let botChannelId = '';
   let botDisplayName = '';
@@ -74,6 +75,10 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     sendToAllChats: (text, options) => sendToAllChats(text, options),
     isEnabled: () => Boolean(config.enabled && config.timersEnabled && twitchLive && !quiesced),
     getGlobalStartDelaySeconds: () => Number(config.globalTimerStartDelaySeconds || 0),
+    getSessionStartedAtMs: () => twitchStreamStartedAt,
+    getStreamStatus: () => typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {},
+    getAdvancedFilterById,
+    evaluateAdvancedFilter,
     getViewerCount: () => getCurrentViewerCount()
   });
 
@@ -314,15 +319,19 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
     }
   }
 
-  async function syncTwitchLiveState({ live, known = true } = {}) {
+  async function syncTwitchLiveState({ live, known = true, startedAt = null } = {}) {
     streamStateKnown = Boolean(known);
     const next = Boolean(live);
+    const numericStartedAt = Number(startedAt || 0);
+    const parsedStartedAt = Number.isFinite(numericStartedAt) && numericStartedAt > 0 ? numericStartedAt : Date.parse(startedAt || '');
+    if (next && Number.isFinite(parsedStartedAt) && parsedStartedAt > 0) twitchStreamStartedAt = parsedStartedAt;
     // If a YouTube-only initialization attempt failed while Twitch was already
     // live, keep allowing later maintenance passes to retry initialization.
     // Once initialized, identical live-state updates remain a no-op.
     if (next === twitchLive && (initialized || !next)) return;
     twitchLive = next;
     if (!next) {
+      twitchStreamStartedAt = 0;
       await stopWorkers('twitch-offline');
       return;
     }
@@ -530,6 +539,7 @@ function createYouTubeManager({ channelKey = 'generalqwert' } = {}) {
       globalTimerStartDelaySeconds: config.globalTimerStartDelaySeconds,
       streamListDailySafetyCap: STREAMLIST_DAILY_SAFETY_CAP,
       twitchLive,
+      twitchStreamStartedAt: twitchStreamStartedAt || null,
       streamStateKnown,
       broadcaster: { channelId: YOUTUBE_BROADCASTER_CHANNEL_ID || null, handle: YOUTUBE_BROADCASTER_HANDLE || null },
       bot: { channelId: botChannelId || null, displayName: botDisplayName || null },

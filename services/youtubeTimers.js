@@ -34,6 +34,10 @@ function createYouTubeTimerManager({
   sendToAllChats,
   isEnabled = () => true,
   getGlobalStartDelaySeconds = () => 0,
+  getSessionStartedAtMs = () => 0,
+  getStreamStatus = () => ({}),
+  getAdvancedFilterById = null,
+  evaluateAdvancedFilter = null,
   getViewerCount = async () => ({ count: 0, available: false }),
   random = Math.random
 }) {
@@ -68,8 +72,34 @@ function createYouTubeTimerManager({
     const itemDelay = timerStartDelayMs(item);
     const effectiveDelay = itemDelay === null ? globalDelay : Math.max(globalDelay, itemDelay);
     const notBefore = streamStart + effectiveDelay;
-    const normalFirstDue = calculateNextDueAt(item, streamStart, random);
-    return Math.max(now, notBefore, normalFirstDue);
+    // The first scheduled send is governed only by the stream-start delay.
+    // Interval + jitter begin after the first successful send.
+    return Math.max(now, notBefore);
+  }
+
+  function currentStreamStatus() {
+    const status = typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {};
+    return {
+      live: status.streamLive !== undefined ? Boolean(status.streamLive) : Boolean(status.live),
+      title: String(status.currentStreamTitle || status.title || '').trim(),
+      category: String(status.currentStreamCategory || status.category || status.gameName || '').trim()
+    };
+  }
+
+  function filterEvaluation(item, status = currentStreamStatus()) {
+    const filterId = String(item?.advancedFilterId || '').trim();
+    if (!filterId) return { exists: true, matched: true, filterId: '', filterName: '' };
+    if (typeof evaluateAdvancedFilter === 'function') {
+      try { return evaluateAdvancedFilter(filterId, status) || { exists: false, matched: false, filterId, filterName: '' }; }
+      catch (_) { return { exists: false, matched: false, filterId, filterName: '' }; }
+    }
+    const filter = typeof getAdvancedFilterById === 'function' ? getAdvancedFilterById(filterId) : null;
+    return { exists: Boolean(filter), matched: Boolean(filter), filterId, filterName: String(filter?.name || '') };
+  }
+
+  function firedThisSession(item) {
+    const firedAt = item?.lastFiredAt ? new Date(item.lastFiredAt).getTime() : 0;
+    return Boolean(sessionStartedAt && Number.isFinite(firedAt) && firedAt >= sessionStartedAt);
   }
 
   function activityProgress(item) {
@@ -80,6 +110,9 @@ function createYouTubeTimerManager({
 
   function waitingFor(item) {
     const parts = [];
+    const filter = filterEvaluation(item);
+    if (!filter.exists) parts.push('Advanced filter unavailable');
+    else if (!filter.matched) parts.push('Advanced filter');
     const minMessages = Math.max(0, Number(item?.minimumChatMessages || 0));
     const progress = activityProgress(item);
     if (minMessages > progress) parts.push(`${Math.ceil(minMessages - progress)} more chat message${Math.ceil(minMessages - progress) === 1 ? '' : 's'}`);
@@ -97,7 +130,7 @@ function createYouTubeTimerManager({
     for (const item of timers) {
       const id = String(item._id);
       if (!activityBaselineById.has(id)) activityBaselineById.set(id, sessionMessageCount);
-      if (!nextDueById.has(id) || !active) {
+      if (!nextDueById.has(id) || !active || (active && !firedThisSession(item))) {
         nextDueById.set(id, active ? firstDueAt(item, now) : 0);
       }
     }
@@ -109,7 +142,8 @@ function createYouTubeTimerManager({
   async function startSession() {
     if (active) return;
     active = true;
-    sessionStartedAt = Date.now();
+    const reportedStart = Number(getSessionStartedAtMs?.() || 0);
+    sessionStartedAt = Number.isFinite(reportedStart) && reportedStart > 0 ? reportedStart : Date.now();
     sessionMessageCount = 0;
     lastViewerCount = null;
     lastViewerCountAt = null;
@@ -139,9 +173,10 @@ function createYouTubeTimerManager({
 
   function applyGlobalStartDelay() {
     if (!active || !sessionStartedAt) return;
-    const gateAt = sessionGlobalGateAt();
-    for (const [id, dueAt] of nextDueById.entries()) {
-      if (dueAt && dueAt < gateAt) nextDueById.set(id, gateAt);
+    const now = Date.now();
+    for (const item of timers) {
+      const id = String(item._id);
+      if (!firedThisSession(item)) nextDueById.set(id, firstDueAt(item, now));
     }
   }
 
@@ -220,6 +255,8 @@ function createYouTubeTimerManager({
       for (const item of dueItems) {
         const id = String(item._id);
         try {
+          const filter = filterEvaluation(item);
+          if (!filter.exists || !filter.matched) continue;
           if (!(await activityReady(item))) continue;
           // Advance before I/O so a slow API call cannot duplicate the occurrence.
           const regularNext = calculateNextDueAt(item, now, random);
@@ -253,8 +290,13 @@ function createYouTubeTimerManager({
       const dueAt = Number(nextDueById.get(id) || 0);
       const globalDelay = Math.max(0, Number(getGlobalStartDelaySeconds() || 0));
       const itemDelay = item.startDelaySeconds === null || item.startDelaySeconds === undefined ? globalDelay : Math.max(globalDelay, Number(item.startDelaySeconds || 0));
+      const filter = filterEvaluation(item);
       return {
         ...item,
+        advancedFilterId: String(item.advancedFilterId || ''),
+        advancedFilterName: filter.filterName || '',
+        advancedFilterExists: filter.exists !== false,
+        advancedFilterMatched: filter.matched !== false,
         messagesSinceLastFire: activityProgress(item),
         currentViewerCount: lastViewerCountAvailable ? Number(lastViewerCount || 0) : null,
         viewerCountCheckedAt: lastViewerCountAt,

@@ -2,6 +2,7 @@ const context = require('./reliability/context');
 const { WRITE_OPTIONS } = require('./reliability/store');
 const AdvancedFilter = require('../models/AdvancedFilter');
 const ChatTimer = require('../models/ChatTimer');
+const YouTubeChatTimer = require('../models/YouTubeChatTimer');
 const PersistentPinConfig = require('../models/PersistentPinConfig');
 
 const MAX_ADVANCED_FILTERS = 50;
@@ -154,7 +155,7 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
       currentStream: streamStatus(),
       createdAt: filter.createdAt || null,
       updatedAt: filter.updatedAt || null,
-      ...(includeUsage ? { usage: usage || { timers: [], banners: [] } } : {})
+      ...(includeUsage ? { usage: usage || { timers: [], youtubeTimers: [], banners: [] } } : {})
     };
   }
 
@@ -180,9 +181,10 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
 
   async function usageFor(id) {
     const key = String(id || '').trim();
-    if (!key) return { timers: [], banners: [] };
-    const [timers, pin] = await Promise.all([
+    if (!key) return { timers: [], youtubeTimers: [], banners: [] };
+    const [timers, youtubeTimers, pin] = await Promise.all([
       ChatTimer.find({ channelName: normalizedChannel, advancedFilterId: key }).select({ name: 1 }).lean(),
+      YouTubeChatTimer.find({ channelKey: normalizedChannel, advancedFilterId: key }).select({ name: 1 }).lean(),
       PersistentPinConfig.findOne({ channelName: normalizedChannel }).select({ messages: 1, bannerFilterIds: 1 }).lean()
     ]);
     const banners = [];
@@ -191,19 +193,28 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
     ids.forEach((filterId, index) => {
       if (String(filterId || '') === key) banners.push({ index, label: `Banner ${index + 1}`, message: String(messages[index] || '') });
     });
-    return { timers: timers.map((timer) => ({ id: String(timer._id), name: String(timer.name || 'Timer') })), banners };
+    return {
+      timers: timers.map((timer) => ({ id: String(timer._id), name: String(timer.name || 'Timer') })),
+      youtubeTimers: youtubeTimers.map((timer) => ({ id: String(timer._id), name: String(timer.name || 'Timer') })),
+      banners
+    };
   }
 
   async function listFilters() {
     await refresh();
-    const [timers, pin] = await Promise.all([
+    const [timers, youtubeTimers, pin] = await Promise.all([
       ChatTimer.find({ channelName: normalizedChannel, advancedFilterId: { $ne: '' } }).select({ name: 1, advancedFilterId: 1 }).lean(),
+      YouTubeChatTimer.find({ channelKey: normalizedChannel, advancedFilterId: { $ne: '' } }).select({ name: 1, advancedFilterId: 1 }).lean(),
       PersistentPinConfig.findOne({ channelName: normalizedChannel }).select({ messages: 1, bannerFilterIds: 1 }).lean()
     ]);
-    const usageMap = new Map(cache.map((filter) => [String(filter._id), { timers: [], banners: [] }]));
+    const usageMap = new Map(cache.map((filter) => [String(filter._id), { timers: [], youtubeTimers: [], banners: [] }]));
     for (const timer of timers) {
       const key = String(timer.advancedFilterId || '').trim();
       if (usageMap.has(key)) usageMap.get(key).timers.push({ id: String(timer._id), name: String(timer.name || 'Timer') });
+    }
+    for (const timer of youtubeTimers) {
+      const key = String(timer.advancedFilterId || '').trim();
+      if (usageMap.has(key)) usageMap.get(key).youtubeTimers.push({ id: String(timer._id), name: String(timer.name || 'Timer') });
     }
     const ids = Array.isArray(pin?.bannerFilterIds) ? pin.bannerFilterIds : [];
     const messages = Array.isArray(pin?.messages) ? pin.messages : [];
@@ -254,9 +265,10 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
     const filter = getFilterById(key) || await AdvancedFilter.findOne({ _id: key, channelName: normalizedChannel }).lean();
     if (!filter) throw new Error('Advanced Filter was not found.');
     const usage = await usageFor(key);
-    if (usage.timers.length || usage.banners.length) {
+    if (usage.timers.length || usage.youtubeTimers.length || usage.banners.length) {
       const parts = [];
-      if (usage.timers.length) parts.push(`${usage.timers.length} timer${usage.timers.length === 1 ? '' : 's'}`);
+      if (usage.timers.length) parts.push(`${usage.timers.length} Twitch timer${usage.timers.length === 1 ? '' : 's'}`);
+      if (usage.youtubeTimers.length) parts.push(`${usage.youtubeTimers.length} YouTube timer${usage.youtubeTimers.length === 1 ? '' : 's'}`);
       if (usage.banners.length) parts.push(`${usage.banners.length} pinned banner${usage.banners.length === 1 ? '' : 's'}`);
       throw new Error(`This filter is still used by ${parts.join(' and ')}. Remove or change those assignments first.`);
     }

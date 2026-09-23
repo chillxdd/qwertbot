@@ -337,8 +337,10 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   function scheduleForNewStream(timer, status, now = Date.now()) {
     const streamStartedAt = status.startedAt || now;
     const notBefore = streamStartedAt + effectiveStartDelay(timer, settings) * 1000;
-    const normalFirstDue = streamStartedAt + Math.max(MIN_TIMER_INTERVAL_SECONDS, finiteNumber(timer.intervalSeconds, MIN_TIMER_INTERVAL_SECONDS)) * 1000 + randomJitterMs(timer);
-    return Math.max(now, notBefore, normalFirstDue);
+    // Start Delay controls the first scheduled fire. Interval + jitter begin only
+    // after that first successful send, so a 60m timer with a 5m start delay
+    // becomes eligible at +5m, then recurs roughly every 60m thereafter.
+    return Math.max(now, notBefore);
   }
 
   async function persistSchedulePatch(timerId, patch, extra = {}) {
@@ -352,9 +354,14 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (!status.live || !status.streamId || timer.enabled === false) return timer;
     const sameStream = String(timer.scheduleStreamId || '') === status.streamId;
     const persistedDue = dateMs(timer.nextDueAt);
-    if (sameStream && persistedDue > 0) return timer;
+    const streamStartedAt = Number(status.startedAt || 0);
+    const lastFiredAt = dateMs(timer.lastFiredAt);
+    const firedThisStream = Boolean(streamStartedAt && lastFiredAt >= streamStartedAt);
+    if (sameStream && persistedDue > 0 && firedThisStream) return timer;
 
-    const nextDueAt = new Date(scheduleForNewStream(timer, status, now));
+    const firstDueMs = scheduleForNewStream(timer, status, now);
+    if (sameStream && persistedDue > 0 && persistedDue <= firstDueMs) return timer;
+    const nextDueAt = new Date(firstDueMs);
     const patch = {
       scheduleStreamId: status.streamId,
       nextDueAt,

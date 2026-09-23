@@ -56,7 +56,7 @@ const eventSubReactions = initEventSubReactionsSection({ $, esc, postJson, confi
 const automation = initAutomationSection({ $, postJson });
 const oauth = initOauthSection({ $, postJson });
 const renderLogs = initRenderLogsSection({ $, postJson });
-const youtube = initYoutubeSection({ $, esc, postJson });
+const youtube = initYoutubeSection({ $, esc, postJson, advancedFilters });
 void messaging;
 const reliability = initReliabilitySection({ $, postJson, isLoggedIn: () => loggedIn, onResolved: () => status() });
 let statusLoading = false;

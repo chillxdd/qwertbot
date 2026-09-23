@@ -201,7 +201,12 @@ const modSessionManager = createModSessionManager({
 
 const requireModSession = modSessionManager.requireSession;
 
-youtubeManager = createYouTubeManager({ channelKey: channelName || 'generalqwert' });
+youtubeManager = createYouTubeManager({
+  channelKey: channelName || 'generalqwert',
+  getStreamStatus: () => recapManager?.getStatus?.() || {},
+  getAdvancedFilterById: (id) => advancedFilterManager?.getFilterById?.(id) || null,
+  evaluateAdvancedFilter: (id, status) => advancedFilterManager?.evaluateById?.(id, status) || { exists: false, matched: false, filterId: String(id || '') }
+});
 
 automationSpacingManager = createAutomationSpacingManager({ channelName });
 
@@ -418,7 +423,8 @@ registerYouTubeRoutes(app, {
   getDatabaseConnected: () => isDatabaseConnected(),
   youtubeManager,
   channelKey: channelName || 'generalqwert',
-  viewsDir: path.join(__dirname, 'views')
+  viewsDir: path.join(__dirname, 'views'),
+  getAdvancedFilterManager: () => advancedFilterManager
 });
 
 registerChatRoutes(app, {
@@ -441,7 +447,8 @@ async function syncYouTubeFailOpen(streamStatus, context = 'live-state sync') {
   try {
     await youtubeManager?.syncTwitchLiveState?.({
       live: Boolean(streamStatus?.streamLive),
-      known: Boolean(streamStatus?.streamStateInitialized)
+      known: Boolean(streamStatus?.streamStateInitialized),
+      startedAt: streamStatus?.twitchStreamStartedAt || streamStatus?.startedAt || null
     });
     return true;
   } catch (err) {
