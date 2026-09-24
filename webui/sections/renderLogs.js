@@ -54,7 +54,6 @@ export function initRenderLogsSection({ $, postJson }) {
     const eventLoop = runtime.eventLoop || {};
     const processInfo = runtime.process || {};
     const gemini = diag?.gemini || {};
-    const recapPrimaryQuota = diag?.recapPrimaryQuota || {};
     const tagged = diag?.taggedQuestions || {};
     const recap = diag?.recap || {};
     const services = diag?.services || {};
@@ -100,7 +99,7 @@ export function initRenderLogsSection({ $, postJson }) {
     setDiagnostic(
       'diagGemini',
       `${queued} queued${gemini.processing ? ' · active' : ''}`,
-      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · Recap writer: ${gemini.recapPrimaryModel || gemini.model || 'Gemini'} · Premium editor: ${gemini.recapEditorModel || 'disabled'}`,
+      `${rpmUsed}/${rpmCap} RPM · ${Number(gemini.requestSpacingMs || 0)}ms spacing · High ${gemini.queueByPriority?.high || 0} · Normal ${gemini.queueByPriority?.normal || 0} · Low ${gemini.queueByPriority?.low || 0} · ${gemini.activeLabel ? `Active: ${gemini.activeLabel}` : 'No active request'} · Recap writer: ${gemini.recapPrimaryModel || gemini.model || 'Gemini'} · Evidence-first recaps: Lite only`,
       geminiState
     );
 
@@ -119,32 +118,15 @@ export function initRenderLogsSection({ $, postJson }) {
       recentGemini.some((entry) => Number(entry.status) === 429) ? 'bad' : 'good'
     );
 
-    const premiumUsed = Math.max(0, Number(recapPrimaryQuota.used || 0));
-    const premiumLimit = Math.max(1, Number(recapPrimaryQuota.limit || gemini.recapEditorDailyLimit || gemini.recapPrimaryDailyLimit || 20));
-    const premiumRemaining = Math.max(0, premiumLimit - premiumUsed);
-    const premiumState = premiumUsed >= premiumLimit ? 'warn' : premiumUsed >= Math.ceil(premiumLimit * 0.8) ? 'warn' : 'good';
-    let lastEditor = 'No premium recap editor pass has run since this process started.';
-    if (recap.lastEditorAt) {
-      const editorModel = recap.lastEditorModel || gemini.recapEditorModel || 'Gemini Flash';
-      const outcome = recap.lastEditorSelected
-        ? 'rewrite selected'
-        : recap.lastEditorFailed
-          ? 'failed; Lite kept'
-          : recap.lastEditorAttempted
-            ? 'Lite kept'
-            : recap.lastEditorReason === 'premium_daily_cap'
-              ? 'quota exhausted; Lite kept'
-              : 'not attempted';
-      lastEditor = `Last editor: ${editorModel} (${outcome}) at ${new Date(recap.lastEditorAt).toLocaleTimeString()}.`;
-    }
-    const quotaSource = recapPrimaryQuota.source && recapPrimaryQuota.source !== 'mongodb'
-      ? ` Counter source: ${recapPrimaryQuota.source}.`
-      : '';
+    const quality = recap.quality || null;
+    const qualityDetail = quality
+      ? `Last recap: ${quality.selectedSentences || 0} sentences / ${quality.characters || 0} chars from ${quality.sourceMessages || 0} viewer messages; ${(Number(quality.durationMs || 0) / 1000).toFixed(1)}s; ${quality.requestCount || 0} Lite requests. ${quality.recoveryAttempted ? 'Coverage recovery used. ' : ''}${quality.sourceExcerpts ? `${quality.sourceExcerpts} direct source excerpt(s) used after model/audit failure. ` : ''}${quality.coverageTargetMet ? 'Coverage target met.' : 'Below coverage target; inspect Recap Evidence logs.'}`
+      : 'Source-grounded writer, one batch audit, and at most one coverage recovery. No non-Lite editor.';
     setDiagnostic(
       'diagRecapFlash',
-      `${premiumUsed}/${premiumLimit} editor starts today`,
-      `${premiumRemaining} QwertBot premium editor start${premiumRemaining === 1 ? '' : 's'} remaining · ${recapPrimaryQuota.model || gemini.recapEditorModel || 'Gemini Flash'} · resets at midnight Pacific. ${lastEditor}${quotaSource}`,
-      premiumState
+      'Flash-Lite only',
+      `${gemini.recapPrimaryModel || 'gemini-3.5-flash-lite'}. ${qualityDetail}`,
+      quality && (!quality.coverageTargetMet || quality.sourceExcerpts) ? 'warn' : 'good'
     );
 
     const taggedInFlight = Number(tagged.inFlight || 0);

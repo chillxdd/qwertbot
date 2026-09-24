@@ -451,7 +451,10 @@ function sentenceHasExplicitIdentityPredicate(sentence, identity = {}) {
 }
 
 function sentenceHasBroadGroupGeneralization(sentence = '') {
-  return /\b(?:chat|the chat|viewers?|everyone|the community|community members?|people)\b[^.!?;]{0,80}\b(?:joked|joking|discussed|debated|argued|believed|focused|talked|reacted|suggested|questioned|celebrated|mocked|teased|speculated|agreed|complained)\b/i.test(String(sentence || ''));
+  // "One viewer joked" is a SINGLE-author attribution, not a group claim.
+  // The old viewers? regex required two authors even for this explicitly safe
+  // narrowing, causing useful one-off details to be deleted after correction.
+  return /\b(?:chat|the chat|viewers|everyone|the community|community members|people)\b[^.!?;]{0,80}\b(?:joked|joking|discussed|debated|argued|believed|focused|talked|reacted|suggested|questioned|celebrated|mocked|teased|speculated|agreed|complained|weighed\s+in|compared|shared|cheered)\b/i.test(String(sentence || ''));
 }
 
 function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventRecords = [], identities = [], mode = 'recap') {

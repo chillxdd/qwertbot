@@ -19,7 +19,6 @@ const {
 const { MAX_BOT_PERSONALITY_NAME_LENGTH, MAX_BOT_PERSONALITY_LENGTH, MAX_BOT_PERSONALITY_COOLDOWN_SECONDS } = require('../services/botPersonality');
 const { getRuntimeDiagnostics } = require('../services/runtimeDiagnostics');
 const { getGeminiClientStatus } = require('../services/geminiClient');
-const { getRecapPrimaryQuotaStatus } = require('../services/geminiRecapQuota');
 const { getAuthStatus } = require('../services/twitchAuth');
 const { getBroadcasterAuthStatus } = require('../services/twitchBroadcasterAuth');
 const { REQUIRED_BOT_APP_SCOPES, REQUIRED_BROADCASTER_APP_SCOPES } = require('../services/twitchChat');
@@ -259,10 +258,7 @@ function registerDashboardRoutes(app, options) {
     const taggedStatus = getBotPersonalityManager?.()?.getRecapCollisionStatus?.() || {};
     const runtime = getRuntimeDiagnostics();
     const gemini = getGeminiClientStatus();
-    const recapPrimaryQuota = await getRecapPrimaryQuotaStatus({
-      model: gemini.recapEditorModel || gemini.recapPrimaryModel,
-      limit: gemini.recapEditorDailyLimit || gemini.recapPrimaryDailyLimit
-    });
+    const recapPrimaryQuota = { enabled: false, model: null, used: 0, limit: 0, remaining: 0, source: 'removed_lite_only' };
 
     return {
       runtime,
@@ -278,6 +274,7 @@ function registerDashboardRoutes(app, options) {
         stopped: Boolean(recapStatus.recapSystemStopped),
         messagesInWindow: Number(recapStatus.messagesInWindow || 0),
         twitchEventsInWindow: Number(recapStatus.twitchEventsInWindow || 0),
+        quality: recapStatus.lastRecapQuality || null,
         lastPrimaryModel: recapStatus.lastRecapPrimaryModel || null,
         lastPrimaryPremium: Boolean(recapStatus.lastRecapPrimaryPremium),
         lastPrimaryFallback: Boolean(recapStatus.lastRecapPrimaryFallback),

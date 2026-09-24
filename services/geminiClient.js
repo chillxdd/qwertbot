@@ -4,19 +4,13 @@ const { createQueuePolicy } = require('./reliability/queuePolicy');
 const chooseQueuedJob = createQueuePolicy();
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_MODEL = String(process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim() || 'gemini-3.5-flash-lite';
-const GEMINI_RECAP_EDITOR_MODEL = String(
-  process.env.GEMINI_RECAP_EDITOR_MODEL || process.env.GEMINI_RECAP_PRIMARY_MODEL || 'gemini-3.5-flash'
-).trim() || 'gemini-3.5-flash';
-const GEMINI_RECAP_EDITOR_DAILY_LIMIT = clampNumber(
-  process.env.GEMINI_RECAP_EDITOR_DAILY_LIMIT || process.env.GEMINI_RECAP_PRIMARY_DAILY_LIMIT,
-  1,
-  1000,
-  20
-);
-// Backward-compatible aliases for existing deployments/env vars. The premium
-// model is now an editorial pass, not the primary recap writer.
-const GEMINI_RECAP_PRIMARY_MODEL = GEMINI_RECAP_EDITOR_MODEL;
-const GEMINI_RECAP_PRIMARY_DAILY_LIMIT = GEMINI_RECAP_EDITOR_DAILY_LIMIT;
+// Recaps are deliberately Lite-only, including evidence checks and recovery.
+// Legacy premium-editor environment variables cannot re-enable the removed path.
+const GEMINI_RECAP_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_RECAP_EDITOR_MODEL = '';
+const GEMINI_RECAP_EDITOR_DAILY_LIMIT = 0;
+const GEMINI_RECAP_PRIMARY_MODEL = GEMINI_RECAP_MODEL;
+const GEMINI_RECAP_PRIMARY_DAILY_LIMIT = 0;
 const HARD_MAX_REQUESTS_PER_MINUTE = 12;
 const REQUEST_RATE_WINDOW_MS = 60 * 1000;
 const MIN_SAFE_REQUEST_START_SPACING_MS = Math.ceil(REQUEST_RATE_WINDOW_MS / HARD_MAX_REQUESTS_PER_MINUTE);
@@ -117,9 +111,11 @@ function getGeminiClientStatus() {
   const recentCutoff = now - REQUEST_RATE_WINDOW_MS;
   return {
     model: GEMINI_MODEL,
-    recapPrimaryModel: GEMINI_MODEL,
+    recapPrimaryModel: GEMINI_RECAP_MODEL,
     recapPrimaryDailyLimit: GEMINI_RECAP_EDITOR_DAILY_LIMIT,
-    recapEditorModel: GEMINI_RECAP_EDITOR_MODEL,
+    recapEditorModel: null,
+    recapEditorEnabled: false,
+    recapStrategy: 'evidence-first-lite',
     recapEditorDailyLimit: GEMINI_RECAP_EDITOR_DAILY_LIMIT,
     requestSpacingMs: getGeminiRequestSpacingMs(),
     hardMaxRequestsPerMinute: HARD_MAX_REQUESTS_PER_MINUTE,
@@ -720,6 +716,7 @@ async function requestGeminiTextWithRetry(prompt, options = {}) {
 module.exports = {
   configureSharedRateGate,
   GEMINI_MODEL,
+  GEMINI_RECAP_MODEL,
   GEMINI_RECAP_PRIMARY_MODEL,
   GEMINI_RECAP_PRIMARY_DAILY_LIMIT,
   GEMINI_RECAP_EDITOR_MODEL,

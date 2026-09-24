@@ -135,6 +135,7 @@ function createRecapManager({
   let eventSequence = 0;
   let firstRecapSent = false;
   let recapInProgress = false;
+  let lastRecapQuality = null;
   let lastRecapPrimaryModel = '';
   let lastRecapPrimaryPremium = false;
   let lastRecapPrimaryFallback = false;
@@ -1962,6 +1963,7 @@ function createRecapManager({
         };
         const result = await generateRecap(chatRecords, contextSnapshot, eventSnapshot, previousRecaps, streamLore, streamTiming, channelName, botUsername);
         recapSummaryBody = result.summary;
+        lastRecapQuality = result.quality || null;
         const routing = result.primaryRouting || {};
         lastRecapPrimaryModel = String(routing.model || '');
         lastRecapPrimaryPremium = Boolean(routing.premium);
@@ -2156,6 +2158,7 @@ function createRecapManager({
       recapSystemStopped: Boolean(recapPaused && collectionPaused),
       loggingMessages: streamStateInitialized && streamLive && !collectionPaused,
       recapInProgress,
+      lastRecapQuality,
       lastRecapPrimaryModel: lastRecapPrimaryModel || null,
       lastRecapPrimaryPremium,
       lastRecapPrimaryFallback,
