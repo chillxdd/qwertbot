@@ -9,11 +9,13 @@ const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_429_RETRIES = 6;
 const DEFAULT_MAX_TOTAL_WAIT_MS = 20 * 60 * 1000;
 const RETRY_SAFETY_MS = 250;
+const EDGE_IP_RESTRICTION_MIN_RETRY_MS = 5 * 60 * 1000;
 
 const webhookQueues = new Map();
 const webhookBlockedUntil = new Map();
 const bucketBlockedUntil = new Map();
 let globalBlockedUntil = 0;
+let globalBlockKind = '';
 
 function finiteNumber(value) {
   const number = Number(value);
@@ -50,6 +52,8 @@ function parseJson(text) {
 
 function readDiscordDiagnostics(response, payload = null, { webhookId = '', attempt = 1, waitedMs = 0 } = {}) {
   const headers = response?.headers;
+  const scopeHeader = String(headers?.get?.('x-ratelimit-scope') || '').trim();
+  const bucket = String(headers?.get?.('x-ratelimit-bucket') || '').trim();
   const bodyRetryMs = secondsToMs(payload?.retry_after);
   const headerRetryMs = retryAfterHeaderMs(headers?.get?.('retry-after'));
   const resetAfterMs = secondsToMs(headers?.get?.('x-ratelimit-reset-after'));
@@ -59,13 +63,21 @@ function readDiscordDiagnostics(response, payload = null, { webhookId = '', atte
     .filter((value) => Number.isFinite(value) && value >= 0)
     .sort((a, b) => b - a)[0] ?? null;
   const global = payload?.global === true || String(headers?.get?.('x-ratelimit-global') || '').toLowerCase() === 'true';
+  const probableEdgeIpRestriction = Number(response?.status) === 429
+    && !global
+    && !scopeHeader
+    && !bucket
+    && (!Number.isFinite(resetAfterMs) || resetAfterMs <= 0)
+    && Number.isFinite(retryAfterMs)
+    && retryAfterMs >= EDGE_IP_RESTRICTION_MIN_RETRY_MS;
   return {
     status: Number(response?.status || 0) || null,
     webhookId: String(webhookId || ''),
     transport: 'fetch',
-    scope: String(headers?.get?.('x-ratelimit-scope') || (global ? 'global' : '') || 'unknown'),
+    scope: String(scopeHeader || (global ? 'global' : '') || 'unknown'),
     global,
-    bucket: String(headers?.get?.('x-ratelimit-bucket') || ''),
+    probableEdgeIpRestriction,
+    bucket,
     limit: finiteNumber(headers?.get?.('x-ratelimit-limit')),
     remaining: finiteNumber(headers?.get?.('x-ratelimit-remaining')),
     resetAfterMs,
@@ -84,6 +96,7 @@ function publicDiagnostics(diag = {}) {
     transport: String(diag.transport || 'fetch'),
     scope: String(diag.scope || 'unknown'),
     global: diag.global === true,
+    probableEdgeIpRestriction: diag.probableEdgeIpRestriction === true,
     bucket: String(diag.bucket || ''),
     limit: diag.limit ?? null,
     remaining: diag.remaining ?? null,
@@ -102,6 +115,7 @@ function formatDiagnostics(diag = {}) {
     `webhook=${d.webhookId || 'unknown'}`,
     `scope=${d.scope}`,
     `global=${d.global}`,
+    `edgeIp=${d.probableEdgeIpRestriction}`,
     `bucket=${d.bucket || 'n/a'}`,
     `remaining=${d.remaining ?? 'n/a'}`,
     `retryAfter=${d.retryAfterSeconds == null ? 'n/a' : `${d.retryAfterSeconds}s`}`,
@@ -114,8 +128,11 @@ function formatDiagnostics(diag = {}) {
 function rateLimitError(diag, message = '') {
   const details = publicDiagnostics(diag);
   const suffix = details.retryAfterSeconds != null ? `; retry after ${details.retryAfterSeconds}s` : '';
+  const prefix = details.probableEdgeIpRestriction
+    ? 'Probable Discord edge/IP restriction detected; QwertBot is suppressing all Discord webhook sends for this cooldown'
+    : 'Discord webhook failed with HTTP 429';
   const err = deliveryError(
-    `Discord webhook failed with HTTP 429${message ? `: ${message}` : ''}${suffix} (${formatDiagnostics(diag)})`,
+    `${prefix}${message ? `: ${message}` : ''}${suffix} (${formatDiagnostics(diag)})`,
     { status: 429, state: 'NOT_SENT' }
   );
   err.discordDiagnostics = details;
@@ -127,7 +144,13 @@ function noteBlock(diag, webhookKey, now = Date.now()) {
   const waitMs = Number(diag?.retryAfterMs);
   if (!Number.isFinite(waitMs) || waitMs <= 0) return;
   const until = now + waitMs + RETRY_SAFETY_MS;
-  if (diag.global === true || diag.scope === 'global') globalBlockedUntil = Math.max(globalBlockedUntil, until);
+  if (diag.probableEdgeIpRestriction === true) {
+    if (until >= globalBlockedUntil) globalBlockKind = 'edge/ip';
+    globalBlockedUntil = Math.max(globalBlockedUntil, until);
+  } else if (diag.global === true || diag.scope === 'global') {
+    if (until >= globalBlockedUntil) globalBlockKind = 'global';
+    globalBlockedUntil = Math.max(globalBlockedUntil, until);
+  }
   webhookBlockedUntil.set(webhookKey, Math.max(webhookBlockedUntil.get(webhookKey) || 0, until));
   if (diag.bucket) bucketBlockedUntil.set(diag.bucket, Math.max(bucketBlockedUntil.get(diag.bucket) || 0, until));
 }
@@ -140,16 +163,18 @@ function noteSuccessLimit(diag, webhookKey, now = Date.now()) {
 }
 
 function knownLimitStatus(webhookKey, bucket = '', now = Date.now()) {
+  const globalScope = globalBlockKind === 'edge/ip' ? 'edge/ip' : 'global';
   const candidates = [
-    { until: globalBlockedUntil, scope: 'global', global: true },
-    { until: webhookBlockedUntil.get(webhookKey) || 0, scope: 'shared', global: false },
-    { until: bucket ? (bucketBlockedUntil.get(bucket) || 0) : 0, scope: 'shared', global: false }
+    { until: globalBlockedUntil, scope: globalScope, global: globalBlockKind !== 'edge/ip', probableEdgeIpRestriction: globalBlockKind === 'edge/ip' },
+    { until: webhookBlockedUntil.get(webhookKey) || 0, scope: 'shared', global: false, probableEdgeIpRestriction: false },
+    { until: bucket ? (bucketBlockedUntil.get(bucket) || 0) : 0, scope: 'shared', global: false, probableEdgeIpRestriction: false }
   ];
   const active = candidates.sort((a, b) => b.until - a.until)[0];
   return {
     waitMs: Math.max(0, Number(active?.until || 0) - now),
     scope: active?.scope || 'unknown',
-    global: active?.global === true
+    global: active?.global === true,
+    probableEdgeIpRestriction: active?.probableEdgeIpRestriction === true
   };
 }
 
@@ -190,6 +215,7 @@ async function postDiscordWebhook({
             transport: 'fetch',
             scope: known.scope,
             global: known.global,
+            probableEdgeIpRestriction: known.probableEdgeIpRestriction === true,
             bucket: lastBucket,
             remaining: 0,
             retryAfterMs: known.waitMs,
@@ -199,7 +225,7 @@ async function postDiscordWebhook({
             detail: 'A Discord rate limit from a previous response is still active.'
           }, 'A Discord rate limit from a previous response is still active');
         }
-        console.warn(`[Discord Webhook] Waiting ${Math.round(known.waitMs) / 1000}s for known ${known.scope} rate-limit window before ${purpose}.`);
+        console.warn(`[Discord Webhook] Suppressing ${purpose} for ${Math.round(known.waitMs) / 1000}s due to known ${known.scope} rate-limit window.`);
         await context.sleep(known.waitMs);
         waitedMs += known.waitMs;
       }
@@ -208,7 +234,7 @@ async function postDiscordWebhook({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'SqwertArmyBot/1.0 (+https://sqwertarmybot.fyi)'
+          'User-Agent': 'DiscordBot (https://sqwertarmybot.fyi, 1.0)'
         },
         body: JSON.stringify(body),
         timeoutMs
@@ -236,6 +262,9 @@ async function postDiscordWebhook({
 
       noteBlock(diag, webhookKey);
       console.warn(`[Discord Webhook] HTTP 429 for ${purpose}: ${formatDiagnostics(diag)}${diag.detail ? ` detail=${JSON.stringify(diag.detail)}` : ''}.`);
+      if (diag.probableEdgeIpRestriction === true) {
+        console.warn(`[Discord Webhook] Probable Discord edge/IP restriction detected: no normal bucket/scope/reset metadata and a long retry-after. All Discord webhook sends from this QwertBot instance are suppressed for about ${Math.round((diag.retryAfterMs || 0) / 1000)}s.`);
+      }
 
       const waitMs = Number.isFinite(diag.retryAfterMs) && diag.retryAfterMs > 0 ? diag.retryAfterMs + RETRY_SAFETY_MS : 1000;
       const retriesUsed = attempt - 1;
@@ -255,6 +284,7 @@ function resetDiscordRateLimitStateForTests() {
   webhookBlockedUntil.clear();
   bucketBlockedUntil.clear();
   globalBlockedUntil = 0;
+  globalBlockKind = '';
 }
 
 module.exports = {
@@ -267,5 +297,6 @@ module.exports = {
   knownLimitStatus,
   resetDiscordRateLimitStateForTests,
   DEFAULT_MAX_429_RETRIES,
-  DEFAULT_MAX_TOTAL_WAIT_MS
+  DEFAULT_MAX_TOTAL_WAIT_MS,
+  EDGE_IP_RESTRICTION_MIN_RETRY_MS
 };

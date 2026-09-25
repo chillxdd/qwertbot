@@ -622,9 +622,12 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
         if (!d.success) {
           const diag = d.diagnostics || {};
           const extra = diag.status === 429
-            ? ` [scope=${diag.scope || 'unknown'}, global=${diag.global === true}, retry=${diag.retryAfterSeconds ?? 'n/a'}s, bucket=${diag.bucket || 'n/a'}]`
+            ? ` [scope=${diag.scope || 'unknown'}, global=${diag.global === true}, edge/IP=${diag.probableEdgeIpRestriction === true}, retry=${diag.retryAfterSeconds ?? 'n/a'}s, bucket=${diag.bucket || 'n/a'}]`
             : '';
-          throw new Error(`${d.error || 'Discord webhook test failed.'}${extra}`);
+          const edgeHint = diag.probableEdgeIpRestriction === true
+            ? ' Discord appears to be restricting this outbound IP at the edge; QwertBot will suppress all Discord webhook sends until the reported cooldown expires.'
+            : '';
+          throw new Error(`${d.error || 'Discord webhook test failed.'}${extra}${edgeHint}`);
         }
         const diag = d.diagnostics || {};
         const retryNote = Number(diag.attempt || 1) > 1 || Number(diag.waitedSeconds || 0) > 0
