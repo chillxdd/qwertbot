@@ -1,4 +1,14 @@
 const RecapPromptConfig = require('../models/RecapPromptConfig');
+const { createHash } = require('node:crypto');
+// Exact post-premium stock presets only. Do not rewrite moderator custom text.
+const POST_PREMIUM_PRIMARY_SHA256 = '26323b89b3161488f84ca148089bbcb31cd34dfe687daaede2e3359894532d0e';
+const POST_PREMIUM_EXPANSION_SHA256 = '36fc58d1378b30e39da656a62ead6f90542f6c334d140720e264916f6191b123';
+function restoreClassicStockText(value, fallback, knownHash) {
+  const text = String(value || '');
+  if (!text.trim()) return fallback;
+  return createHash('sha256').update(text.trim()).digest('hex') === knownHash ? fallback : text;
+}
+
 
 const MAX_PRIMARY_INSTRUCTIONS_LENGTH = 20000;
 const MAX_EXPANSION_INSTRUCTIONS_LENGTH = 12000;
@@ -17,22 +27,28 @@ Prioritize:
 - Notable questions directed at Qwert.
 - Clear wins, losses, mistakes, discoveries, or reactions when chat actually supports them.
 - Useful context about what chat was broadly focused on.
-- Sexual jokes, innuendo, suggestive fake commands, or NSFW humor when genuinely noteworthy.
+- Sexual jokes, innuendo, suggestive fake commands, or mildly NSFW humor when genuinely noteworthy.
+- Concrete details of funny, flirty, suggestive, quirky, or memorable viewer conversations when supported.
 
 Deprioritize:
 - Routine greetings/farewells.
 - Someone leaving for work, a meeting, food, sleep, lurking, or returning.
 - Mundane one-off personal updates.
 - Weak isolated comments or generic filler.
+- A one-off joke, label, greeting, metaphor, or nickname that appears in only one source message unless it is unusually important on its own.
+- Routine EventSub/platform telemetry, individual subscriptions, follows, small cheers, and support roll calls.
 
 OVERALL PICTURE:
 - Summarize broad repeated topics once instead of listing every message.
+- Select the 2-3 strongest moments rather than trying to cover every supported topic. A fourth belongs only when it is genuinely as important or memorable.
 - Mention usernames only when genuinely notable or useful.
 - Balance concrete highlights with the overall picture.
+- Treat noteworthy EventSub activity as supporting context, not a checklist; do not enumerate routine supporter names.
+- In a chat-rich window, include at most one EventSub-only poll/prediction/result unless viewer chat directly makes multiple results important.
+- When space is limited, prefer a specific worthwhile chat detail over platform telemetry.
+- Avoid vague filler such as "viewers discussed X" or "viewers reacted to Y" when the source does not support what was specifically noteworthy about it.
+- Keep each sentence centered on one coherent topic; do not comma-chain unrelated facts into a laundry list.
 - Do not force unrelated topics into one story.
-- Do not let one dominant conversation thread crowd out other distinct worthwhile moments from the same recap window.
-- When several unrelated noteworthy things happened, represent several of them rather than compressing the entire hour into the most obvious topic.
-- Treat raids and routine raid welcomes as background context unless the post-raid conversation itself became distinctive or the raid materially shaped the hour. A raid does not automatically deserve the lead sentence.
 
 SEXUAL / SUGGESTIVE CHAT:
 - Sexual jokes, innuendo, suggestive humor, horny jokes, or mildly NSFW fake commands may be included when recap-worthy.
@@ -46,57 +62,34 @@ SEXUAL / SUGGESTIVE CHAT:
 WORDING VARIETY:
 - Avoid repetitive stock recap language.
 - Do not overuse "banter," "chaos," "chaotic," "vibes," "meanwhile," "discussion," or "debate."
-- Avoid generic topic-inventory wording such as "viewers discussed X, Y, and Z" when the source supports more concrete descriptions of what actually happened.
-- Avoid vague catch-all phrases such as "various topics", "several things", "multiple questions", or "various stat spreads". State the specific supported substance that made the moment worth knowing, or omit it.
 - Prefer concrete verbs such as "joked," "suggested," "argued," "questioned," "celebrated," or "reacted" only when supported.
-- Prefer describing the memorable substance of a conversation rather than merely naming its general subject.
 - Do not introduce unsupported meaning merely for variety.
+- Never turn a metaphorical/channel label or greeting into a personal fact. For example, a viewer saying "welcome to the middle child chat" does NOT establish that Qwert is a middle child, ignored, neglected, or has any related personal status.
+- Do not upgrade one isolated viewer comment into a broad claim such as "chat joked/discussed/debated...". Broad group wording requires repeated support from multiple source messages; otherwise attribute it narrowly (for example, "one viewer joked...") when it is actually recap-worthy, or omit it.
 
 LENGTH AND COVERAGE:
-- Match recap coverage to how much meaningful chat occurred in the window.
-- Use the provided source-message count as context when deciding how broad the recap should be.
 - When enough worthwhile material exists, use most of the available recap space.
-- Do not pad with mundane details merely because chat volume was high.
-- A high-volume window should normally contain broader coverage than a quiet window when multiple worthwhile moments actually occurred.
-- For fewer than 100 messages, 1-2 worthwhile moments may be enough.
-- For 100-299 messages, normally try to capture 2-4 distinct worthwhile moments when supported.
-- For 300-599 messages, normally try to capture at least 3 distinct worthwhile moments or themes when supported.
-- For 600+ messages, normally try to capture 4 or more distinct worthwhile moments or themes when supported.
-- These are coverage goals, not quotas. If a busy hour was genuinely dominated by one subject, or most messages were filler/repetition, do not invent variety just to reach a target.
-- Do not devote nearly the entire recap to one narrow conversation if several other clearly worthwhile moments occurred.
-- A short recap should happen only when the source genuinely lacks enough noteworthy material.
-- Use 3-5 compact complete sentences when useful.
-- Favor meaningful coverage over extreme compression.`;
+- Do not pad with mundane details.
+- A short recap should happen only when source chat genuinely lacks enough noteworthy material.
+- Use 2-4 compact complete sentences when useful.`;
 
-const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap when the current draft underrepresents worthwhile material in the source. Use more of the available space when doing so improves meaningful coverage.
+const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap to use more of the available space only when the source contains additional worthwhile material.
 
-COVERAGE CHECK:
-- Consider the size of the source chat when deciding whether the existing recap is sufficiently complete.
-- Use the provided source-message count as context.
-- A high-volume window should not be represented by only one narrow conversation thread when several other worthwhile moments are supported.
-- For 100-299 messages, actively check whether 2-4 distinct worthwhile moments were omitted.
-- For 300-599 messages, actively look for at least 3 distinct worthwhile moments or themes before deciding the recap is sufficiently complete.
-- For 600+ messages, actively look for 4 or more distinct worthwhile moments or themes when supported.
-- These are coverage goals, not quotas. Do not manufacture additional topics merely because the source was busy.
-- A large number of messages can still legitimately produce a short recap if most of the source was repetitive, mundane, or centered on one genuinely dominant topic.
-
-REVISION RULES:
 - Keep accurate existing facts and correct unsupported implications.
+- Do not use expansion to promote an isolated one-message joke/label into a recurring chat theme or a personal fact about Qwert or another viewer.
+- Broad phrases such as "chat joked/discussed/debated" require multiple directly supporting source messages; a single remark should remain explicitly one-viewer wording or be omitted.
 - Add only noteworthy details directly supported by current chat or verified Twitch events.
-- Actively scan for notable topics, jokes, reactions, gameplay details, predictions, questions, recurring themes, conclusions, or memorable exchanges omitted from the current recap.
+- Keep the recap selective: 2-3 strong moments are better than a longer inventory of weak topics.
+- Treat EventSub activity as supporting context rather than a checklist; do not add routine support telemetry or enumerate supporters merely to increase length.
+- Do not add vague "viewers discussed/reacted to" clauses simply to grow the recap, and do not comma-chain unrelated facts.
+- Actively scan for specific notable conversations, jokes, flirty/suggestive exchanges, reactions, gameplay details, predictions, or recurring themes omitted from the current recap.
 - Prefer adding a genuinely different useful detail over merely rewording an existing one.
 - Every added detail should introduce a distinct topic, event, joke, reaction, conclusion, or fact not already represented.
 - Do not count narrower wording as a new detail. If a broad idea is already covered, do not repeat a narrower version unless it adds a clearly different supported event, conclusion, or reaction.
 - Avoid semantic duplication even when the wording is different.
 - If several messages belong to the same topic, summarize that topic once and use remaining space for a different noteworthy topic when one exists.
-- Do not allow one dominant topic to consume most of the recap when the source contains several other clearly recap-worthy moments.
-- Prefer concrete supported details over generic wording such as "viewers discussed several topics."
-- Do not add vague catch-all phrases such as "various topics", "several things", "multiple questions", or "various stat spreads" merely to broaden the recap. Name the specific supported substance or choose a different worthwhile moment.
-- Treat raids and routine raid welcomes as background context unless the post-raid conversation itself became distinctive; do not spend a full sentence on generic welcomes just to fill space.
-- Preserve usernames only when they are useful to understanding a memorable moment.
 - Preserve moderator announcements as intentional moderator/broadcaster statements when relevant without inventing implications beyond their text.
-- Do not remove useful supported details merely to make the recap shorter or more elegant.
-- Do not pad, repeat, or add mundane filler just to hit a target.`;
+- Do not pad, repeat, or add mundane filler just to hit the target.`;
 
 function normalizeChannelName(channelName) {
   return String(channelName || '').trim().toLowerCase();
@@ -127,8 +120,8 @@ async function getRecapPromptConfig(channelName) {
   ).lean();
 
   return {
-    primaryInstructions: String(record.primaryInstructions || DEFAULT_PRIMARY_INSTRUCTIONS),
-    expansionInstructions: String(record.expansionInstructions || DEFAULT_EXPANSION_INSTRUCTIONS),
+    primaryInstructions: restoreClassicStockText(record.primaryInstructions, DEFAULT_PRIMARY_INSTRUCTIONS, POST_PREMIUM_PRIMARY_SHA256),
+    expansionInstructions: restoreClassicStockText(record.expansionInstructions, DEFAULT_EXPANSION_INSTRUCTIONS, POST_PREMIUM_EXPANSION_SHA256),
     source: 'mongodb',
     updatedAt: record.updatedAt || null
   };

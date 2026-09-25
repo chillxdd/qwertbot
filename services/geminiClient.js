@@ -115,7 +115,7 @@ function getGeminiClientStatus() {
     recapPrimaryDailyLimit: GEMINI_RECAP_EDITOR_DAILY_LIMIT,
     recapEditorModel: null,
     recapEditorEnabled: false,
-    recapStrategy: 'evidence-first-lite',
+    recapStrategy: 'classic-lite-rollback',
     recapEditorDailyLimit: GEMINI_RECAP_EDITOR_DAILY_LIMIT,
     requestSpacingMs: getGeminiRequestSpacingMs(),
     hardMaxRequestsPerMinute: HARD_MAX_REQUESTS_PER_MINUTE,
