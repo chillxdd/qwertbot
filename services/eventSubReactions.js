@@ -3,6 +3,7 @@ const context = require('./reliability/context');
 const delivery = require('./reliability/delivery');
 const { httpDeliveryError } = require('./reliability/twitchDelivery');
 const { fetchWithTimeout: fetch } = require('./httpClient');
+const { postDiscordWebhook: deliverDiscordWebhook } = require('./discordWebhook');
 const EventSubReaction = require('../models/EventSubReaction');
 const { MAX_AUTOMATION_SPACING_SECONDS } = require('./automationSpacing');
 const { beginEventReaction, endEventReaction, getEventReactionHoldStatus } = require('./eventReactionHold');
@@ -532,7 +533,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     return reactionToClient(saved, currentAutomationSpacingSeconds());
   }
 
-  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none', { embed = null, components = [] } = {}) {
+  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none', { embed = null, components = [], testMode = false } = {}) {
     const url = normalizeDiscordWebhookUrl(webhookUrl);
     const message = cleanText(content, 2000);
     if (!message && !embed && !(Array.isArray(components) && components.length)) throw new Error('Discord Notification is empty.');
@@ -542,20 +543,17 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     if (Array.isArray(components) && components.length) body.components = components;
     const targetUrl = new URL(url);
     if (Array.isArray(components) && components.length) targetUrl.searchParams.set('with_components', 'true');
-    const response = await fetch(targetUrl.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    return deliverDiscordWebhook({
+      webhookUrl: targetUrl.toString(),
+      body,
+      purpose: testMode ? 'admin test' : 'EventSub notification',
+      // Admin tests should stay interactive. They will transparently honor a
+      // short Discord Retry-After, but a long/global limit is surfaced to the
+      // dashboard immediately with the exact diagnostics instead of hanging
+      // the browser request for minutes.
+      max429Retries: testMode ? 2 : 6,
+      maxTotalWaitMs: testMode ? 15000 : 20 * 60 * 1000
     });
-    if (!response.ok) {
-      let detail = '';
-      try {
-        const payload = await response.json();
-        detail = String(payload?.message || payload?.error || '').trim();
-      } catch (_) {}
-      throw httpDeliveryError('Discord webhook', response, detail);
-    }
-    return { status: response.status };
   }
 
   function findDiscordActionByWebhookId(webhookId) {
@@ -593,8 +591,8 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     const renderedContent = renderEventTemplate(String(content || ''), type, previewEvent, extra).trim();
     const message = renderedContent || (rendered.embed || rendered.components.length ? '' : 'QwertBot Discord notification test ✅');
     // Test sends always suppress mentions, regardless of the saved action setting.
-    await postDiscordWebhook(targetUrl, message, 'none', rendered);
-    return { success: true };
+    const result = await postDiscordWebhook(targetUrl, message, 'none', { ...rendered, testMode: true });
+    return { success: true, diagnostics: result?.diagnostics || null };
   }
 
   async function sendTwitchShoutout(type, event) {
@@ -689,7 +687,9 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
   }
 
   async function runReaction(reaction, type, event, durableStep = null) {
-    beginEventReaction();
+    const holdRelevant = (reaction.actions || []).some((action) => action?.enabled !== false && action?.type !== 'discord_notification');
+    if (holdRelevant) beginEventReaction();
+    let completed = false;
     console.log(`[EventSub Reactions] Starting ${reaction.name} for ${type}.`);
     try {
       for (const [index, action] of (reaction.actions || []).entries()) {
@@ -707,16 +707,23 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
           throw err;
         }
       }
+      completed = true;
     } finally {
       const configuredHold = Number(reaction.holdSeconds);
       const spacingSeconds = currentAutomationSpacingSeconds();
-      const effectiveHoldSeconds = Math.max(
+      const effectiveHoldSeconds = completed && holdRelevant ? Math.max(
         spacingSeconds,
         Number.isFinite(configuredHold) && configuredHold > 0 ? configuredHold : 0
-      );
-      endEventReaction(effectiveHoldSeconds);
-      const holdSource = Number.isFinite(configuredHold) && configuredHold > 0 ? 'custom' : 'global Automation Spacing';
-      console.log(`[EventSub Reactions] Finished ${reaction.name}; recaps/timers held for ${effectiveHoldSeconds}s (${holdSource}).`);
+      ) : 0;
+      if (holdRelevant) endEventReaction(effectiveHoldSeconds);
+      if (completed && holdRelevant) {
+        const holdSource = Number.isFinite(configuredHold) && configuredHold > 0 ? 'custom' : 'global Automation Spacing';
+        console.log(`[EventSub Reactions] Completed ${reaction.name}; recaps/timers held for ${effectiveHoldSeconds}s (${holdSource}).`);
+      } else if (completed) {
+        console.log(`[EventSub Reactions] Completed ${reaction.name}; Discord-only reaction did not hold recaps/timers.`);
+      } else {
+        console.warn(`[EventSub Reactions] Failed ${reaction.name}; no post-reaction recap/timer hold was added.`);
+      }
     }
   }
 

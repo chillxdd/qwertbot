@@ -619,8 +619,18 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
           discordEmbed: readDiscordEmbed(row),
           eventType: $('eventReactionType').value
         });
-        if (!d.success) throw new Error(d.error || 'Discord webhook test failed.');
-        updateDiscordHelp('Preview sent successfully.');
+        if (!d.success) {
+          const diag = d.diagnostics || {};
+          const extra = diag.status === 429
+            ? ` [scope=${diag.scope || 'unknown'}, global=${diag.global === true}, retry=${diag.retryAfterSeconds ?? 'n/a'}s, bucket=${diag.bucket || 'n/a'}]`
+            : '';
+          throw new Error(`${d.error || 'Discord webhook test failed.'}${extra}`);
+        }
+        const diag = d.diagnostics || {};
+        const retryNote = Number(diag.attempt || 1) > 1 || Number(diag.waitedSeconds || 0) > 0
+          ? ` after ${diag.attempt || 1} attempt(s) / ${diag.waitedSeconds || 0}s rate-limit wait`
+          : '';
+        updateDiscordHelp(`Preview sent successfully${retryNote}.`);
       } catch (err) {
         updateDiscordHelp(`Test failed: ${err.message || err}`);
       } finally {

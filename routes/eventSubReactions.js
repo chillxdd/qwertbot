@@ -37,16 +37,20 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
     const manager = getEventSubReactionManager();
     if (!getDatabaseConnected() || !manager) return unavailable(res);
     try {
-      await manager.testDiscordNotification({
+      const result = await manager.testDiscordNotification({
         webhookUrl: String(req.body?.webhookUrl || ''),
         webhookId: String(req.body?.webhookId || ''),
         content: String(req.body?.content || ''),
         discordEmbed: req.body?.discordEmbed || null,
         eventType: String(req.body?.eventType || '')
       });
-      return res.json({ success: true });
+      return res.json({ success: true, diagnostics: result?.diagnostics || null });
     } catch (err) {
-      return res.status(400).json({ success: false, error: err.message || 'Could not send Discord webhook test.' });
+      return res.status(400).json({
+        success: false,
+        error: err.message || 'Could not send Discord webhook test.',
+        diagnostics: err?.discordDiagnostics || null
+      });
     }
   });
 
