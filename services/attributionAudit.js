@@ -191,6 +191,23 @@ function buildAuditPrompt({
     ? '- If a sentence contains only public/general-world knowledge and makes no factual claim about a viewer, broadcaster, bot, channel, chat/community, current stream, or private channel history, mark supported=true for attribution purposes. evidenceIds may be empty. Do not fact-check public knowledge against channel context.'
     : '- If the sentence has no specific person/entity attribution, use true only when its scope and generality are also supported.';
 
+  // V25: recap-only relationship repair. Keep the classic paragraph pipeline
+  // and the existing two-pass verification contract; do not turn a bad link
+  // between facts into a reason to discard both facts or auto-approve a rewrite.
+  const recapRelationshipRules = mode === 'recap'
+    ? `RECAP FACTS AND CONNECTIONS - SEPARATE, DO NOT DISCARD:
+- Evaluate each factual clause independently, and evaluate any claimed connection between clauses as an additional claim. Supported A and supported B do not by themselves support A causing B.
+- Words such as "prompting", "sparking", "leading to", "inspiring", "causing", "triggering", "resulting in", "in response to", or "because of" require direct current-source evidence for that exact causal/reaction link. Nearby messages, source order, shared keywords, and a verified gifting/raid/poll event alone do not establish the link.
+- If A and B are independently supported but their connection is not, mark the ORIGINAL sentence supported=false and return a minimal replacement that KEEPS BOTH facts as separate complete sentences. A replacement string may contain multiple sentences. Removing the bad connection is a repair, not a reason to omit either supported fact.
+- Example ONLY, not source evidence: "A gifted subs, prompting jokes about X and Y." becomes "A gifted subs. Chat also joked about X and Y." ONLY if the sources independently support the gift and the group-level jokes. Keep qualifying context such as a promotion only if that context is independently supported too.
+- Apply the same separation to invented shared participation: "A and B debated X and Y" must not imply a mutual debate or that both discussed both topics when the evidence only supports "A discussed X. B discussed Y." Keep each speaker's action/topic bound to their own evidence; do not transfer jokes or reactions to an event's actor.
+- Use independent sentences, optionally joined by a neutral "also". Do not replace an unsupported causal link with an unverified timeline or interaction such as "after that", "following this", "in reply", or "in reaction". Separate occurrences are not automatically a sequence, response, or coordinated conversation.
+- If only part of a sentence is supported, preserve just the supported part and remove or narrowly correct the unsupported clause. If no factual content can be supported, an empty replacement is still correct. Never preserve a clause merely because it was present in the draft, and never add filler or raw source quotes to compensate.
+- This is NOT a blanket ban on causal words. Keep a causal/reaction link when direct source evidence explicitly establishes it, with the same actors, scope, and uncertainty. Keep harmless independent clauses connected by "and" or "while" when they do not assert a false causal, temporal, or shared-participation relationship.
+- For a split replacement, evidenceIds must include the exact source IDs needed for EVERY retained fact; evidence for the event alone cannot validate unrelated chat claims. Existing named-identity and multi-author group-evidence requirements still apply. On re-audit, assess each resulting sentence against its own relevant sources; do not require unrelated sentences to share an author, topic, or causal link.
+- Return ONE result row per ORIGINAL S-id, not one row per sentence inside a replacement. Use the replacement string for the full corrected passage; the existing next audit pass will verify its separate sentences. Do not mark the original causal sentence supported=true just because its independently supported facts can be salvaged.`
+    : '';
+
   return `You are performing a strict attribution and identity audit on ${label}.
 
 SECURITY:
@@ -213,7 +230,7 @@ FOR EACH SENTENCE:
 - If the sentence says a named person IS/HAS a status, role, relationship, preference, property, nickname, reaction, decision, or action, at least one cited source must explicitly bind that predicate to that person. A different viewer mentioning similar words is not evidence.
 - Treat coordinated named-subject wording as a high-risk attribution. A sentence like "A, B, and C discussed X, Y, and Z" is supported only if EACH named person's own cited source supports the full shared claim. If different viewers contributed different topics, do not imply that every person discussed every topic: split them into separately bound clauses/sentences, or generalize to "viewers" when the aggregate evidence supports the group-level topic summary.
 - If the sentence uses broad group wording (chat/viewers/everyone/community), cite at least two directly relevant source messages; one isolated remark is insufficient for a group-level claim.
-${sentenceScopeRule}
+${sentenceScopeRule}${recapRelationshipRules ? `\n\n${recapRelationshipRules}\n` : ''}
 - If unsupported, provide a minimal replacement that removes only the unsupported attribution/generalization while preserving supported material.
 - Prefer a safe narrower replacement over deleting useful recap content. If the topic itself is supported but the named attribution is not, remove/generalize the unsafe name (for example "one viewer..." or "viewers...") rather than returning an empty replacement. Use an empty replacement only when the factual content itself cannot be safely preserved.
 - A replacement may not add a new person, fact, motive, chronology, causal link, relationship, status, or broader scope.
