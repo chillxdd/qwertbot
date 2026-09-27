@@ -2,6 +2,7 @@
 const { createHash, randomUUID } = require('node:crypto');
 const { collection, WRITE_OPTIONS, isDuplicate } = require('./store');
 const context = require('./context');
+const { staleDeliveryReason } = require('./recoveryScope');
 const idFor = (key) => `delivery:${createHash('sha256').update(String(key)).digest('hex')}`;
 function unknownError(key, cause) {
   const err = new Error(`Delivery needs review; it may already have reached Twitch. No automatic resend. (${key})`, { cause });
@@ -21,17 +22,19 @@ function createDeliveryService({ getCollection = collection, guard = context.ass
     let row;
     try {
       row = await db.findOneAndUpdate({ _id: id }, { $setOnInsert: {
-        kind: 'delivery', deliveryKind: kind, namespace: String(process.env.TWITCH_CHANNEL || payload.channelName || payload.channel || '').replace(/^#/, '').toLowerCase(), key, payload, state: 'prepared', attempts: 0, createdAt: new Date()
+        kind: 'delivery', deliveryKind: kind,
+        ...(context.current().recoveryScope || {}), namespace: String(process.env.TWITCH_CHANNEL || payload.channelName || payload.channel || '').replace(/^#/, '').toLowerCase(), key, payload, state: 'prepared', attempts: 0, createdAt: new Date()
       } }, { ...WRITE_OPTIONS, upsert: true, returnDocument: 'after', includeResultMetadata: false });
     } catch (err) {
       if (!isDuplicate(err)) throw err;
       row = await get(key);
     }
+    if (row?.recoveryClosed) throw context.cancelledError('This delivery was dismissed or expired; it will not be resent.');
     if (row?.state === 'sent') return { result: row.result, payload: row.payload, replayed: true, key };
     if (!row || !['prepared', 'not_sent'].includes(row.state)) throw unknownError(key);
     const attemptId = randomUUID();
     let claimed;
-    try { claimed = await db.findOneAndUpdate({ _id: id, state: { $in: ['prepared', 'not_sent'] } }, {
+    try { claimed = await db.findOneAndUpdate({ _id: id, recoveryClosed: { $ne: true }, state: { $in: ['prepared', 'not_sent'] } }, {
       $set: { state: 'sending', attemptId, updatedAt: new Date(), fence: context.fence() }, $inc: { attempts: 1 },
       $unset: { purgeAt: '' }
     }, { ...WRITE_OPTIONS, returnDocument: 'after', includeResultMetadata: false });
@@ -89,12 +92,57 @@ function createDeliveryService({ getCollection = collection, guard = context.ass
     const existing = await get(key);
     if (inFlight.has(key)) throw new Error('This delivery is still in flight.');
     // Retrying a review whose acknowledgement was lost is safe and idempotent.
+    if (existing?.recoveryClosed) return null;
     if (existing?.state === outcome) return existing;
-    return getCollection().findOneAndUpdate({ _id: idFor(key), state: { $in: ['sending', 'unknown'] } }, {
+    return getCollection().findOneAndUpdate({ _id: idFor(key), recoveryClosed: { $ne: true }, state: { $in: ['sending', 'unknown'] } }, {
       $set: { state: outcome, reviewedAt: new Date(), updatedAt: new Date() }
     }, { ...WRITE_OPTIONS, returnDocument: 'after', includeResultMetadata: false });
   }
-  return { get, deliver, resolve, isInFlight: (key) => inFlight.has(key) };
+  function closurePatch(reason, resolution = 'dismissed') {
+    return { recoveryClosed: true, recoveryResolution: resolution,
+      recoveryClosedAt: new Date(), recoveryReason: String(reason || '').slice(0, 600),
+      // Keep the actual sent/unknown/not_sent receipt state; closing recovery
+      // is NOT evidence that the remote service received (or missed) the send.
+      purgeAt: new Date(Date.now() + 90 * 86400000), updatedAt: new Date() };
+  }
+  async function dismiss(key, { reason = 'Dismissed by a moderator; do not resend.', resolution = 'dismissed' } = {}) {
+    await guard();
+    if (inFlight.has(key)) throw new Error('This delivery is still in flight. Wait for it to stop before dismissing it.');
+    const existing = await get(key);
+    if (!existing) throw new Error('Delivery record not found. Refresh the recovery queue.');
+    if (existing.recoveryClosed) return existing;
+    if (inFlight.has(key)) throw new Error('This delivery is still in flight.');
+    return getCollection().findOneAndUpdate({ _id: idFor(key), state: existing.state, recoveryClosed: { $ne: true } },
+      { $set: closurePatch(reason, resolution) },
+      { ...WRITE_OPTIONS, returnDocument: 'after', includeResultMetadata: false });
+  }
+  async function closeEventReceipts(namespace, job, reason, resolution = 'expired') {
+    await guard();
+    const prefix = `event:${namespace}:${job.messageId}:`;
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return getCollection().updateMany({ namespace, kind: 'delivery', recoveryClosed: { $ne: true },
+      $or: [{ parentEventId: job._id }, { key: { $regex: `^${escaped}` } }]
+    }, { $set: closurePatch(reason, resolution) }, WRITE_OPTIONS);
+  }
+  async function expireStale(namespace, status) {
+    await guard();
+    const rows = await getCollection().find({ namespace, kind: 'delivery', recoveryClosed: { $ne: true },
+      state: { $in: ['prepared', 'not_sent', 'unknown', 'sending'] }
+    }, { maxTimeMS: 5000 }).sort({ createdAt: 1 }).limit(1000).toArray();
+    let count = 0;
+    for (const row of rows) {
+      // Event receipts are closed with their parent so offline/follow events
+      // retain their own policy. Legacy orphans remain manually dismissible.
+      if (row.parentEventId || String(row.key || '').startsWith('event:')) continue;
+      const reason = staleDeliveryReason(row, typeof status === 'function' ? status() : status);
+      if (!reason) continue;
+      const result = await getCollection().updateOne({ _id: row._id, recoveryClosed: { $ne: true } },
+        { $set: closurePatch(reason, 'expired') }, WRITE_OPTIONS);
+      count += result.modifiedCount || 0;
+    }
+    return count;
+  }
+  return { get, deliver, resolve, dismiss, closeEventReceipts, expireStale, isInFlight: (key) => inFlight.has(key) };
 }
 const service = createDeliveryService();
 module.exports = { ...service, createDeliveryService, idFor, unknownError };

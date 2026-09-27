@@ -74,7 +74,7 @@
 
       <div class="recap-utility-card">
         <div class="recap-card-title">Reliability &amp; Recovery</div>
-        <p class="detail">When Twitch may have received an action but its confirmation was lost, the bot holds that action instead of sending another copy. Check chat before resolving it.</p>
+        <p class="detail">When Twitch or Discord may have received an action but confirmation was lost, QwertBot holds it to prevent duplicates. Check the destination before allowing a retry, or dismiss it to abandon the remaining actions. Stale session actions expire at stream end; dismissed/expired records are retained for deduplication, not sent later.</p>
         <button id="refreshReliabilityBtn" class="secondary" type="button">Refresh Recovery Queue</button>
         <div id="reliabilityReviewMessage" class="detail" role="status"></div>
         <div id="reliabilityReviewList" aria-live="polite">Checking recovery status...</div>

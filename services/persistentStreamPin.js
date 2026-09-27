@@ -1,3 +1,4 @@
+const { staleDeliveryReason } = require('./reliability/recoveryScope');
 const { createHash } = require('node:crypto');
 const context = require('./reliability/context');
 const delivery = require('./reliability/delivery');
@@ -1016,6 +1017,37 @@ function createPersistentPinManager({
     stopMonitor();
   }
 
+  async function dismissReview(expectedDeliveryKey = config.deliveryKey) {
+    if (!expectedDeliveryKey || config.deliveryKey !== expectedDeliveryKey) throw new Error('This pin changed. Refresh before dismissing it.');
+    const streamId = config.activeStreamId;
+    const row = await delivery.dismiss(expectedDeliveryKey);
+    if (!row) throw new Error('Delivery changed. Refresh the page.');
+    if (config.activeStreamId !== streamId || config.deliveryKey !== expectedDeliveryKey) throw new Error('The stream changed while the old pin receipt was closed. Refresh its status.');
+    stopRotationTimer();
+    await persistRuntime({ recoveryRequired: false, recoveryReason: '', deliveryKey: '',
+      skipStreamId: streamId || 'offline', activeMessageId: '',
+      activeMessageIds: Array(configuredMessages().length).fill(''), bannerEndsAt: null });
+    return { success: true, message: 'Pin delivery dismissed. Automatic banner posting is skipped for this stream to avoid a duplicate.' };
+  }
+  async function expireRecovery(status) {
+    if (!config.recoveryRequired || !config.deliveryKey) return;
+    const key = config.deliveryKey;
+    const row = await delivery.get(key);
+    const reason = row && staleDeliveryReason(row, typeof getStreamStatus === 'function' ? getStreamStatus() : status);
+    if (!reason) {
+      if (row?.recoveryClosed) await dismissReview(key);
+      return;
+    }
+    activeController?.abort();
+    if (delivery.isInFlight(key)) return; // Next sweep closes it once stopped.
+    await delivery.dismiss(key, { reason, resolution: 'expired' });
+    if (config.deliveryKey !== key) return;
+    await persistRuntime({ recoveryRequired: false, recoveryReason: '', deliveryKey: '',
+      activeStreamId: '', activeMessageId: '', activeMessageIds: Array(configuredMessages().length).fill(''),
+      bannerEndsAt: null, postGeneration: 0, skipStreamId: '' });
+    await syncLiveState();
+  }
+
   async function resolveReview(outcome, expectedDeliveryKey = config.deliveryKey) {
     if (config.deliveryKey !== expectedDeliveryKey) throw new Error('This persistent pin changed. Refresh before reviewing it.');
     if (!config.deliveryKey) throw new Error('No persistent pin delivery is awaiting review.');
@@ -1040,6 +1072,8 @@ function createPersistentPinManager({
 
   return {
     quiesce,
+    dismissReview: (...args) => serializeControls(() => dismissReview(...args)),
+    expireRecovery: (...args) => serializeControls(() => expireRecovery(...args)),
     resolveReview: (...args) => serializeControls(() => resolveReview(...args)),
     initialize,
     getConfig: toClient,

@@ -1,3 +1,4 @@
+const { staleDeliveryReason } = require('./reliability/recoveryScope');
 const { randomUUID } = require('node:crypto');
 const context = require('./reliability/context');
 const delivery = require('./reliability/delivery');
@@ -356,7 +357,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const persistedDue = dateMs(timer.nextDueAt);
     const streamStartedAt = Number(status.startedAt || 0);
     const lastFiredAt = dateMs(timer.lastFiredAt);
-    const firedThisStream = Boolean(streamStartedAt && lastFiredAt >= streamStartedAt);
+    const firedThisStream = Boolean(streamStartedAt && lastFiredAt >= streamStartedAt) ||
+      String(timer.lastCompletedOccurrence || '').startsWith(`timer:${normalizedChannel}:${timer._id}:${status.streamId}:`);
     if (sameStream && persistedDue > 0 && firedThisStream) return timer;
 
     const firstDueMs = scheduleForNewStream(timer, status, now);
@@ -825,6 +827,37 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (checkpointTimer) clearInterval(checkpointTimer);
     scheduler = null; checkpointTimer = null;
   }
+  async function dismissReview(id, expectedDeliveryKey) {
+    const timer = await findTimerOrThrow(id);
+    if (!expectedDeliveryKey || timer.deliveryKey !== expectedDeliveryKey) throw new Error('This timer occurrence changed. Refresh before dismissing it.');
+    const record = await delivery.dismiss(expectedDeliveryKey);
+    if (!record) throw new Error('Delivery changed. Refresh the page.');
+    // Skip one occurrence. Do not pretend it fired or increment sent counters.
+    const oldSession = record.payload?.streamId && record.payload.streamId !== timer.scheduleStreamId;
+    const patch = { recoveryRequired: false, recoveryReason: '', deliveryKey: '',
+      nextRetryAt: null, retryCount: 0,
+      ...(!oldSession ? { lastCompletedOccurrence: expectedDeliveryKey, nextDueAt: new Date(calculateNextDueAt(timer)) } : {}) };
+    await persistSchedulePatch(timer._id, patch); Object.assign(timer, patch);
+    return { success: true, message: 'Timer occurrence dismissed. Its next normal interval remains scheduled.' };
+  }
+  async function expireRecovery(status) {
+    if (!cache.some((timer) => timer.recoveryRequired && timer.deliveryKey)) return;
+    await refreshCache();
+    for (const timer of cache) {
+      if (!timer.recoveryRequired || !timer.deliveryKey) continue;
+      const row = await delivery.get(timer.deliveryKey);
+      const reason = row && staleDeliveryReason(row, typeof getStreamStatus === 'function' ? getStreamStatus() : status);
+      if (delivery.isInFlight(timer.deliveryKey)) continue;
+      if (!reason) {
+        if (row?.recoveryClosed) await dismissReview(String(timer._id), timer.deliveryKey);
+        continue;
+      }
+      await delivery.dismiss(timer.deliveryKey, { reason, resolution: 'expired' });
+      const patch = { recoveryRequired: false, recoveryReason: '', deliveryKey: '', nextRetryAt: null, retryCount: 0 };
+      await persistSchedulePatch(timer._id, patch); Object.assign(timer, patch);
+    }
+  }
+
   async function resolveReview(id, outcome, expectedDeliveryKey) {
     const timer = await findTimerOrThrow(id);
     if (expectedDeliveryKey !== undefined && timer.deliveryKey !== expectedDeliveryKey) throw new Error('This timer occurrence changed. Refresh before reviewing it.');
@@ -842,6 +875,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   return {
     quiesce,
     shutdown: () => { quiesce(); return serialize(() => checkpointActivity({ force: true })); },
+    dismissReview: (...args) => serialize(() => dismissReview(...args)),
+    expireRecovery: (...args) => serialize(() => expireRecovery(...args)),
     resolveReview: (...args) => serialize(() => resolveReview(...args)),
     initialize: () => serialize(initialize),
     listTimers: (...args) => serialize(() => listTimers(...args)),

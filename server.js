@@ -457,6 +457,21 @@ async function syncYouTubeFailOpen(streamStatus, context = 'live-state sync') {
   }
 }
 
+let recoverySweep = null;
+async function reconcileRecovery() {
+  if (recoverySweep) return recoverySweep;
+  if (!runtime?.isActive() || !recapManager) return;
+  recoverySweep = (async () => {
+    // Inbox expiry also runs in its own 30s safety loop. These manager calls
+    // remove old timer/pin review flags without touching new-stream schedules.
+    await eventSubInbox?.reconcileExpired();
+    await chatTimerManager?.expireRecovery(recapManager.getStatus());
+    await persistentPinManager?.expireRecovery(recapManager.getStatus());
+    await delivery.expireStale(channelName, () => recapManager.getStatus());
+  })().finally(() => { recoverySweep = null; });
+  return recoverySweep;
+}
+
 async function activateBot() {
   await automationSpacingManager.initialize();
   await advancedFilterManager.initialize();
@@ -474,7 +489,7 @@ async function activateBot() {
     getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
     tryReserveAutomationSlot: (engine) => automationSpacingManager?.tryReserve?.(engine) || Promise.resolve({ allowed: false }),
     getNativeCommandResponse: (command, variant, variables) => getRenderedNativeResponse(channelName, command, variant, variables),
-    botUsername
+    botUsername, onStreamEnded: reconcileRecovery
   });
   await chatTimerManager.initialize();
   // Detection remains restartable even if initial OAuth/IRC is unavailable.
@@ -488,6 +503,8 @@ async function activateBot() {
     try { await twitchConnection.createAndConnect(accessToken); }
     catch (err) { console.warn('[Bot] Initial chat connection failed; automatic recovery will retry:', err.message); }
   }
+  try { await reconcileRecovery(); }
+  catch (err) { console.warn('[Recovery] Startup sweep pending:', err.message); }
   eventSubInbox.start();
   try { await persistentPinManager.syncLiveState(); }
   catch (err) { console.warn('[Persistent Pin] Startup sync pending:', err.message); }
@@ -525,6 +542,8 @@ async function runEventSubEnsure() {
 
 async function maintainBot() {
   if (!runtime.isActive()) return;
+  try { await reconcileRecovery(); }
+  catch (err) { console.warn('[Recovery] Maintenance sweep pending:', err.message); }
   await twitchConnection.maintainConnection();
   {
     const streamStatus = recapManager?.getStatus?.() || {};
@@ -580,7 +599,8 @@ registerReliabilityRoutes(app, {
   getChatTimerManager: () => chatTimerManager,
   getRecapManager: () => recapManager,
   getPersistentPinManager: () => persistentPinManager,
-  getEventSubInbox: () => eventSubInbox
+  getEventSubInbox: () => eventSubInbox,
+  reconcileRecovery
 });
 
 app.use((err, req, res, next) => {

@@ -82,7 +82,8 @@ function createRecapManager({
   getAutomationSpacingStatus = null,
   tryReserveAutomationSlot = null,
   getNativeCommandResponse = null,
-  botUsername = ''
+  botUsername = '',
+  onStreamEnded = null
 }) {
   let managerStopping = false;
   let startPromise = null;
@@ -723,7 +724,10 @@ function createRecapManager({
   async function recoverWindowDelivery() {
     const key = `recap:${channelName}:${currentStreamId}:${windowId}`;
     const row = await delivery.get(key);
-    if (row?.state === 'sent') {
+    if (row?.recoveryClosed) {
+      recoveryDeliveryKey = key;
+      await dismissDeliveryReview(key);
+    } else if (row?.state === 'sent') {
       console.warn('[Recap] Recovered a committed Twitch receipt; consuming its snapshot without resending.');
       await commitSentWindow(row.payload);
     } else if (row && ['sending', 'unknown'].includes(row.state)) {
@@ -750,6 +754,32 @@ function createRecapManager({
     return { success: true, message: outcome === 'sent'
       ? 'Marked delivered and removed the completed snapshot. Recaps remain paused until Resume.'
       : 'Marked definitely not delivered. The window is preserved; press Resume to retry. Only use this after checking Twitch chat.' };
+  }
+
+  async function dismissDeliveryReview(expectedDeliveryKey = recoveryDeliveryKey) {
+    if (!expectedDeliveryKey || expectedDeliveryKey !== recoveryDeliveryKey) {
+      return { success: false, message: 'This recap changed. Refresh before dismissing it.' };
+    }
+    const streamId = currentStreamId;
+    const row = await delivery.dismiss(expectedDeliveryKey);
+    if (!row) return { success: false, message: 'Delivery changed. Refresh before dismissing it.' };
+    if (streamId !== currentStreamId || recoveryDeliveryKey !== expectedDeliveryKey) {
+      return { success: false, message: 'The old receipt was closed, but the stream changed. Refresh its status.' };
+    }
+    // Abandon this snapshot, not messages collected after it. Do NOT record a
+    // sent recap, increment history, or claim that Twitch did/did not receive it.
+    const payload = row.payload || {};
+    discardMessageSnapshot(payload.snapshotMaxId);
+    discardContextSnapshot(payload.snapshotMaxContextId);
+    discardEventSnapshot(payload.snapshotMaxEventId);
+    if (pendingLearning?.windowId === payload.windowId) { pendingLearning = null; clearLearningTimer(); }
+    if (windowId === payload.windowId) { windowId = randomUUID(); windowCreatedAt = Date.now(); }
+    recoveryDeliveryKey = ''; recoveryReason = '';
+    recapPaused = true; recapInProgress = false; clearRecapTimer();
+    pausedRemainingMs = RECURRING_RECAP_DELAY;
+    rebuildWindowIndex(); markActiveStateDirty();
+    await persistActiveState({ force: true });
+    return { success: true, message: 'Recap dismissed without resending. Newer messages are preserved. Recaps remain paused until Resume.' };
   }
 
   function markActiveStateDirty() {
@@ -1084,6 +1114,12 @@ function createRecapManager({
     chatIds.clear(); eventIds.clear(); windowBytes = 0;
     capacityReached = false; recoveryReason = ''; recoveryDeliveryKey = ''; pendingEnd = null;
     console.log('[Recap] Qwert is OFFLINE. Ended stream state was durably cleared without touching another stream.');
+    // Do not await other managers while holding the lifecycle lock. They may
+    // themselves be finishing an EventSub action; maintenance retries failures.
+    if (typeof onStreamEnded === 'function') operationContext.detached(() => {
+      Promise.resolve().then(() => onStreamEnded()).catch((err) =>
+        console.warn('[Recovery] Stream-end sweep pending:', err.message));
+    });
   }
 
   async function endStreamSession(endedAtMs = 0) {
@@ -2181,6 +2217,7 @@ function createRecapManager({
       streamUptimeMs: streamLive && twitchStreamStartedAt ? Math.max(0, Date.now() - twitchStreamStartedAt) : null,
       lastStreamStartedAt: lastStreamStartedAt || null,
       lastStreamEndedAt: lastStreamEndedAt || null,
+      lastEndedStreamId: lastEndedStreamId || (lastStreamLifecycleEventType === 'offline' ? lastKnownPersistedStreamId : '') || null,
       lastStreamEndedAgoMs: !streamLive && lastStreamEndedAt ? Math.max(0, Date.now() - lastStreamEndedAt) : null,
       streamTimezone: STREAM_TIME_ZONE,
       lastStreamLifecycleEventType: lastStreamLifecycleEventType || null,
@@ -2307,6 +2344,7 @@ function createRecapManager({
   return {
     start, shutdown, quiesce, checkStreamStatus, runPreview,
     flush: () => persistActiveState({ force: true }),
+    dismissDeliveryReview: (...args) => durableControl(() => dismissDeliveryReview(...args)),
     resolveDeliveryReview: (...args) => durableControl(() => resolveDeliveryReview(...args)),
     recordChatMessage,
     recordBotContextMessage,

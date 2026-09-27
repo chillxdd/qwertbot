@@ -11,13 +11,19 @@ function registerReliabilityRoutes(app, options) {
     getChatTimerManager,
     getRecapManager,
     getPersistentPinManager,
-    getEventSubInbox
+    getEventSubInbox,
+    reconcileRecovery = async () => {}
   } = options;
 
-  app.get('/reliability/status', requireModSession, async (req, res) => {
+  const safe = (handler) => (req, res) => Promise.resolve().then(() => handler(req, res)).catch((err) => {
+    if (res.headersSent) return;
+    res.status(err.persistenceFailure ? 503 : 409).json({ success: false, error: err.message || 'Recovery request failed. Refresh its status.' });
+  });
+  app.get('/reliability/status', requireModSession, safe(async (req, res) => {
     const runtime = getRuntime();
     const state = runtime.status();
     if (!state.ready) return res.json({ success: true, runtime: state, review: [] });
+    await reconcileRecovery();
     const chatTimerManager = getChatTimerManager();
     const recapManager = getRecapManager();
     const persistentPinManager = getPersistentPinManager();
@@ -27,7 +33,7 @@ function registerReliabilityRoutes(app, options) {
     const pendingKeys = [recap.recoveryDeliveryKey,
       ...timers.filter((item) => item.recoveryRequired).map((item) => item.deliveryKey),
       pin.recoveryRequired ? pin.deliveryKey : ''].filter(Boolean);
-    const rows = await collection().find({ namespace: channelName, $or: [
+    const rows = await collection().find({ namespace: channelName, recoveryClosed: { $ne: true }, $or: [
       { kind: 'event', state: { $in: ['review', 'failed'] } },
       { kind: 'delivery', state: { $in: ['unknown', 'sending'] } },
       { kind: 'delivery', key: { $in: pendingKeys } }
@@ -50,12 +56,12 @@ function registerReliabilityRoutes(app, options) {
         id: timer ? timer.id : row.key, deliveryKey: row.key, state: row.state,
         title: isRecap ? 'Hourly recap' : timer ? `Timer: ${timer.name}` : isPin ? 'Rotating pinned banner' : row.deliveryKind,
         detail: row.lastError || 'Twitch may have received this action before its acknowledgement was saved.',
-        preview: String(row.payload?.message || row.payload?.rendered || '').slice(0, 500), createdAt: row.createdAt });
+        preview: String(row.payload?.message || row.payload?.rendered || row.payload?.content || '').slice(0, 500), createdAt: row.createdAt });
     }
     res.json({ success: true, runtime: state, review });
-  });
+  }));
 
-  app.post('/reliability/resolve', requireModSession, async (req, res) => {
+  app.post('/reliability/resolve', requireModSession, safe(async (req, res) => {
     const { target, id, outcome, expectedDeliveryKey } = req.body;
     if (typeof expectedDeliveryKey !== 'string' || !expectedDeliveryKey ||
         (['recap', 'pin', 'delivery'].includes(target) && id !== expectedDeliveryKey)) {
@@ -85,13 +91,36 @@ function registerReliabilityRoutes(app, options) {
     }
     if (result?.success === false) return res.status(409).json({ success: false, error: result.message || 'The operation changed; refresh its status.' });
     res.json({ success: true, message: result?.message || 'Delivery reviewed. Refresh the affected control before continuing.', result });
-  });
+  }));
 
-  app.post('/reliability/retry-event', requireModSession, async (req, res) => {
+  app.post('/reliability/dismiss', requireModSession, safe(async (req, res) => {
+    const { target, id, expectedDeliveryKey, confirmed } = req.body;
+    if (confirmed !== true || typeof id !== 'string' || !id || id.length > 1500 || typeof expectedDeliveryKey !== 'string') {
+      return res.status(400).json({ success: false, error: 'Explicit confirmation and an exact recovery item are required.' });
+    }
+    if (target !== 'event' && (!expectedDeliveryKey || (['recap', 'pin', 'delivery'].includes(target) && id !== expectedDeliveryKey))) {
+      return res.status(409).json({ success: false, error: 'This recovery item changed. Refresh before dismissing it.' });
+    }
+    let result;
+    if (target === 'event') result = await getEventSubInbox().dismiss(id, expectedDeliveryKey);
+    else if (target === 'recap') result = await getRecapManager().dismissDeliveryReview(expectedDeliveryKey);
+    else if (target === 'timer') result = await getChatTimerManager().dismissReview(id, expectedDeliveryKey);
+    else if (target === 'pin') result = await getPersistentPinManager().dismissReview(expectedDeliveryKey);
+    else if (target === 'delivery') {
+      const row = await delivery.get(expectedDeliveryKey);
+      if (!row || row.namespace !== channelName) return res.status(404).json({ success: false, error: 'Delivery not found for this channel.' });
+      const saved = await delivery.dismiss(expectedDeliveryKey);
+      result = { success: Boolean(saved), message: 'Delivery dismissed. It was not resent or marked as delivered.' };
+    } else return res.status(400).json({ success: false, error: 'Invalid recovery target.' });
+    if (result?.success === false) return res.status(409).json({ success: false, error: result.message || 'Recovery item changed. Refresh its status.' });
+    return res.json({ success: true, message: result?.message || 'Dismissed without retrying.' });
+  }));
+
+  app.post('/reliability/retry-event', requireModSession, safe(async (req, res) => {
     if (req.body.confirmed !== true) return res.status(400).json({ success: false, error: 'Explicit confirmation is required.' });
     await getEventSubInbox().retryFailed(req.body.id);
     res.json({ success: true, message: 'Failed event requeued. Completed action steps will not be repeated.' });
-  });
+  }));
 }
 
 module.exports = { registerReliabilityRoutes };

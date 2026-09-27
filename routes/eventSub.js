@@ -387,7 +387,7 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
   const subscriptionRecapFilter = createSubscriptionRecapFilter();
   const prepareSerial = createSerialExecutor();
   let restoredFilters = false;
-  const inbox = createInbox({ namespace, processJob: async (job, step) => {
+  const inbox = createInbox({ namespace, getStreamState: () => getRecapManager()?.getStatus?.() || {}, processJob: async (job, step) => {
     const { type, event, timestamp } = job.payload;
     const recapManager = getRecapManager();
     const reactionManager = getEventSubReactionManager?.();

@@ -29,6 +29,23 @@ export function initReliabilitySection({ $, postJson, isLoggedIn, onResolved }) 
     finally { acting = false; await refresh(); }
   }
 
+  async function dismiss(item) {
+    if (acting) return;
+    let detail = 'The remaining actions will be abandoned, not retried. This does not delete a message already delivered to Twitch or Discord, and does not claim it was delivered.';
+    if (item.target === 'recap') detail += '\n\nThe old recap snapshot will be skipped; newer chat is retained. Recaps stay paused until Resume.';
+    if (item.target === 'timer') detail += '\n\nOnly this timer occurrence is skipped. The timer itself remains configured.';
+    if (item.target === 'pin') detail += '\n\nAutomatic banner posting is skipped for the rest of this stream to prevent duplicate pins.';
+    if (!window.confirm(`DISMISS WITHOUT RETRYING?\n\n${detail}`)) return;
+    acting = true;
+    panel.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    try {
+      const result = await postJson('/reliability/dismiss', { target: item.target, id: item.id,
+        expectedDeliveryKey: item.deliveryKey || '', confirmed: true });
+      status.textContent = result.message || result.error || 'Refresh the recovery queue.';
+    } catch (_) { status.textContent = 'The response was lost. Refresh the queue before trying again.'; }
+    finally { acting = false; await refresh(); await onResolved(); }
+  }
+
   async function refresh() {
     if (loading || acting || !isLoggedIn()) return;
     loading = true;
@@ -42,7 +59,7 @@ export function initReliabilitySection({ $, postJson, isLoggedIn, onResolved }) 
         panel.textContent = 'Recovery controls are available after the active deployment has handed over.';
         return;
       }
-      if (!result.review?.length) { panel.textContent = 'No uncertain deliveries or failed Twitch events need review.'; return; }
+      if (!result.review?.length) { panel.textContent = 'No recovery items need review. Dismissed and expired actions will not be retried.'; return; }
       for (const item of result.review) {
         const card = document.createElement('div'); card.className = 'reliability-review-item';
         const heading = document.createElement('strong'); heading.textContent = item.title || 'Action needs review'; card.append(heading);
@@ -55,6 +72,10 @@ export function initReliabilitySection({ $, postJson, isLoggedIn, onResolved }) 
           : [['Already delivered - do not resend', () => resolve(item, 'sent')], ['Definitely not delivered - allow retry', () => resolve(item, 'not_sent')]])) {
           const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary'; button.textContent = label; button.onclick = action; actions.append(button);
         }
+        const dismissButton = document.createElement('button');
+        dismissButton.type = 'button'; dismissButton.className = 'danger';
+        dismissButton.textContent = 'Dismiss - do not retry'; dismissButton.onclick = () => dismiss(item);
+        actions.append(dismissButton);
         card.append(actions); panel.append(card);
       }
     } catch (err) { status.textContent = `Recovery status could not be refreshed: ${err.message}`; }
