@@ -259,16 +259,23 @@ function createRecapManager({
     }
   }
 
+  let taggedDeferLogKey = '';
+  let taggedDeferLastLogAt = 0;
   function deferForTaggedQuestionBuffer(reason = 'Tagged Question collision buffer') {
     const status = taggedQuestionRecapBuffer();
-    if (!status.active) return false;
+    if (!status.active) { taggedDeferLogKey = ''; return false; }
     const resumeAt = status.availableAt && status.availableAt > Date.now()
       ? status.availableAt + 250
       : Date.now() + Math.max(1000, Number(status.remainingMs || 0));
     recapInProgress = false;
     scheduleRecapAt(resumeAt);
     const suffix = status.inFlight ? 'while a Tagged Question is still being answered' : `for ${status.bufferSeconds || 0}s after the Tagged Question reply`;
-    console.log(`[Recap] Deferred by ${reason} ${suffix}. Tagged Questions remain immediate.`);
+    const logKey = `${reason}:${Boolean(status.inFlight)}:${status.inFlight ? '' : status.availableAt || ''}`;
+    if (logKey !== taggedDeferLogKey || Date.now() - taggedDeferLastLogAt >= 30000) {
+      console.log(`[Recap] Deferred by ${reason} ${suffix}. Tagged Questions remain immediate.`);
+      taggedDeferLogKey = logKey;
+      taggedDeferLastLogAt = Date.now();
+    }
     return true;
   }
 

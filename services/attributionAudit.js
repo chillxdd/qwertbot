@@ -1,6 +1,8 @@
 'use strict';
 
 const { requestGeminiTextWithRetry } = require('./geminiClient');
+const operationContext = require('./reliability/context');
+const { stripTaggedVocatives, isClearlyNonFactualTaggedSentence, TAGGED_DIALOGUE_RULES } = require('../features/taggedQuestions/answerPolicy');
 const { createUntrustedBlock } = require('./promptSecurity');
 const {
   normalizeChatRecords,
@@ -223,7 +225,9 @@ function buildAuditPrompt({
 - In APPLICATION-SUPPLIED CONTEXT, approved profile facts, matched manual/approved subject lore, explicit routing facts, and AUDITED memory claims may support channel/person attribution. BOT CONTEXT ONLY, LEGACY UNAUDITED MEMORY, metadata, and broad compact indexes are orientation only and do not independently prove a named channel claim.
 - Treat public entities such as games, Pokemon/species, companies, countries, historical figures, products, and other world-knowledge subjects as GENERAL KNOWLEDGE unless the sentence specifically assigns them a relationship/action involving a channel identity.
 - Second-person pronouns must refer to the response addressee; first-person pronouns refer to the bot unless a quoted source clearly uses them differently.
-- A stylistic joke is allowed only if it does not create a new factual relationship or reassign an existing fact.`
+- A stylistic joke is allowed only if it does not create a new factual relationship or reassign an existing fact.
+${TAGGED_DIALOGUE_RULES}
+- A provider failure is not evidence that the user lacks context. Audit factual assertions, not bare direct addresses or clearly non-factual rhetoric.`
     : `- This is ${mode === 'memory' ? 'temporary current-stream memory' : 'an hourly recap'}.
 - A named person's statement, joke, preference, reaction, decision, action, possession, or relationship must be directly supported by that person's own chat, a structured moderator/broadcaster statement, or a verified Twitch event that explicitly supports that exact platform action.
 - Broadcaster claims are audited exactly like viewer claims. A viewer suggestion does not prove Qwert decided or acted.
@@ -609,31 +613,29 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
 }
 
 function hasTaggedSpecificAttributionRisk(sentence, identities = []) {
-  const text = String(sentence || '').trim();
+  const original = String(sentence || '').trim();
+  if (!original || isClearlyNonFactualTaggedSentence(original, identities)) return false;
+  const text = stripTaggedVocatives(original, identities);
   if (!text) return false;
 
-  // Channel/community claims always need channel evidence. This deliberately
-  // excludes public entities such as companies, games, Pokemon, countries, etc.
-  if (/\b(?:viewer|viewers|chat|the chat|community|broadcaster|streamer|moderator|mods?|current stream|this stream|earlier on stream|earlier this stream|last stream)\b/i.test(text)) return true;
+  // An address is not a subject. Outside a punctuation-delimited address,
+  // names/mentions and channel claims stay fail-closed on an audit outage.
+  if (/\b(?:viewer|viewers|chat|community|broadcaster|streamer|moderator|mods?|current stream|this stream|earlier on stream|earlier this stream|last stream)\b/i.test(text)) return true;
+  if (/@[A-Za-z0-9_]{2,25}\b/.test(text)) return true;
+  if (identities.some((identity) => textMentionsIdentity(text, identity))) return true;
 
-  // A bare vocative/mention ("Motmo, nope.") is not a factual attribution.
-  // A named identity plus an explicit personal predicate is.
-  if (identities.some((identity) =>
-    textMentionsIdentity(text, identity) && sentenceHasExplicitIdentityPredicate(text, identity)
-  )) return true;
-
-  // Pronouns only become high-risk when they carry a personal/history/status
-  // claim. Generic conversational uses such as "your request is denied" or
-  // "you can press X" should survive an attribution-audit outage.
-  const pronounPersonalClaim = /\b(?:you|your|yours|he|she|him|his|her|hers|they|them|their|theirs)\b[^.!?;]{0,90}\b(?:said|says|asked|joked|claimed|reported|decided|agreed|suggested|likes?|loves?|hates?|prefers?|owns?|owned|created|made|played|watched|won|lost|died|joined|left|returned|remembered|forgot|met|knows?|knew|gifted|cheered|raided|subscribed)\b/i;
+  const pronounPersonalClaim = /\b(?:you|your|yours|he|she|him|his|her|hers|they|them|their|theirs)\b[^.!?;]{0,90}\b(?:said|says|asked|joked|claimed|reported|decided|agreed|suggested|likes?|loves?|hates?|prefers?|owns?|owned|created|made|played|watched|won|lost|died|joined|left|returned|remembered|forgot|met|knows?|knew|gifted|cheered|raided|subscribed|gaslit|gaslight\w*|bullied|bully\w*|abused|abusive|scammed|stole|lied|lying|sad|angry|guilty|innocent)\b/i;
   const personalRelationship = /\b(?:your|his|her|their)\s+(?:wife|husband|partner|girlfriend|boyfriend|friend|family|mother|father|mom|dad|sister|brother|child|kid|job|age|nickname|role|status|relationship|preference|opinion|history|profile|lore)\b/i;
-  const pronounStatusClaim = /\b(?:you|he|she|they)\b[^.!?;]{0,60}\b(?:are|is|was|were)\b[^.!?;]{0,40}\b(?:moderator|mod|broadcaster|streamer|viewer|friend|partner|husband|wife|girlfriend|boyfriend|creator|owner|regular|middle child)\b/i;
-  return pronounPersonalClaim.test(text) || personalRelationship.test(text) || pronounStatusClaim.test(text);
+  const pronounStatusClaim = /\b(?:you|he|she|they)\b[^.!?;]{0,60}\b(?:are|is|was|were)\b[^.!?;]{0,40}\b(?:moderator|mod|broadcaster|streamer|viewer|friend|partner|husband|wife|girlfriend|boyfriend|creator|owner|regular|middle child|sad|angry|guilty|innocent)\b/i;
+  const inverseAccusation = /\b(?:gaslit|gaslight\w*|bullied|blame|accuse|abused|scammed|stole\s+from)\b[^.!?;]{0,30}\b(?:you|him|her|them)\b/i;
+  const assertedObservation = /\b(?:i|we)\b[^.!?;]{0,60}\b(?:saw|seen|watched|witnessed|heard|observed|banned|punished|reported|warned|muted|kicked)\b/i;
+  return pronounPersonalClaim.test(text) || personalRelationship.test(text) || pronounStatusClaim.test(text) || inverseAccusation.test(text) || assertedObservation.test(text);
 }
 
 function hasAttributionRisk(sentence, identities = [], mode = 'recap') {
   const text = String(sentence || '').trim();
   if (!text) return false;
+  if (mode === 'tagged' && isClearlyNonFactualTaggedSentence(text, identities)) return false;
   if (identities.some((identity) => textMentionsIdentity(text, identity))) return true;
   if (/@[A-Za-z0-9_]{2,25}\b/.test(text)) return true;
   if (mode !== 'tagged' && /\b[A-Za-z][A-Za-z0-9_]{1,30}['’]s\b/.test(text)) return true;
@@ -644,7 +646,7 @@ function hasAttributionRisk(sentence, identities = [], mode = 'recap') {
     // Keep the audit broad enough to catch ambiguous conversational pronouns,
     // but use hasTaggedSpecificAttributionRisk() for fail-closed decisions so a
     // harmless general answer is not replaced by an identity-context apology.
-    return /\b(?:you|your|yours|yourself|he|she|him|his|her|hers|they|them|their|theirs|viewer|viewers|chat|community|broadcaster|streamer|moderator|mods?)\b/i.test(text);
+    return /\b(?:you|your|yours|yourself|he|she|him|his|her|hers|they|them|their|theirs|viewer|viewers|chat|community|broadcaster|streamer|moderator|mods?)\b/i.test(text) || hasTaggedSpecificAttributionRisk(text, identities);
   }
 
   const relationshipOrAction = /\b(?:is|are|was|were|has|had|made|shared|played|won|lost|died|met|built|coded|wrote|bought|ate|drank|joined|left|returned|arrived|celebrated|flirted|talked|discussed|mentioned|recounted|told|showed|posted|linked|recommended|wanted|needed|knows?|knew|remembered|forgot|called|named|nicknamed|gave|received|sent|used|claimed|reported|created|creator|owns?|owned|belongs? to|likes?|loves?|hates?|watches?|said|asked|joked|decided|agreed|suggested|gifted|cheered|raided|subscribed|thinks?|believes?|prefers?|experienced|requested|his|her|their|your|you|he|she)\b/i.test(text);
@@ -694,14 +696,15 @@ function applyAuditResults(sentences, resultMap) {
 function conservativeFallback(text, identities, mode, safeFallback = '') {
   const sentences = splitSentences(text);
   if (mode === 'tagged') {
-    const specificallyRisky = sentences.filter((sentence) => hasTaggedSpecificAttributionRisk(sentence, identities));
-    const risky = specificallyRisky.length > 0;
+    const risky = sentences.filter((sentence) => hasTaggedSpecificAttributionRisk(sentence, identities));
+    const kept = sentences.filter((sentence) => !risky.includes(sentence) && !(risky.length && isDependentTaggedVerdict(sentence)));
     return {
-      text: risky ? String(safeFallback || '').trim() : String(text || '').trim(),
-      changed: risky,
+      text: kept.join(' ').trim() || String(safeFallback || '').trim(),
+      changed: kept.length !== sentences.length,
       auditFailed: true,
-      fallbackCategory: risky ? 'identity-context' : 'general-answer-preserved',
-      unsupported: specificallyRisky.map((sentence) => ({ sentence, replacement: '', reason: 'audit unavailable: specific channel/person attribution requires evidence' }))
+      usedFallback: kept.length === 0,
+      fallbackCategory: !risky.length ? 'general-answer-preserved' : kept.length ? 'safe-sentences-preserved' : 'verification-unavailable',
+      unsupported: risky.map((sentence) => ({ sentence, replacement: '', reason: 'audit unavailable: channel/person claim not verified' }))
     };
   }
   const kept = sentences.filter((sentence) => !hasAttributionRisk(sentence, identities, mode));
@@ -804,6 +807,103 @@ async function auditRecapParagraph({ text, chat, events, identities, trustedFact
   return result({ text: kept, changed: kept !== text, exhaustedPasses: true, verifiedPartial: Boolean(kept) });
 }
 
+// Bare agreement cannot stand in for an unchecked accusation that was removed.
+function isDependentTaggedVerdict(text = '') {
+  return /^(?:yes|no|yep|nope|indeed|exactly|absolutely|obviously|confirmed|correct|true|facts|so true|that's true|that is true)[.!?]*$/i.test(String(text).trim());
+}
+
+async function auditTaggedAnswer({ text, chat, events, identities, trustedFacts,
+  label, priority, timeoutMs, maxPasses, requestText, deadlineAt }) {
+  const startedAt = Date.now();
+  const hardDeadlineAt = Math.min(startedAt + 20000, Number(deadlineAt) > 0 ? Number(deadlineAt) : Infinity);
+  let segments = splitSentences(text).map((sentence) => ({
+    text: sentence, verified: false, original: true,
+    needsAudit: hasAttributionRisk(sentence, identities, 'tagged')
+  }));
+  const selectedChat = selectChatEvidence(text, chat, identities);
+  const sharedChatRules = formatSharedChatAuditRules(chat);
+  const unsupported = [];
+  let audited = 0;
+  let requests = 0;
+  let changed = false;
+
+  const finish = ({ unavailable = false, error = '', timedOut = false, exhausted = false } = {}) => {
+    const kept = segments.filter((s) => s.verified || (!s.needsAudit && s.original) ||
+      (unavailable && s.original && !hasTaggedSpecificAttributionRisk(s.text, identities)));
+    const discarded = segments.filter((s) => !kept.includes(s));
+    const hadLoss = unsupported.length > 0 || discarded.length > 0;
+    const output = kept.filter((s) => !hadLoss || !isDependentTaggedVerdict(s.text)).map((s) => s.text).join(' ').trim();
+    return {
+      text: output, changed: changed || output !== text, audited, unsupported: [
+        ...unsupported, ...discarded.map((s) => ({ sentence: s.text, replacement: '', reason: unavailable ? 'audit unavailable' : 'replacement not verified' }))
+      ], identities, auditFailed: unavailable, error, timedOut, exhaustedPasses: exhausted,
+      strippedAll: !output, usedFallback: !output, requests,
+      fallbackCategory: !output ? (unavailable ? 'verification-unavailable' : 'attribution-rejected')
+        : hadLoss ? 'safe-sentences-preserved' : unavailable ? 'general-answer-preserved' : 'verified',
+      elapsedMs: Date.now() - startedAt
+    };
+  };
+
+  if (!segments.some((s) => s.needsAudit)) return { ...finish(), skipped: 'no-attribution-risk' };
+  // At most two semantic passes. Validated original sentences are cached within
+  // this one answer. Only replacements are rechecked; explicit rejections are
+  // never revived by the outage fallback or by a self-identical replacement.
+  const passes = Math.max(1, Math.min(2, Number(maxPasses) || 1));
+  for (let pass = 0; pass < passes; pass += 1) {
+    operationContext.throwIfCancelled();
+    const pending = [...new Set(segments.filter((s) => s.needsAudit && !s.verified).map((s) => s.text))];
+    if (!pending.length) return finish();
+    const prompt = buildAuditPrompt({ text: pending.join(' '), chatRecords: selectedChat,
+      eventRecords: events, identities, trustedFacts, mode: 'tagged', label, sharedChatRules });
+    let parsed = null;
+    // One schema repair may run within the SAME 20s total budget. Transport
+    // timeouts/429/5xx do not restart the verifier or consume another 15s call.
+    for (let schema = 0; schema < 2; schema += 1) {
+      operationContext.throwIfCancelled();
+      const remainingMs = hardDeadlineAt - Date.now();
+      if (remainingMs <= 0) return finish({ unavailable: true, timedOut: true, error: 'Tagged answer verification budget expired.' });
+      const requestTimeout = Math.max(1, Math.min(Number(timeoutMs) || 15000, remainingMs));
+      try {
+        const send = typeof requestText === 'function' ? requestText : requestGeminiTextWithRetry;
+        requests += 1;
+        const raw = await send(schema ? `${prompt}\nSCHEMA RETRY: Return one S-row per sentence, with literal JSON booleans.` : prompt, {
+          label: `${label}-pass-${pass + 1}${schema ? '-schema-retry' : ''}`,
+          priority, timeoutMs: requestTimeout, hardTimeoutMs: requestTimeout,
+          deadlineAt: hardDeadlineAt, totalDeadlineAt: hardDeadlineAt,
+          maxRetries: 0, retryOnTimeout: false, stream: false
+        });
+        operationContext.throwIfCancelled();
+        if (Date.now() > hardDeadlineAt) return finish({ unavailable: true, timedOut: true, error: 'Tagged answer verification budget expired.' });
+        parsed = parseAuditResults(raw, pending.length);
+        if (parsed.valid) break;
+      } catch (error) {
+        if (error?.cancelled) throw error;
+        operationContext.throwIfCancelled();
+        return finish({ unavailable: true, timedOut: Boolean(error?.timedOut || error?.queueDeadline), error: error?.message || String(error) });
+      }
+    }
+    if (!parsed?.valid) return finish({ unavailable: true, error: parsed?.error || 'Malformed verification response.' });
+    const byText = new Map(pending.map((sentence, index) => [sentence, parsed.results.get(`S${index + 1}`)]));
+    const next = [];
+    for (const segment of segments) {
+      if (segment.verified || !segment.needsAudit) { next.push(segment); continue; }
+      const result = byText.get(segment.text);
+      audited += 1;
+      if (result?.supported === true) { next.push({ ...segment, verified: true }); continue; }
+      changed = true;
+      const replacement = result?.replacement && result.replacement !== segment.text && replacementIsConservative(segment.text, result.replacement)
+        ? result.replacement : '';
+      unsupported.push({ sentence: segment.text, replacement, reason: result?.reason || 'unsupported attribution' });
+      for (const sentence of splitSentences(replacement)) {
+        next.push({ text: sentence, verified: false, original: false, needsAudit: true });
+      }
+    }
+    segments = next;
+    if (!segments.some((s) => s.needsAudit && !s.verified)) return finish();
+  }
+  return finish({ exhausted: true });
+}
+
 async function auditGeneratedAttribution({
   text,
   chatRecords = [],
@@ -818,7 +918,8 @@ async function auditGeneratedAttribution({
   safeFallback = '',
   maxPasses = 2,
   requestText = null,
-  sourceCoverage = null
+  sourceCoverage = null,
+  deadlineAt = 0
 } = {}) {
   let current = String(text || '').replace(/\s+/g, ' ').trim();
   const originalText = current;
@@ -827,11 +928,8 @@ async function auditGeneratedAttribution({
   const events = normalizeEventRecords(eventRecords);
   const identities = collectIdentityRegistry({ chatRecords: chat, eventRecords: events, extraIdentities, channelName });
   if (mode === 'tagged') {
-    const sentences = splitSentences(current);
-    const riskySentences = sentences.filter((sentence) => hasAttributionRisk(sentence, identities, mode));
-    if (!riskySentences.length) {
-      return { text: current, changed: false, audited: 0, unsupported: [], identities, skipped: 'no-attribution-risk' };
-    }
+    return auditTaggedAnswer({ text: current, chat, events, identities, trustedFacts,
+      label, priority, timeoutMs, maxPasses, requestText, deadlineAt });
   }
   if (mode === 'recap') {
     return auditRecapParagraph({ text: current, chat, events, identities, trustedFacts,
