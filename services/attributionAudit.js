@@ -2,7 +2,7 @@
 
 const { requestGeminiTextWithRetry } = require('./geminiClient');
 const operationContext = require('./reliability/context');
-const { stripTaggedVocatives, isClearlyNonFactualTaggedSentence, TAGGED_DIALOGUE_RULES } = require('../features/taggedQuestions/answerPolicy');
+const { stripTaggedVocatives, TAGGED_DIALOGUE_RULES } = require('../features/taggedQuestions/answerPolicy');
 const { createUntrustedBlock } = require('./promptSecurity');
 const {
   normalizeChatRecords,
@@ -614,7 +614,7 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
 
 function hasTaggedSpecificAttributionRisk(sentence, identities = []) {
   const original = String(sentence || '').trim();
-  if (!original || isClearlyNonFactualTaggedSentence(original, identities)) return false;
+  if (!original) return false;
   const text = stripTaggedVocatives(original, identities);
   if (!text) return false;
 
@@ -635,7 +635,7 @@ function hasTaggedSpecificAttributionRisk(sentence, identities = []) {
 function hasAttributionRisk(sentence, identities = [], mode = 'recap') {
   const text = String(sentence || '').trim();
   if (!text) return false;
-  if (mode === 'tagged' && isClearlyNonFactualTaggedSentence(text, identities)) return false;
+  if (mode === 'tagged' && !stripTaggedVocatives(text, identities)) return false;
   if (identities.some((identity) => textMentionsIdentity(text, identity))) return true;
   if (/@[A-Za-z0-9_]{2,25}\b/.test(text)) return true;
   if (mode !== 'tagged' && /\b[A-Za-z][A-Za-z0-9_]{1,30}['’]s\b/.test(text)) return true;
@@ -813,12 +813,19 @@ function isDependentTaggedVerdict(text = '') {
 }
 
 async function auditTaggedAnswer({ text, chat, events, identities, trustedFacts,
-  label, priority, timeoutMs, maxPasses, requestText, deadlineAt }) {
+  label, priority, timeoutMs, maxPasses, requestText, deadlineAt, taggedGrounding }) {
   const startedAt = Date.now();
   const hardDeadlineAt = Math.min(startedAt + 20000, Number(deadlineAt) > 0 ? Number(deadlineAt) : Infinity);
+  const describedDraft = taggedGrounding?.text === text &&
+    ['conversation', 'public_knowledge', 'channel_context', 'mixed'].includes(taggedGrounding?.basis);
+  const forceEvidenceCheck = describedDraft && ['channel_context', 'mixed'].includes(taggedGrounding.basis);
   let segments = splitSentences(text).map((sentence) => ({
-    text: sentence, verified: false, original: true,
-    needsAudit: hasAttributionRisk(sentence, identities, 'tagged')
+    text: sentence, verified: false, original: true, forceEvidenceCheck,
+    // Semantic output metadata isn't an approval. Even a draft labeled banter
+    // must be checked when it contains an independently detected real claim.
+    needsAudit: forceEvidenceCheck || isDependentTaggedVerdict(sentence) || (describedDraft
+      ? hasTaggedSpecificAttributionRisk(sentence, identities)
+      : hasAttributionRisk(sentence, identities, 'tagged'))
   }));
   const selectedChat = selectChatEvidence(text, chat, identities);
   const sharedChatRules = formatSharedChatAuditRules(chat);
@@ -829,7 +836,7 @@ async function auditTaggedAnswer({ text, chat, events, identities, trustedFacts,
 
   const finish = ({ unavailable = false, error = '', timedOut = false, exhausted = false } = {}) => {
     const kept = segments.filter((s) => s.verified || (!s.needsAudit && s.original) ||
-      (unavailable && s.original && !hasTaggedSpecificAttributionRisk(s.text, identities)));
+      (unavailable && s.original && !s.forceEvidenceCheck && !hasTaggedSpecificAttributionRisk(s.text, identities)));
     const discarded = segments.filter((s) => !kept.includes(s));
     const hadLoss = unsupported.length > 0 || discarded.length > 0;
     const output = kept.filter((s) => !hadLoss || !isDependentTaggedVerdict(s.text)).map((s) => s.text).join(' ').trim();
@@ -844,7 +851,7 @@ async function auditTaggedAnswer({ text, chat, events, identities, trustedFacts,
     };
   };
 
-  if (!segments.some((s) => s.needsAudit)) return { ...finish(), skipped: 'no-attribution-risk' };
+  if (!segments.some((s) => s.needsAudit)) return { ...finish(), skipped: describedDraft ? 'semantic-nonattributive' : 'no-attribution-risk' };
   // At most two semantic passes. Validated original sentences are cached within
   // this one answer. Only replacements are rechecked; explicit rejections are
   // never revived by the outage fallback or by a self-identical replacement.
@@ -919,7 +926,8 @@ async function auditGeneratedAttribution({
   maxPasses = 2,
   requestText = null,
   sourceCoverage = null,
-  deadlineAt = 0
+  deadlineAt = 0,
+  taggedGrounding = null
 } = {}) {
   let current = String(text || '').replace(/\s+/g, ' ').trim();
   const originalText = current;
@@ -929,7 +937,7 @@ async function auditGeneratedAttribution({
   const identities = collectIdentityRegistry({ chatRecords: chat, eventRecords: events, extraIdentities, channelName });
   if (mode === 'tagged') {
     return auditTaggedAnswer({ text: current, chat, events, identities, trustedFacts,
-      label, priority, timeoutMs, maxPasses, requestText, deadlineAt });
+      label, priority, timeoutMs, maxPasses, requestText, deadlineAt, taggedGrounding });
   }
   if (mode === 'recap') {
     return auditRecapParagraph({ text: current, chat, events, identities, trustedFacts,
