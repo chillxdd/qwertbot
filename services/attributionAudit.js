@@ -19,6 +19,11 @@ const {
 
 const DEFAULT_SOURCE_CHAR_LIMIT = 32000;
 const DEFAULT_MAX_CHAT_LINES = 220;
+// Recaps must not give the writer a whole window but the verifier its front half.
+// Keep the full sanitized window when it fits. Very large windows use the SAME
+// bounded, chronological sample for drafting and all subsequent recap checks.
+const RECAP_SOURCE_CHAR_LIMIT = 256000;
+const RECAP_MAX_CHAT_LINES = 12000;
 const GENERIC_SENTENCE_STARTS = new Set([
   'a', 'an', 'also', 'and', 'as', 'at', 'because', 'but', 'chat', 'during', 'everyone',
   'finally', 'for', 'hourly', 'however', 'in', 'later', 'meanwhile', 'one', 'qwert',
@@ -96,6 +101,46 @@ function selectChatEvidence(text, chatRecords, identities, maxLines = DEFAULT_MA
   return selected;
 }
 
+function prepareRecapEvidence(chatRecords = [], options = {}) {
+  const maxLines = Math.max(1, Math.min(RECAP_MAX_CHAT_LINES,
+    Number.isFinite(options.maxLines) ? Math.floor(options.maxLines) : RECAP_MAX_CHAT_LINES));
+  const maxCharacters = Math.max(1, Math.min(RECAP_SOURCE_CHAR_LIMIT,
+    Number.isFinite(options.maxCharacters) ? Math.floor(options.maxCharacters) : RECAP_SOURCE_CHAR_LIMIT));
+  const records = normalizeChatRecords(chatRecords).map((record, index) => {
+    // Legacy/plaintext inputs have no Twitch ID. Give them stable snapshot IDs
+    // BEFORE sampling so evidence references cannot change between audit passes.
+    if (record.id || record.twitchMessageId || record.sourceMessageId) return record;
+    return { ...record, twitchMessageId: `recap-source-${index + 1}` };
+  });
+  const rows = records.map((record, index) => ({ record, index,
+    size: renderChatRecord(record, { includeSourceId: true }).length + 1 }));
+  const totalCharacters = rows.reduce((sum, row) => sum + row.size, 0);
+  let selectedRows = rows;
+  if (rows.length > maxLines || totalCharacters > maxCharacters) {
+    // Exclude only a row which cannot fit on its own; never cut source text in
+    // half. Sample EXACTLY the number that can be retained, across the ENTIRE
+    // window. Oversampling 2x and then stopping at the first N caused v26's bug.
+    const eligible = rows.filter((row) => row.size <= maxCharacters);
+    let count = Math.min(eligible.length, maxLines);
+    selectedRows = sampleEvenly(eligible, count);
+    let size = selectedRows.reduce((sum, row) => sum + row.size, 0);
+    while (count > 0 && size > maxCharacters) {
+      count = Math.max(0, Math.min(count - 1, Math.floor(count * maxCharacters / size)));
+      selectedRows = count ? sampleEvenly(eligible, count) : [];
+      size = selectedRows.reduce((sum, row) => sum + row.size, 0);
+    }
+  }
+  const selected = selectedRows.map((row) => row.record);
+  return {
+    records: selected,
+    totalRecords: records.length,
+    selectedRecords: selected.length,
+    omittedRecords: records.length - selected.length,
+    characters: selectedRows.reduce((sum, row) => sum + row.size, 0),
+    complete: selected.length === records.length
+  };
+}
+
 function formatIdentityRegistry(identities = []) {
   const rows = [];
   for (const identityValue of identities) {
@@ -164,7 +209,8 @@ function buildAuditPrompt({
   trustedFacts = '',
   mode = 'recap',
   label = 'generated text',
-  sharedChatRules = ''
+  sharedChatRules = '',
+  sourceCoverage = null
 }) {
   const sentences = splitSentences(text);
   const sentenceRows = sentences.map((sentence, index) => `[S${index + 1}] ${sentence}`).join('\n');
@@ -223,7 +269,13 @@ AUDIT SCOPE:
 ${modeRules}
 
 ${sharedChatRules || formatSharedChatAuditRules(chatRecords)}
-
+${mode === 'recap' && sourceCoverage ? `
+CURRENT-WINDOW SOURCE COVERAGE (TRUSTED APPLICATION METADATA):
+- ${sourceCoverage.selectedRecords} of ${sourceCoverage.totalRecords} sanitized chat records are supplied; ${sourceCoverage.omittedRecords} omitted; ${sourceCoverage.complete ? 'complete window' : 'bounded sample spread across the full window'}.
+- Review the entire source block, including its later messages. A topic's absence from early messages is not absence from this window.
+- Describing a topic as discussed does not endorse its claims as true. Independently sourced discussions may be kept in separate sentences without inventing a causal connection.
+- If this is a sample, absence means not established by the supplied evidence, NOT proof the topic never occurred. Never invent missing evidence.
+` : ''}
 FOR EACH SENTENCE:
 - supported must be the JSON boolean true ONLY when every named-person/entity attribution, personal descriptor/status, relationship, and broad group generalization in that sentence is directly supported and directionally correct.
 - For recap/memory mode, evidenceIds MUST list the exact M... chat and/or E... event source IDs that directly support the sentence's factual claims. Do not cite merely nearby or keyword-similar lines.
@@ -487,8 +539,18 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
     if (!result?.supported) continue;
     const sentence = String(sentences[index] || '');
     const evidenceIds = Array.isArray(result.evidenceIds) ? result.evidenceIds : [];
-    const citedChats = evidenceIds.map((id) => chatById.get(id)).filter(Boolean);
+    const citedChats = evidenceIds.map((id) => chatById.get(id))
+      .filter((record) => record && (mode !== 'recap' || record.kind !== 'bot_context'));
     const citedEvents = evidenceIds.map((id) => eventById.get(id)).filter(Boolean);
+
+    if (mode === 'recap' && (!evidenceIds.length ||
+        evidenceIds.some((id) => !chatById.has(id) && !eventById.has(id)) ||
+        (!citedChats.length && !citedEvents.length))) {
+      result.supported = false;
+      result.reason = 'deterministic evidence check: recap claim needs valid current-source evidence; bot context alone is not proof';
+      result.replacement = '';
+      continue;
+    }
 
     const collective = findCollectiveNamedDiscussionAttribution(sentence, identities);
     if (collective) {
@@ -666,6 +728,82 @@ async function requestAudit(prompt, { label, priority, timeoutMs, retryOnTimeout
   });
 }
 
+// This is still the classic paragraph auditor, with the same two-pass limit.
+// Cache only EXACT sentences already verified in this call. Replacements still
+// require the next pass; a timeout must never approve an unaudited rewrite.
+async function auditRecapParagraph({ text, chat, events, identities, trustedFacts,
+  label, priority, timeoutMs, maxPasses, requestText, sourceCoverage }) {
+  const evidence = prepareRecapEvidence(chat);
+  const coverage = sourceCoverage || evidence;
+  const selectedChat = evidence.records;
+  const verified = new Map();
+  const allUnsupported = [];
+  let current = text;
+  let changed = false;
+  let audited = 0;
+  const passes = Math.max(1, Number(maxPasses) || 1);
+  const sharedChatRules = formatSharedChatAuditRules(chat);
+  const knownOnly = (value) => splitSentences(value).filter((sentence) => verified.has(sentence)).join(' ').trim();
+  const result = (extra = {}) => ({ text: current, changed, audited,
+    unsupported: allUnsupported, identities, sourceCoverage: {
+      totalRecords: coverage.totalRecords, selectedRecords: coverage.selectedRecords,
+      omittedRecords: coverage.omittedRecords, complete: coverage.complete
+    }, ...extra });
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const sentences = splitSentences(current);
+    const previouslyVerified = new Map(verified);
+    const pending = sentences.filter((sentence) => !previouslyVerified.has(sentence));
+    if (!pending.length) return result();
+    console.log(`[Recap Evidence] ${label} pass ${pass + 1}: ${coverage.selectedRecords}/${coverage.totalRecords} source messages; ${coverage.complete ? 'complete window' : 'shared bounded sample'}; checking ${pending.length}, reusing ${sentences.length - pending.length} verified sentence(s).`);
+    const prompt = buildAuditPrompt({ text: pending.join(' '), chatRecords: selectedChat,
+      eventRecords: events, identities, trustedFacts, mode: 'recap', label,
+      sharedChatRules, sourceCoverage: coverage });
+    let parsed = null;
+    let lastError = null;
+    for (let schemaAttempt = 0; schemaAttempt < 2; schemaAttempt += 1) {
+      try {
+        const raw = await requestAudit(schemaAttempt === 0 ? prompt :
+          `${prompt}\n\nSCHEMA RETRY: Return exactly one S-row per sentence with literal JSON booleans.`,
+          { label: `${label}-pass-${pass + 1}${schemaAttempt ? '-schema-retry' : ''}`,
+            priority, timeoutMs, retryOnTimeout: false, stream: true, requestText });
+        parsed = parseAuditResults(raw, pending.length);
+        if (parsed.valid) break;
+        lastError = new Error(parsed.error);
+      } catch (error) { lastError = error; break; }
+    }
+    if (!parsed?.valid) {
+      if (lastError?.cancelled) throw lastError;
+      const kept = knownOnly(current);
+      for (const sentence of pending) allUnsupported.push({ sentence, replacement: '', reason: 'verification unavailable; not approved' });
+      return result({ text: kept, changed: kept !== text, auditFailed: true,
+        verifiedPartial: Boolean(kept), error: lastError?.message || parsed?.error || 'audit unavailable' });
+    }
+    validateRecapEvidence(pending, parsed.results, selectedChat, events, identities, 'recap');
+    audited += pending.length;
+    const fullResults = new Map();
+    let pendingIndex = 0;
+    for (let index = 0; index < sentences.length; index += 1) {
+      const sentence = sentences[index];
+      const row = previouslyVerified.has(sentence) ? previouslyVerified.get(sentence) : parsed.results.get(`S${++pendingIndex}`);
+      fullResults.set(`S${index + 1}`, row);
+      if (row?.supported === true) verified.set(sentence, row);
+    }
+    const applied = applyAuditResults(sentences, fullResults);
+    allUnsupported.push(...applied.unsupported);
+    changed = changed || applied.changed;
+    current = applied.text;
+    // Deletion-only repairs need no second audit: every remaining sentence
+    // already passed. Splits/rewrites are checked separately on the next pass.
+    if (splitSentences(current).every((sentence) => verified.has(sentence))) return result();
+  }
+  const kept = knownOnly(current);
+  for (const sentence of splitSentences(current).filter((item) => !verified.has(item))) {
+    allUnsupported.push({ sentence, replacement: '', reason: 'rewrite not verified within the existing audit pass limit' });
+  }
+  return result({ text: kept, changed: kept !== text, exhaustedPasses: true, verifiedPartial: Boolean(kept) });
+}
+
 async function auditGeneratedAttribution({
   text,
   chatRecords = [],
@@ -679,7 +817,8 @@ async function auditGeneratedAttribution({
   timeoutMs = mode === 'tagged' ? 6500 : 180000,
   safeFallback = '',
   maxPasses = 2,
-  requestText = null
+  requestText = null,
+  sourceCoverage = null
 } = {}) {
   let current = String(text || '').replace(/\s+/g, ' ').trim();
   const originalText = current;
@@ -693,6 +832,10 @@ async function auditGeneratedAttribution({
     if (!riskySentences.length) {
       return { text: current, changed: false, audited: 0, unsupported: [], identities, skipped: 'no-attribution-risk' };
     }
+  }
+  if (mode === 'recap') {
+    return auditRecapParagraph({ text: current, chat, events, identities, trustedFacts,
+      label, priority, timeoutMs, maxPasses, requestText, sourceCoverage });
   }
   const selectedChat = selectChatEvidence(current, chat, identities);
   const sharedChatRules = formatSharedChatAuditRules(chat);
@@ -791,6 +934,9 @@ async function auditGeneratedAttribution({
 module.exports = {
   DEFAULT_SOURCE_CHAR_LIMIT,
   DEFAULT_MAX_CHAT_LINES,
+  RECAP_SOURCE_CHAR_LIMIT,
+  RECAP_MAX_CHAT_LINES,
+  prepareRecapEvidence,
   cleanJsonText,
   extractPotentialNameTokens,
   selectChatEvidence,

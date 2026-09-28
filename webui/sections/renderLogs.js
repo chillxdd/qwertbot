@@ -120,14 +120,16 @@ export function initRenderLogsSection({ $, postJson }) {
 
     const quality = recap.quality || null;
     const classic = gemini.recapStrategy === 'classic-lite-rollback';
-    const qualityDetail = quality
+    const qualityDetail = quality?.publicationBlocked
+      ? `NOT SENT: ${(quality.reasons || []).join('; ')}. Source window retained for retry; no fragment or quotes posted.`
+      : quality
       ? `Last recap: ${quality.selectedSentences || 0} sentences / ${quality.characters || 0} chars from ${quality.sourceMessages || 0} viewer messages; ${(Number(quality.durationMs || 0) / 1000).toFixed(1)}s; ${quality.requestCount || 0} Lite requests. ${quality.keptAuditedAfterFailure ? 'Kept an audited paragraph after later work failed. ' : ''}${quality.polishSkipped ? 'Optional work stopped at the latency budget. ' : ''}${classic ? 'Classic paragraph recap; no source-quote fallback.' : (quality.coverageTargetMet ? 'Coverage target met.' : 'Below coverage target; inspect recap logs.')}`
       : (classic ? 'Restored pre-non-Lite paragraph writer and original recap instructions. No premium editor or source-quote fallback.' : 'Flash-Lite recap pipeline.');
     setDiagnostic(
       'diagRecapFlash',
-      classic ? 'Classic Flash-Lite' : 'Flash-Lite only',
-      `${gemini.recapPrimaryModel || 'gemini-3.5-flash-lite'}. ${qualityDetail}`,
-      quality && (quality.failures?.length || quality.sourceExcerpts) ? 'warn' : 'good'
+      quality?.publicationBlocked ? 'Recap withheld - insufficient coverage' : (classic ? 'Classic Flash-Lite' : 'Flash-Lite only'),
+      `${gemini.recapPrimaryModel || 'gemini-3.5-flash-lite'}. ${qualityDetail}${quality?.sourceEvidence ? ` Evidence: ${quality.sourceEvidence.selectedRecords}/${quality.sourceEvidence.totalRecords} messages shared by writer and checker.` : ''}`,
+      quality?.publicationBlocked ? 'bad' : (quality && (quality.failures?.length || quality.sourceExcerpts) ? 'warn' : 'good')
     );
 
     const taggedInFlight = Number(tagged.inFlight || 0);

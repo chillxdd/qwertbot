@@ -21,7 +21,14 @@ function classicRequestOptions(options = {}) {
   }
   const perRequestMs = String(options.label || '').includes('primary') &&
     !String(options.label || '').includes('attribution') ? 120000 : 75000;
-  const deadline = Math.min(now + perRequestMs, run?.hardDeadlineAt || Infinity);
+  const isRecoveryDraft = /expansion|final-recovery|composition-repair/.test(String(options.label || '')) &&
+    !/attribution|audit|pre-bot|post-bot/.test(String(options.label || ''));
+  const recoveryReserve = run && isRecoveryDraft ? 45000 : 0;
+  const deadline = Math.min(now + perRequestMs, (run?.hardDeadlineAt || Infinity) - recoveryReserve);
+  if (deadline <= now) {
+    const error = new Error('Not enough recap budget remains to generate and verify a recovery.');
+    error.recapLatencyBudget = true; error.retryable = false; throw error;
+  }
   if (run) run.requestCount += 1;
   return {
     ...options,
@@ -40,7 +47,10 @@ function mayPolishClassicRecap() {
   operationContext.throwIfCancelled();
   const run = classicRun.getStore();
   if (!run) return true;
-  const allowed = Date.now() < run.softDeadlineAt && run.hardDeadlineAt - Date.now() >= 45000;
+  // Recover missing usable content within the hard budget; cosmetic polishing
+  // still stops at the soft target. Reserve enough time to audit any rewrite.
+  const allowed = (Date.now() < run.softDeadlineAt || !run.bestAuditedSummary) &&
+    run.hardDeadlineAt - Date.now() >= 90000;
   if (!allowed) run.polishSkipped = true;
   return allowed;
 }
@@ -48,9 +58,13 @@ function mayPolishClassicRecap() {
 function rememberClassicAuditedSummary(summary) {
   const run = classicRun.getStore();
   if (!run || !summary || recapReferencesBot(summary, run.botUsername)) return;
-  // Only whole paragraphs that finished the original attribution audit enter
-  // this slot. A later optional failure must not discard a verified result.
-  if (summary.length > run.bestAuditedSummary.length) run.bestAuditedSummary = summary;
+  // Reuse exact, fully verified wording, but never treat a stripped fragment as
+  // the emergency deliverable for a busy window. Accuracy and usefulness are
+  // separate requirements; a later outage must not bypass the publication gate.
+  run.auditedParagraphs.add(summary);
+  run.lastAuditedSummary = summary;
+  const assessment = getRecapPublicationQuality(summary, run.sanitization?.records || [], run.events);
+  if (assessment.allowed && summary.length > run.bestAuditedSummary.length) run.bestAuditedSummary = summary;
 }
 
 function rethrowClassicCancellation(error) {
@@ -74,7 +88,7 @@ const {
   isSharedChatGuest,
   sharedChatSourceLabel
 } = require('./sourceRecords');
-const { auditGeneratedAttribution } = require('./attributionAudit');
+const { auditGeneratedAttribution, prepareRecapEvidence } = require('./attributionAudit');
 
 const SUMMARY_PREFIX = 'Hourly Recap: ';
 const TWITCH_MESSAGE_LIMIT = 500;
@@ -361,6 +375,45 @@ function getRecapLengthPlan(chatRecords = [], twitchEvents = []) {
   return base;
 }
 
+// A safety floor, NOT a target to pad toward. Strong short recaps are allowed;
+// high-activity windows cannot publish a one-line category label as a success.
+function getRecapPublicationQuality(summary, chatRecords = [], twitchEvents = []) {
+  const text = String(summary || '').replace(/\s+/g, ' ').trim();
+  const records = normalizeChatRecords(chatRecords).filter((record) => record.kind !== 'bot_context');
+  const wordsIn = (value) => (String(value).match(/[\p{L}\p{N}]+(?:['_-][\p{L}\p{N}]+)*/gu) || []).length;
+  const substantive = records.filter((record) => !/^!/.test(record.text) && wordsIn(record.text) >= 5);
+  const busy = records.length >= 100 && substantive.length >= 20;
+  const active = records.length >= 20 && substantive.length >= 8;
+  const minimumCharacters = busy ? 160 : (active ? 90 : 0);
+  const minimumWords = busy ? 24 : (active ? 14 : 0);
+  const minimumSentences = busy ? 2 : 1;
+  const sentences = splitRecapSentences(text).length;
+  const words = wordsIn(text);
+  const reasons = [];
+  if (!text) reasons.push('empty recap');
+  if (/^Chat kept things lively this hour with plenty of back-and-forth[.!]?$/i.test(text)) reasons.push('generic filler');
+  if (text.length > SUMMARY_TEXT_LIMIT) reasons.push('exceeds Twitch recap body limit');
+  if (text.length < minimumCharacters) reasons.push(`only ${text.length}/${minimumCharacters} minimum characters`);
+  if (words < minimumWords) reasons.push(`only ${words}/${minimumWords} minimum words`);
+  if (sentences < minimumSentences) reasons.push(`only ${sentences}/${minimumSentences} minimum sentences`);
+  return { allowed: !reasons.length, reasons, characters: text.length, words, sentences,
+    sourceMessages: records.length, substantiveMessages: substantive.length,
+    minimumCharacters, minimumWords, minimumSentences };
+}
+
+function recapPublicationError(assessment, run, startedAt) {
+  const error = new Error(`Recap withheld: ${assessment.reasons.join('; ')} for ${assessment.sourceMessages} source messages. The source window is retained for retry; no fragment or source quotes were sent.`);
+  error.recapQualityFailure = true;
+  error.retryable = false;
+  error.quality = { strategy: 'classic-lite-rollback', publicationBlocked: true,
+    sourceMessages: assessment.sourceMessages, selectedSentences: assessment.sentences,
+    characters: assessment.characters, coverageTargetMet: false,
+    reasons: assessment.reasons, requestCount: run.requestCount,
+    durationMs: Math.max(0, Date.now() - startedAt), sourceEvidence: run.sourceCoverage,
+    failures: run.failures, sourceExcerpts: 0 };
+  return error;
+}
+
 function formatStreamLore(streamLore = '') {
   const lore = String(streamLore || '').trim();
 
@@ -520,6 +573,7 @@ async function auditNamedViewerAttributions(summary, chatLogs = [], recapChannel
     label,
     safeFallback: '',
     maxPasses: 2,
+    sourceCoverage: classicRun.getStore()?.sourceCoverage || null,
     requestText: async (prompt, requestOptions) => {
       const send = options.requestText || requestGeminiTextWithRetry;
       try {
@@ -536,11 +590,16 @@ async function auditNamedViewerAttributions(summary, chatLogs = [], recapChannel
   if (requestFailure?.cancelled) throw requestFailure;
   if (requestFailure && isGeminiInputBlocked(requestFailure)) throw requestFailure;
   operationContext.throwIfCancelled();
-  if (audit.auditFailed) {
+  if (audit.auditFailed && !audit.verifiedPartial) {
     const error = new Error(audit.error || 'Classic recap attribution audit did not complete.');
     error.recapQualityFailure = true;
     error.retryable = false;
     throw error;
+  }
+  if (audit.auditFailed && audit.verifiedPartial) {
+    const run = classicRun.getStore();
+    if (run) run.failures.push(audit.error || 'Later correction audit unavailable; only previously verified wording retained.');
+    console.warn('[Recap Attribution] Correction audit unavailable; retaining only independently verified unchanged sentences.');
   }
   const cleaned = normalizeRecap(audit.text || '');
   rememberClassicAuditedSummary(cleaned);
@@ -1177,10 +1236,15 @@ async function finalizeRecapCandidate({
     if (!candidate) return '';
   }
 
+  const beforeBotRepair = candidate;
+  const alreadyAudited = auditBeforeBotRepair || classicRun.getStore()?.auditedParagraphs.has(candidate);
   candidate = await repairBotParticipantFraming(candidate, chatRecords, botUsername);
+  if (alreadyAudited && candidate === beforeBotRepair) {
+    console.log('[Recap Attribution] Reusing exact verified paragraph; bot-role wording unchanged.');
+    return candidate;
+  }
 
-  // Bot-role repair is generative. Always audit after it so a rewrite cannot
-  // introduce a new person, owner, creator, action, or relationship.
+  // A changed/generative bot-role repair still needs evidence verification.
   const postBotAudit = await auditNamedViewerAttributions(
     candidate,
     chatRecords,
@@ -1232,7 +1296,13 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
   operationContext.throwIfCancelled();
   const sanitization = sanitizeChatForGemini(chatLogs);
   const run = classicRun.getStore();
-  if (run) { run.sanitization = sanitization; run.events = twitchEvents; }
+  const evidence = prepareRecapEvidence(sanitization.records);
+  const evidenceRecords = evidence.records;
+  const evidenceLogs = evidenceRecords.map((record) => renderChatRecord(record));
+  const sourceCoverage = { totalRecords: evidence.totalRecords, selectedRecords: evidence.selectedRecords,
+    omittedRecords: evidence.omittedRecords, complete: evidence.complete, characters: evidence.characters };
+  if (run) { run.sanitization = sanitization; run.events = twitchEvents; run.sourceCoverage = sourceCoverage; }
+  console.log(`[Recap Evidence] Shared writer/checker source: ${evidence.selectedRecords}/${evidence.totalRecords} messages, ${evidence.characters} characters; ${evidence.complete ? 'complete window' : 'bounded full-window sample'}.`);
 
   if (sanitization.censoredCount > 0) {
     console.log(`[Recap Gemini] Sanitized ${sanitization.censoredCount} sensitive term(s) across ${sanitization.affectedMessages} message(s).`);
@@ -1244,7 +1314,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
   let primaryData;
 
   try {
-    primaryData = await callGemini(sanitization.logs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, promptConfig.primaryInstructions, botUsername);
+    primaryData = await callGemini(evidenceLogs, streamContexts, twitchEvents, previousRecaps, streamLore, streamTiming, promptConfig.primaryInstructions, botUsername);
   } catch (err) {
     if (isGeminiInputBlocked(err)) {
       const blockedError = new Error('Gemini blocked the chat input even after sensitive-term redaction.');
@@ -1263,7 +1333,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
   }
 
   summary = normalizeRecap(summary);
-  const primaryAttributionAudit = await auditNamedViewerAttributions(summary, sanitization.records, recapChannelName, 'hourly-recap-attribution-primary', twitchEvents);
+  const primaryAttributionAudit = await auditNamedViewerAttributions(summary, evidenceRecords, recapChannelName, 'hourly-recap-attribution-primary', twitchEvents);
   if (primaryAttributionAudit.changed) {
     summary = primaryAttributionAudit.summary || SAFE_RECAP_FALLBACK;
   }
@@ -1286,7 +1356,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
       try {
         const expansionData = await expandRecapWithGemini({
           currentSummary: longestSummary,
-          chatLogs: sanitization.logs,
+          chatLogs: evidenceLogs,
           streamContexts,
           twitchEvents,
           previousRecaps,
@@ -1309,7 +1379,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
         expandedSummary = normalizeRecap(expandedSummary);
         const expansionAttributionAudit = await auditNamedViewerAttributions(
           expandedSummary,
-          sanitization.records,
+          evidenceRecords,
           recapChannelName,
           `hourly-recap-attribution-expansion-${attempt}`,
           twitchEvents
@@ -1358,7 +1428,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
 
   summary = await finalizeRecapCandidate({
     summary,
-    chatRecords: sanitization.records,
+    chatRecords: evidenceRecords,
     twitchEvents,
     recapChannelName,
     botUsername,
@@ -1381,7 +1451,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
       try {
         const recoveryData = await recoverRecapLengthWithGemini({
           currentSummary: longestFinalSummary,
-          chatLogs: sanitization.records,
+          chatLogs: evidenceRecords,
           streamContexts,
           twitchEvents,
           previousRecaps,
@@ -1401,7 +1471,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
 
         recoveredSummary = await finalizeRecapCandidate({
           summary: recoveredSummary,
-          chatRecords: sanitization.records,
+          chatRecords: evidenceRecords,
           twitchEvents,
           recapChannelName,
           botUsername,
@@ -1444,7 +1514,7 @@ async function generateClassicRecap(chatLogs, streamContexts = [], twitchEvents 
   // accepting the rewrite. This does not add a Gemini request to healthy recaps.
   summary = await repairRecapComposition({
     summary,
-    chatLogs: sanitization.records,
+    chatLogs: evidenceRecords,
     streamContexts,
     twitchEvents,
     previousRecaps,
@@ -1471,7 +1541,7 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
     hardDeadlineAt: startedAt + RECAP_HARD_LATENCY_BUDGET_MS,
     botUsername, bestAuditedSummary: '', sanitization: null, events: [],
     requestCount: 0, recoveryAttempted: false, polishSkipped: false,
-    failures: [], keptAuditedAfterFailure: false
+    failures: [], keptAuditedAfterFailure: false, auditedParagraphs: new Set(), lastAuditedSummary: '', sourceCoverage: null
   };
   return classicRun.run(run, async () => {
     console.log('[Recap Classic] Pre-non-Lite paragraph pipeline; Flash-Lite only; no source-excerpt fallback.');
@@ -1481,24 +1551,43 @@ async function generateRecap(chatLogs, streamContexts = [], twitchEvents = [], p
         streamLore, streamTiming, recapChannelName, botUsername);
     } catch (error) {
       rethrowClassicCancellation(error);
-      if (error?.inputBlocked || isGeminiInputBlocked(error) || !run.bestAuditedSummary) throw error;
+      if (error?.inputBlocked || isGeminiInputBlocked(error)) throw error;
+      if (!run.bestAuditedSummary) {
+        // Do not change cancellation, input-block, or provider errors into a
+        // fabricated result. Include last verified coverage for diagnostics.
+        if (run.lastAuditedSummary) {
+          const assessment = getRecapPublicationQuality(run.lastAuditedSummary, run.sanitization?.records || [], run.events);
+          if (!assessment.allowed) {
+            run.failures.push(String(error?.message || error));
+            console.error(`[Recap Quality] BLOCKED timeout fallback: ${assessment.reasons.join('; ')}.`);
+            throw recapPublicationError(assessment, run, startedAt);
+          }
+        }
+        throw error;
+      }
       run.keptAuditedAfterFailure = true;
       run.failures.push(String(error?.message || error));
       console.warn(`[Recap Classic] Later work failed; keeping the completed audited paragraph: ${error?.message || error}`);
       result = { summary: run.bestAuditedSummary, sanitization: run.sanitization };
     }
     operationContext.throwIfCancelled();
-    // A source-audited paragraph may be retained after failed optional work;
-    // raw viewer quotes and generic fallback sentences are never substituted.
-    if (!result?.summary?.trim() || /^Chat kept things lively this hour with plenty of back-and-forth[.!]?$/i.test(result.summary.trim())) {
-      const error = new Error('No usable recap survived the classic pipeline; no quotes or generic filler were sent.');
-      error.recapQualityFailure = true;
-      throw error;
+    // This guard runs for BOTH the normal return and the timeout fallback.
+    // An audited 32-character category label is not an acceptable busy recap.
+    let publication = getRecapPublicationQuality(result?.summary, run.sanitization?.records || [], run.events);
+    if (!publication.allowed && run.bestAuditedSummary) {
+      result = { summary: run.bestAuditedSummary, sanitization: run.sanitization };
+      publication = getRecapPublicationQuality(result.summary, run.sanitization?.records || [], run.events);
+      run.keptAuditedAfterFailure = true;
+    }
+    if (!publication.allowed) {
+      console.error(`[Recap Quality] BLOCKED publication: ${publication.reasons.join('; ')}.`);
+      throw recapPublicationError(publication, run, startedAt);
     }
     const plan = getRecapLengthPlan(result.sanitization?.records || [], run.events);
     const sentences = splitRecapSentences(result.summary).length;
     const quality = {
-      strategy: 'classic-lite-rollback', sourceMessages: plan.viewerMessageCount,
+      strategy: 'classic-lite-rollback', publicationBlocked: false, sourceEvidence: run.sourceCoverage,
+      sourceMessages: plan.viewerMessageCount,
       selectedSentences: sentences, verifiedSentences: sentences, sourceExcerpts: 0,
       characters: result.summary.length,
       coverageTargetMet: !plan.eligible || result.summary.length >= plan.acceptableMin,
@@ -1535,6 +1624,7 @@ module.exports = {
   numericEventValue,
   getRecapSourceStats,
   getRecapLengthPlan,
+  getRecapPublicationQuality,
   buildFinalLengthRecoveryPrompt,
   getRecapCompositionIssues,
   buildRecapCompositionRepairPrompt

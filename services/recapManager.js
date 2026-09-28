@@ -2101,6 +2101,7 @@ function createRecapManager({
         return;
       }
 
+      if (err?.recapQualityFailure && err.quality) lastRecapQuality = err.quality;
       console.error('[Recap] Automatic recap failed:', err);
 
       if (err.inputBlocked) {
