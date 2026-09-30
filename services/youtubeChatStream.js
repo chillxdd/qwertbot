@@ -94,7 +94,7 @@ function deterministicJitter(baseMs, id, attempt) {
   return hash % (spread + 1);
 }
 
-function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, onWorkerState, grpcLoader = loadGrpcService }) {
+function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, onWorkerState, onConnectionAttempt, grpcLoader = loadGrpcService }) {
   let grpcBundle = null;
   const workerClients = new Set();
 
@@ -147,6 +147,10 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
     let currentResponseCount = 0;
     let lastResponseCount = 0;
     let totalResponseCount = 0;
+    let currentMessageCount = 0;
+    let lastMessageCount = 0;
+    let totalMessageCount = 0;
+    let currentFirstResponseAt = null;
     let currentPageTokenCount = 0;
     let lastPageTokenCount = 0;
     let totalPageTokenCount = 0;
@@ -175,6 +179,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         lastDataAt,
         nextReconnectAt,
         currentConnectionAgeMs: currentConnectionAgeMs(),
+        currentConnectionStartedAt: callStartedAtMs ? new Date(callStartedAtMs).toISOString() : null,
         lastConnectionDurationMs,
         longestConnectionDurationMs,
         transport: 'grpc-streamlist',
@@ -189,6 +194,9 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         currentResponseCount,
         lastResponseCount,
         totalResponseCount,
+        currentMessageCount,
+        lastMessageCount,
+        totalMessageCount,
         currentPageTokenCount,
         lastPageTokenCount,
         totalPageTokenCount,
@@ -207,15 +215,40 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       return true;
     }
 
-    function recordConnectionDuration() {
+    function recordConnectionDuration({ reason = null, terminalEvent = null, excludedFromStats = false } = {}) {
       if (!callStartedAtMs) return;
-      lastConnectionDurationMs = Math.max(0, Date.now() - callStartedAtMs);
+      const endedAtMs = Date.now();
+      const startedAtMs = callStartedAtMs;
+      lastConnectionDurationMs = Math.max(0, endedAtMs - startedAtMs);
       longestConnectionDurationMs = Math.max(longestConnectionDurationMs, lastConnectionDurationMs);
       lastResponseCount = currentResponseCount;
+      lastMessageCount = currentMessageCount;
       lastPageTokenCount = currentPageTokenCount;
+      const attempt = {
+        liveChatId: id,
+        broadcasts,
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt: new Date(endedAtMs).toISOString(),
+        durationMs: lastConnectionDurationMs,
+        responseCount: currentResponseCount,
+        messageCount: currentMessageCount,
+        pageTokenCount: currentPageTokenCount,
+        firstResponseAt: currentFirstResponseAt,
+        lastResponseAt: lastDataAt,
+        terminalEvent: terminalEvent || lastTerminalEvent || 'unknown',
+        grpcStatusCode: lastGrpcStatusCode ?? grpcCode(reason),
+        grpcStatusName: lastGrpcStatusName || (grpcCode(reason) !== null ? grpcStatusName(grpcCode(reason)) : null),
+        grpcStatusDetails: lastGrpcStatusDetails || (reason ? errorText(reason) : ''),
+        grpcMetadataKeys: lastGrpcMetadataKeys,
+        terminationReason: reason ? errorText(reason) : '',
+        excludedFromStats: Boolean(excludedFromStats)
+      };
       currentResponseCount = 0;
+      currentMessageCount = 0;
       currentPageTokenCount = 0;
+      currentFirstResponseAt = null;
       callStartedAtMs = 0;
+      try { onConnectionAttempt?.(attempt); } catch (_) {}
     }
 
     function clearEndStatusGraceTimer() {
@@ -260,7 +293,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       reconnectTimer = null;
       nextReconnectAt = null;
       lastError = reason ? errorText(reason) : null;
-      recordConnectionDuration();
+      recordConnectionDuration({ reason, terminalEvent: lastTerminalEvent || (terminalState === 'stopped' ? 'stop' : 'terminate'), excludedFromStats: terminalState === 'stopped' });
       state = terminalState;
       ++streamGeneration;
       try { call?.cancel?.(); } catch (_) {}
@@ -306,7 +339,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
 
       clearEndStatusGraceTimer();
       clearStableResetTimer();
-      recordConnectionDuration();
+      recordConnectionDuration({ reason, terminalEvent: lastTerminalEvent || 'reconnect' });
       state = 'reconnecting';
       reconnectCount += 1;
       lastError = reason ? errorText(reason) : null;
@@ -364,7 +397,9 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
       call = activeCall;
       callStartedAtMs = Date.now();
       currentResponseCount = 0;
+      currentMessageCount = 0;
       currentPageTokenCount = 0;
+      currentFirstResponseAt = null;
       lastGrpcStatusCode = null;
       lastGrpcStatusName = null;
       lastGrpcStatusDetails = null;
@@ -381,6 +416,7 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         lastDataAt = new Date().toISOString();
         currentResponseCount += 1;
         totalResponseCount += 1;
+        if (!currentFirstResponseAt) currentFirstResponseAt = lastDataAt;
         if (response?.next_page_token) {
           pageToken = String(response.next_page_token);
           currentPageTokenCount += 1;
@@ -395,6 +431,8 @@ function createYouTubeChatStreamFactory({ authManager, quotaManager, onMessage, 
         }
 
         const items = Array.isArray(response?.items) ? response.items : [];
+        currentMessageCount += items.length;
+        totalMessageCount += items.length;
         const acceptedItems = historyGate.accept(items);
 
         if (!hadPageTokenAtConnect) {

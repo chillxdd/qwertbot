@@ -58,6 +58,7 @@ const { registerNativeCommandRoutes } = require('./routes/nativeCommands');
 const { registerReliabilityRoutes } = require('./routes/reliability');
 const { registerYouTubeAuthRoutes } = require('./routes/youtubeAuth');
 const { registerYouTubeRoutes } = require('./routes/youtube');
+const { registerStreamListLabRoutes } = require('./routes/streamListLab');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -425,6 +426,13 @@ registerYouTubeRoutes(app, {
   channelKey: channelName || 'generalqwert',
   viewsDir: path.join(__dirname, 'views'),
   getAdvancedFilterManager: () => advancedFilterManager
+});
+
+registerStreamListLabRoutes(app, {
+  requireModSession,
+  youtubeManager,
+  viewsDir: path.join(__dirname, 'views'),
+  adminPath: ADMIN_PATH
 });
 
 registerChatRoutes(app, {
