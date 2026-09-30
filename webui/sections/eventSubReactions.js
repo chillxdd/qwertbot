@@ -4,6 +4,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
   let limits = { maxActions: 12, maxHoldSeconds: 3600, maxActionDelaySeconds: 300, maxDiscordEmbedFields: 10, maxDiscordEmbedButtons: 5 };
   let automationSpacingSeconds = 0;
   let discordWebhookStorage = { ready: false, preferredSource: null, usingFallback: false };
+  let discordBotStatus = { tokenConfigured: false, gatewayState: 'DISABLED', online: false, defaultChannelIdConfigured: false, botUser: null };
   const maxPersistentPinMessageLength = Number(config.maxPersistentPinMessageLength || 500);
   const maxPersistentPinMessages = Number(config.maxPersistentPinMessages || 10);
   const defaultPersistentPinRotationSeconds = Number(config.defaultPersistentPinRotationSeconds || 180);
@@ -27,6 +28,17 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
   function typeMeta(type) { return eventTypes.find((item) => item.type === type) || { type, label: type, threshold: null }; }
   function setMsg(text, bad = false) { const el=$('eventReactionsMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
   function setEditorMsg(text, bad = false) { const el=$('eventReactionEditorMsg'); el.textContent=text||''; el.classList.toggle('bad', bad); }
+  function renderDiscordBotStatus() {
+    const el = $('discordBotStatus');
+    if (!el) return;
+    const user = discordBotStatus.botUser?.username ? ` as ${discordBotStatus.botUser.username}` : '';
+    const token = discordBotStatus.tokenConfigured ? 'Bot token configured' : 'Bot token not configured';
+    const presence = discordBotStatus.tokenConfigured ? ` · presence ${discordBotStatus.gatewayState || (discordBotStatus.online ? 'ONLINE' : 'OFFLINE')}${user}` : '';
+    const defaultChannel = discordBotStatus.defaultChannelIdConfigured ? ' · default bot channel configured' : '';
+    const err = discordBotStatus.lastError ? ` · ${discordBotStatus.lastError}` : '';
+    el.textContent = `Discord: ${token}${presence}${defaultChannel}${err}`;
+    el.classList.toggle('bad', !discordBotStatus.tokenConfigured || ['ERROR','UNAVAILABLE'].includes(String(discordBotStatus.gatewayState || '')));
+  }
   function updateHoldUi() {
     const holdEl = $('eventReactionHold');
     holdEl.max = String(limits.maxHoldSeconds);
@@ -431,10 +443,13 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
       </div>
       <div class="event-action-discord-options" hidden>
         <div class="event-action-discord-title">Discord notification settings</div>
-        <label>Webhook URL
+        <label>Bot Channel ID <span class="detail">(primary)</span>
+          <input class="event-action-discord-channel" inputmode="numeric" maxlength="32" value="${esc(action.discordChannelId || '')}" placeholder="Uses DISCORD_CHANNEL_ID if configured">
+        </label>
+        <label>Webhook URL <span class="detail">(fallback)</span>
           <div class="event-action-discord-webhook-line">
             <input class="event-action-discord-webhook" type="password" autocomplete="new-password" spellcheck="false" placeholder="https://discord.com/api/webhooks/ID/TOKEN">
-            <button class="secondary event-action-discord-test" type="button">Test</button>
+            <button class="secondary event-action-discord-test" type="button">Test Delivery</button>
           </div>
         </label>
         <label>Mentions
@@ -492,6 +507,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
     const valueEl = row.querySelector('.event-action-value');
     const colorEl = row.querySelector('.event-action-color');
     const discordOptions = row.querySelector('.event-action-discord-options');
+    const channelEl = row.querySelector('.event-action-discord-channel');
     const webhookEl = row.querySelector('.event-action-discord-webhook');
     const mentionEl = row.querySelector('.event-action-discord-mentions');
     const discordHelp = row.querySelector('.event-action-discord-help');
@@ -577,15 +593,20 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
     addEmbedButtonBtn.onclick = () => addEmbedButton();
 
     const updateDiscordHelp = (extra = '') => {
-      const configured = row.dataset.discordWebhookConfigured === '1';
-      const base = configured
-        ? 'Webhook saved securely. Type a new URL only if you want to replace it.'
+      const webhookConfigured = row.dataset.discordWebhookConfigured === '1';
+      const botName = discordBotStatus.botUser?.username ? ` as ${discordBotStatus.botUser.username}` : '';
+      const botBase = discordBotStatus.tokenConfigured
+        ? `Bot token ready; presence ${discordBotStatus.gatewayState || (discordBotStatus.online ? 'ONLINE' : 'OFFLINE')}${botName}. ${discordBotStatus.defaultChannelIdConfigured ? 'A default DISCORD_CHANNEL_ID is configured.' : 'Enter a Bot Channel ID here unless this action should be webhook-only.'}`
+        : 'DISCORD_BOT_TOKEN is not configured; this action will use the webhook when available.';
+      const webhookBase = webhookConfigured
+        ? ' Webhook fallback is saved securely; type a new URL only to replace it.'
         : (discordWebhookStorage.ready
-          ? 'Paste a Discord webhook URL. It is encrypted server-side and hidden after save.'
-          : 'Webhook encryption is not configured. Set CONFIG_ENCRYPTION_KEY once, or keep an existing QWERT_OAUTH_LINK_SECRET / TWITCH_CLIENT_SECRET configured.');
-      const mentionHelp = ' @everyone/@here ping only when allowed above. Role ping syntax: <@&ROLE_ID>. Test always suppresses pings.';
-      discordHelp.textContent = `${extra ? `${extra} ` : ''}${base}${mentionHelp}`;
-      discordHelp.classList.toggle('bad', !discordWebhookStorage.ready && !configured);
+          ? ' Webhook fallback is optional; paste one to enable failover when a bot send is definitely not sent.'
+          : ' Webhook encryption is unavailable, so no new webhook fallback can be saved.');
+      const safety = ' Fallback is NOT attempted after an ambiguous bot POST timeout/server failure, because that could duplicate a message. Test always suppresses pings.';
+      discordHelp.textContent = `${extra ? `${extra} ` : ''}${botBase}${webhookBase}${safety}`;
+      const hasBotTarget = discordBotStatus.tokenConfigured && (Boolean(channelEl.value.trim()) || discordBotStatus.defaultChannelIdConfigured);
+      discordHelp.classList.toggle('bad', !hasBotTarget && !webhookConfigured && !discordWebhookStorage.ready);
     };
     const update = () => {
       const type = typeEl.value;
@@ -605,14 +626,20 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
       }
     };
     typeEl.addEventListener('change', update);
+    channelEl.addEventListener('input', () => updateDiscordHelp());
+    webhookEl.addEventListener('input', () => updateDiscordHelp());
     testBtn.onclick = async () => {
+      const channelId = channelEl.value.trim();
       const webhookUrl = webhookEl.value.trim();
       const webhookId = row.dataset.discordWebhookId || '';
-      if (!webhookUrl && !webhookId) return updateDiscordHelp('Paste a webhook URL before testing.');
+      const canBot = discordBotStatus.tokenConfigured && (Boolean(channelId) || discordBotStatus.defaultChannelIdConfigured);
+      const canWebhook = Boolean(webhookUrl || webhookId);
+      if (!canBot && !canWebhook) return updateDiscordHelp('Enter a Bot Channel ID or configure a webhook fallback before testing.');
       testBtn.disabled = true;
       updateDiscordHelp('Sending a no-ping preview...');
       try {
         const d = await postJson('/eventsub-reactions/test-discord', {
+          channelId,
           webhookUrl,
           webhookId,
           content: valueEl.value.trim(),
@@ -625,15 +652,17 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
             ? ` [scope=${diag.scope || 'unknown'}, global=${diag.global === true}, edge/IP=${diag.probableEdgeIpRestriction === true}, retry=${diag.retryAfterSeconds ?? 'n/a'}s, bucket=${diag.bucket || 'n/a'}]`
             : '';
           const edgeHint = diag.probableEdgeIpRestriction === true
-            ? ' Discord appears to be restricting this outbound IP at the edge; QwertBot will suppress all Discord webhook sends until the reported cooldown expires.'
+            ? ` Discord appears to be restricting this outbound IP at the edge for the ${diag.transport === 'bot' ? 'authenticated bot API' : 'webhook'} path until the reported cooldown expires.`
             : '';
-          throw new Error(`${d.error || 'Discord webhook test failed.'}${extra}${edgeHint}`);
+          throw new Error(`${d.error || 'Discord delivery test failed.'}${extra}${edgeHint}`);
         }
         const diag = d.diagnostics || {};
         const retryNote = Number(diag.attempt || 1) > 1 || Number(diag.waitedSeconds || 0) > 0
           ? ` after ${diag.attempt || 1} attempt(s) / ${diag.waitedSeconds || 0}s rate-limit wait`
           : '';
-        updateDiscordHelp(`Preview sent successfully${retryNote}.`);
+        const via = d.transport === 'bot' ? 'authenticated bot' : d.fallbackUsed ? 'webhook fallback' : 'webhook';
+        const fallbackNote = d.fallbackUsed && d.primaryError ? ` Bot attempt: ${d.primaryError}` : '';
+        updateDiscordHelp(`Preview sent successfully via ${via}${retryNote}.${fallbackNote}`);
       } catch (err) {
         updateDiscordHelp(`Test failed: ${err.message || err}`);
       } finally {
@@ -662,6 +691,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
       color: row.querySelector('.event-action-color').value || 'primary',
       delaySeconds: Number(row.querySelector('.event-action-delay').value || 0),
       enabled: row.querySelector('.event-action-enabled-input').checked,
+      discordChannelId: row.querySelector('.event-action-discord-channel').value.trim(),
       discordWebhookId: row.dataset.discordWebhookId || '',
       discordWebhookUrl: row.querySelector('.event-action-discord-webhook').value.trim(),
       discordMentionMode: row.querySelector('.event-action-discord-mentions').value || 'none',
@@ -807,6 +837,8 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
     limits = { ...limits, ...(d.limits||{}) };
     automationSpacingSeconds = Math.max(0, Number(d.automationSpacingSeconds) || 0);
     discordWebhookStorage = { ...discordWebhookStorage, ...(d.discordWebhookStorage || {}) };
+    discordBotStatus = { ...discordBotStatus, ...(d.discordBotStatus || {}) };
+    renderDiscordBotStatus();
     renderTypeOptions();
     updateHoldUi();
     loaded = true;

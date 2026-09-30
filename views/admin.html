@@ -381,6 +381,7 @@
         </div>
 
 
+        <div id="discordBotStatus" class="detail"></div>
         <div id="eventReactionsMsg" class="detail"></div>
         <div id="eventReactionList" class="custom-command-list"></div>
         <div id="eventReactionPagination" class="list-pagination" aria-label="EventSub reaction pagination">
@@ -514,7 +515,7 @@
             <div class="custom-variable-row"><code>$(url)</code><div class="detail">Direct Twitch channel URL.</div></div>
             <div class="custom-variable-row"><code>$(thumbnail)</code><div class="detail">Live Twitch preview image URL.</div></div>
             <div class="custom-variable-row"><code>$(started)</code><div class="detail">Current stream start timestamp when available.</div></div>
-            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, Run Custom Command, Discord Notification values, and Discord embed fields. Use <code>$(title)</code> only for an EventSub event title/name, <code>$(streamtitle)</code> for the current broadcast title, and <code>$(streamcategory)</code> or <code>$(streamgame)</code> for the current broadcast category. EventSub <code>$(game)</code> is retired and no longer returns the stream category.</div><div class="custom-variable-note detail">Discord mentions: type <code>@everyone</code> or <code>@here</code> directly and choose a mention mode that allows them. For a role, use Discord mention syntax <code>&lt;@&amp;ROLE_ID&gt;</code> and allow role pings. The Test button always suppresses mentions.</div>
+            <div class="custom-variable-note detail">Variables are available in Chat Message, Twitch Announcement, Run Custom Command, Discord Notification values, and Discord embed fields. Use <code>$(title)</code> only for an EventSub event title/name, <code>$(streamtitle)</code> for the current broadcast title, and <code>$(streamcategory)</code> or <code>$(streamgame)</code> for the current broadcast category. EventSub <code>$(game)</code> is retired and no longer returns the stream category.</div><div class="custom-variable-note detail">Discord delivery: authenticated bot channel is primary when configured; a saved webhook is used only as fallback after a definitely-not-sent bot failure. Ambiguous bot sends are never duplicated through the webhook. Mentions: type <code>@everyone</code> or <code>@here</code> directly and choose a mention mode that allows them. For a role, use Discord mention syntax <code>&lt;@&amp;ROLE_ID&gt;</code> and allow role pings. Test Delivery always suppresses mentions.</div>
           </div>
         </dialog>
       </div>

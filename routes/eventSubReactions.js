@@ -17,6 +17,7 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
         eventTypes: EVENT_TYPES,
         automationSpacingSeconds: Number(manager.getAutomationSpacingSeconds?.() || 0),
         discordWebhookStorage: manager.getDiscordSecretStatus?.() || { ready: false, preferredSource: null, usingFallback: false },
+        discordBotStatus: manager.getDiscordBotStatus?.() || { tokenConfigured: false, gatewayState: 'DISABLED', online: false, defaultChannelIdConfigured: false },
         limits: { maxActions: MAX_ACTIONS, maxHoldSeconds: MAX_HOLD_SECONDS, maxActionDelaySeconds: MAX_ACTION_DELAY_SECONDS, maxDiscordEmbedFields: MAX_DISCORD_EMBED_FIELDS, maxDiscordEmbedButtons: MAX_DISCORD_EMBED_BUTTONS }
       });
     } catch (err) {
@@ -38,17 +39,18 @@ function registerEventSubReactionRoutes(app, { requireModSession, getDatabaseCon
     if (!getDatabaseConnected() || !manager) return unavailable(res);
     try {
       const result = await manager.testDiscordNotification({
+        channelId: String(req.body?.channelId || ''),
         webhookUrl: String(req.body?.webhookUrl || ''),
         webhookId: String(req.body?.webhookId || ''),
         content: String(req.body?.content || ''),
         discordEmbed: req.body?.discordEmbed || null,
         eventType: String(req.body?.eventType || '')
       });
-      return res.json({ success: true, diagnostics: result?.diagnostics || null });
+      return res.json({ success: true, transport: result?.transport || '', fallbackUsed: result?.fallbackUsed === true, diagnostics: result?.diagnostics || null, primaryDiagnostics: result?.primaryDiagnostics || null, primaryError: result?.primaryError || '' });
     } catch (err) {
       return res.status(400).json({
         success: false,
-        error: err.message || 'Could not send Discord webhook test.',
+        error: err.message || 'Could not send Discord delivery test.',
         diagnostics: err?.discordDiagnostics || null
       });
     }

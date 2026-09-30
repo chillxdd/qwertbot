@@ -43,6 +43,7 @@ const actionSchema = new mongoose.Schema({
   color: { type: String, enum: ['primary', 'blue', 'green', 'orange', 'purple'], default: 'primary' },
   delaySeconds: { type: Number, default: 0, min: 0, max: 300 },
   enabled: { type: Boolean, default: true },
+  discordChannelId: { type: String, default: '', maxlength: 32 },
   discordWebhookId: { type: String, default: '', maxlength: 80 },
   discordWebhookSecret: { type: encryptedSecretSchema, default: undefined },
   discordMentionMode: { type: String, enum: ['none', 'everyone', 'roles', 'all'], default: 'none' },

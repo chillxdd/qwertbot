@@ -82,6 +82,13 @@ function discordWebhookConfigured(action = {}) {
   return Boolean(String(action.discordWebhookId || '').trim() && action.discordWebhookSecret?.data);
 }
 
+function normalizeDiscordChannelId(value) {
+  const id = String(value || '').trim();
+  if (!id) return '';
+  if (!/^\d{16,22}$/.test(id)) throw new Error('Discord Channel ID must be a numeric Discord snowflake.');
+  return id;
+}
+
 function normalizeDiscordColor(value) {
   const raw = String(value || DEFAULT_DISCORD_EMBED_COLOR).trim();
   const normalized = raw.startsWith('#') ? raw : `#${raw}`;
@@ -276,6 +283,7 @@ function reactionToClient(item, automationSpacingSeconds = 0) {
       delaySeconds: Number(action.delaySeconds || 0),
       enabled: action.enabled !== false,
       ...(action.type === 'discord_notification' ? {
+        discordChannelId: String(action.discordChannelId || ''),
         discordWebhookId: String(action.discordWebhookId || ''),
         discordWebhookConfigured: discordWebhookConfigured(action),
         discordMentionMode: DISCORD_MENTION_MODES.has(String(action.discordMentionMode || '')) ? String(action.discordMentionMode) : 'none',
@@ -331,6 +339,7 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingRea
     const base = { type, value, color, delaySeconds, enabled: raw.enabled !== false };
     if (type !== 'discord_notification') return base;
 
+    const discordChannelId = normalizeDiscordChannelId(raw.discordChannelId);
     const requestedWebhookId = cleanText(raw.discordWebhookId, 80);
     const existingAction = requestedWebhookId ? existingDiscordById.get(requestedWebhookId) : null;
     const enteredWebhookUrl = String(raw.discordWebhookUrl || '').trim();
@@ -344,10 +353,18 @@ function normalizeReaction(input = {}, automationSpacingSeconds = 0, existingRea
       discordWebhookSecret = secretBox.encrypt(normalizedUrl, discordWebhookId);
     } else if (existingAction && discordWebhookConfigured(existingAction)) {
       discordWebhookSecret = existingAction.discordWebhookSecret;
-    } else {
-      throw new Error('Discord Notification needs a Webhook URL. Paste it once; saved webhook URLs are hidden when you reopen the reaction.');
     }
-    return { ...base, discordWebhookId, discordWebhookSecret, discordMentionMode: mentionMode, discordEmbed };
+    const defaultChannelId = normalizeDiscordChannelId(process.env.DISCORD_CHANNEL_ID || '');
+    const botTargetAvailable = Boolean(discordChannelId || defaultChannelId);
+    const botTokenAvailable = Boolean(String(process.env.DISCORD_BOT_TOKEN || '').trim());
+    const webhookAvailable = Boolean(discordWebhookSecret?.data);
+    if (!botTargetAvailable && !webhookAvailable) {
+      throw new Error('Discord Notification needs a Bot Channel ID (or DISCORD_CHANNEL_ID) and/or a Webhook URL fallback.');
+    }
+    if (botTargetAvailable && !botTokenAvailable && !webhookAvailable) {
+      throw new Error('Discord Bot Channel ID is configured, but DISCORD_BOT_TOKEN is missing and no webhook fallback is saved.');
+    }
+    return { ...base, discordChannelId, discordWebhookId, discordWebhookSecret, discordMentionMode: mentionMode, discordEmbed };
   });
   return {
     name,
@@ -444,7 +461,7 @@ function renderDiscordEmbed(raw = {}, type, event = {}, extra = {}) {
   return { embed, components };
 }
 
-function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null, getAutomationSpacingStatus = null, getStreamStatus = null }) {
+function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncement = null, getBotAccessToken, getCustomCommandManager, noteAutomationSend = null, getAutomationSpacingSeconds = null, getAutomationSpacingStatus = null, getStreamStatus = null, discordBot = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
 
@@ -533,14 +550,68 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     return reactionToClient(saved, currentAutomationSpacingSeconds());
   }
 
-  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none', { embed = null, components = [], testMode = false } = {}) {
-    const url = normalizeDiscordWebhookUrl(webhookUrl);
+  function effectiveDiscordChannelId(actionOrId = '') {
+    const direct = typeof actionOrId === 'object' && actionOrId ? String(actionOrId.discordChannelId || '').trim() : String(actionOrId || '').trim();
+    return normalizeDiscordChannelId(direct || process.env.DISCORD_CHANNEL_ID || '');
+  }
+
+  function buildDiscordBody(content, mentionMode = 'none', { embed = null, components = [] } = {}) {
     const message = cleanText(content, 2000);
     if (!message && !embed && !(Array.isArray(components) && components.length)) throw new Error('Discord Notification is empty.');
     const body = { allowed_mentions: discordAllowedMentions(mentionMode) };
     if (message) body.content = message;
     if (embed) body.embeds = [embed];
     if (Array.isArray(components) && components.length) body.components = components;
+    return body;
+  }
+
+  async function postDiscordBot(channelId, content, mentionMode = 'none', { embed = null, components = [], testMode = false, fallbackConfigured = false } = {}) {
+    if (!discordBot?.postMessage) {
+      const err = new Error('Discord bot delivery is unavailable in this QwertBot build.');
+      err.deliveryState = 'NOT_SENT';
+      throw err;
+    }
+    const body = buildDiscordBody(content, mentionMode, { embed, components });
+    return discordBot.postMessage({
+      channelId: effectiveDiscordChannelId(channelId), body, purpose: testMode ? 'admin test' : 'EventSub notification',
+      max429Retries: fallbackConfigured ? 0 : (testMode ? 2 : 6),
+      maxTotalWaitMs: fallbackConfigured ? 0 : (testMode ? 15000 : 20 * 60 * 1000)
+    });
+  }
+
+  async function deliverDiscord({ action = null, channelId = '', webhookUrl = '', content = '', mentionMode = 'none', embed = null, components = [], testMode = false } = {}) {
+    const effectiveChannel = effectiveDiscordChannelId(channelId || action?.discordChannelId || '');
+    let targetWebhook = String(webhookUrl || '').trim();
+    if (!targetWebhook && action && discordWebhookConfigured(action)) targetWebhook = decryptDiscordWebhook(action);
+    const webhookConfigured = Boolean(targetWebhook);
+    const botConfigured = Boolean(discordBot?.status?.().tokenConfigured && effectiveChannel);
+    let primaryError = null;
+    if (botConfigured) {
+      try {
+        const result = await postDiscordBot(effectiveChannel, content, mentionMode, { embed, components, testMode, fallbackConfigured: webhookConfigured });
+        console.log(`[Discord Delivery] ${testMode ? 'Test' : 'EventSub notification'} delivered via authenticated bot API to channel ${effectiveChannel}.`);
+        return { ...result, transport: 'bot', fallbackUsed: false, primaryDiagnostics: result?.diagnostics || null };
+      } catch (err) {
+        primaryError = err;
+        const safeFallback = webhookConfigured && err?.deliveryState === 'NOT_SENT' && !err?.cancelled;
+        if (!safeFallback) throw err;
+        console.warn(`[Discord Delivery] Bot API definitely did not send ${testMode ? 'test' : 'notification'}; using configured webhook fallback: ${err?.message || err}`);
+      }
+    }
+    if (!webhookConfigured) {
+      if (primaryError) throw primaryError;
+      const err = new Error(botConfigured ? 'Discord bot delivery failed and no webhook fallback is configured.' : 'Discord notification has no usable bot channel or webhook target.');
+      err.deliveryState = 'NOT_SENT';
+      throw err;
+    }
+    const webhookResult = await postDiscordWebhook(targetWebhook, content, mentionMode, { embed, components, testMode });
+    console.log(`[Discord Delivery] ${testMode ? 'Test' : 'EventSub notification'} delivered via webhook${primaryError ? ' fallback' : ''}.`);
+    return { ...webhookResult, transport: 'webhook', fallbackUsed: Boolean(primaryError), primaryError: primaryError ? String(primaryError.message || primaryError).slice(0, 500) : '', primaryDiagnostics: primaryError?.discordDiagnostics || null };
+  }
+
+  async function postDiscordWebhook(webhookUrl, content, mentionMode = 'none', { embed = null, components = [], testMode = false } = {}) {
+    const url = normalizeDiscordWebhookUrl(webhookUrl);
+    const body = buildDiscordBody(content, mentionMode, { embed, components });
     const targetUrl = new URL(url);
     if (Array.isArray(components) && components.length) targetUrl.searchParams.set('with_components', 'true');
     return deliverDiscordWebhook({
@@ -566,14 +637,16 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     return null;
   }
 
-  async function testDiscordNotification({ webhookUrl = '', webhookId = '', content = '', discordEmbed = null, eventType = 'stream.online' } = {}) {
+  async function testDiscordNotification({ channelId = '', webhookUrl = '', webhookId = '', content = '', discordEmbed = null, eventType = 'stream.online' } = {}) {
     let targetUrl = String(webhookUrl || '').trim();
+    let savedAction = null;
     if (targetUrl) targetUrl = normalizeDiscordWebhookUrl(targetUrl);
-    else {
-      const action = findDiscordActionByWebhookId(webhookId);
-      if (!action) throw new Error('Saved Discord webhook was not found. Save the reaction first or paste a webhook URL.');
-      targetUrl = decryptDiscordWebhook(action);
+    else if (webhookId) {
+      savedAction = findDiscordActionByWebhookId(webhookId);
+      if (savedAction && discordWebhookConfigured(savedAction)) targetUrl = decryptDiscordWebhook(savedAction);
     }
+    const effectiveChannel = effectiveDiscordChannelId(channelId || savedAction?.discordChannelId || '');
+    if (!effectiveChannel && !targetUrl) throw new Error('Enter a Discord Bot Channel ID or configure a webhook fallback before testing.');
     const type = EVENT_TYPE_SET.has(String(eventType || '')) ? String(eventType) : 'stream.online';
     let previewEvent;
     if (type === 'channel.raid') {
@@ -591,8 +664,8 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     const renderedContent = renderEventTemplate(String(content || ''), type, previewEvent, extra).trim();
     const message = renderedContent || (rendered.embed || rendered.components.length ? '' : 'QwertBot Discord notification test ✅');
     // Test sends always suppress mentions, regardless of the saved action setting.
-    const result = await postDiscordWebhook(targetUrl, message, 'none', { ...rendered, testMode: true });
-    return { success: true, diagnostics: result?.diagnostics || null };
+    const result = await deliverDiscord({ channelId: effectiveChannel, webhookUrl: targetUrl, content: message, mentionMode: 'none', ...rendered, testMode: true });
+    return { success: true, transport: result?.transport || '', fallbackUsed: result?.fallbackUsed === true, diagnostics: result?.diagnostics || null, primaryDiagnostics: result?.primaryDiagnostics || null, primaryError: result?.primaryError || '' };
   }
 
   async function sendTwitchShoutout(type, event) {
@@ -672,11 +745,11 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
         await delivery.deliver({
           key,
           kind: 'event-discord-notification',
-          payload: { content: message, mentionMode, webhookId: String(action.discordWebhookId || ''), embed: renderedEmbed.embed, components: renderedEmbed.components },
-          send: (saved) => postDiscordWebhook(decryptDiscordWebhook(action), saved.content, saved.mentionMode, { embed: saved.embed || null, components: saved.components || [] })
+          payload: { content: message, mentionMode, channelId: String(action.discordChannelId || ''), webhookId: String(action.discordWebhookId || ''), embed: renderedEmbed.embed, components: renderedEmbed.components },
+          send: (saved) => deliverDiscord({ action, channelId: saved.channelId || '', content: saved.content, mentionMode: saved.mentionMode, embed: saved.embed || null, components: saved.components || [] })
         });
       } else {
-        await postDiscordWebhook(decryptDiscordWebhook(action), message, mentionMode, renderedEmbed);
+        await deliverDiscord({ action, channelId: action.discordChannelId || '', content: message, mentionMode, ...renderedEmbed });
       }
       return;
     }
@@ -764,6 +837,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
     getHoldStatus: getEventReactionHoldStatus,
     getAutomationSpacingSeconds: currentAutomationSpacingSeconds,
     getDiscordSecretStatus: secretBox.status,
+    getDiscordBotStatus: () => discordBot?.status?.() || { tokenConfigured: false, gatewayState: 'DISABLED', online: false, defaultChannelIdConfigured: false },
     eventTypes: EVENT_TYPES
   };
 }
@@ -779,6 +853,7 @@ module.exports = {
   renderEventTemplate,
   numericEventValue,
   normalizeDiscordWebhookUrl,
+  normalizeDiscordChannelId,
   discordAllowedMentions,
   normalizeDiscordEmbed,
   renderDiscordEmbed

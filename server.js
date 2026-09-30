@@ -22,6 +22,7 @@ const { createTwitchMessageHandler } = require('./services/twitchMessageHandler'
 const { createCustomCommandManager } = require('./services/customCommands');
 const { createChatTimerManager } = require('./services/chatTimers');
 const { createEventSubReactionManager } = require('./services/eventSubReactions');
+const { createDiscordBotService } = require('./services/discordBot');
 const { createAutomationSpacingManager } = require('./services/automationSpacing');
 const { createPersistentPinManager } = require('./services/persistentStreamPin');
 const { createAdvancedFilterManager } = require('./services/advancedFilters');
@@ -112,6 +113,7 @@ let recapManager = null;
 let customCommandManager = null;
 let chatTimerManager = null;
 let eventSubReactionManager = null;
+let discordBotService = null;
 let automationSpacingManager = null;
 let advancedFilterManager = null;
 let persistentPinManager = null;
@@ -248,6 +250,8 @@ chatTimerManager = createChatTimerManager({
   evaluateAdvancedFilter: (id, status) => advancedFilterManager?.evaluateById?.(id, status) || { exists: false, matched: false, filterId: String(id || '') }
 });
 
+discordBotService = createDiscordBotService();
+
 eventSubReactionManager = createEventSubReactionManager({
   channelName,
   sendMessage: (channel, message, options = {}) => chatClientProxy.say(channel, message, options),
@@ -257,7 +261,8 @@ eventSubReactionManager = createEventSubReactionManager({
   noteAutomationSend: (engine) => automationSpacingManager?.noteAutomation?.(engine) || Promise.resolve(),
   getAutomationSpacingSeconds: () => automationSpacingManager?.getSettings?.().minimumSpacingSeconds || 0,
   getAutomationSpacingStatus: (engine) => automationSpacingManager?.getStatus?.(engine) || { active: false },
-  getStreamStatus: () => recapManager?.getStatus?.() || {}
+  getStreamStatus: () => recapManager?.getStatus?.() || {},
+  discordBot: discordBotService
 });
 
 botPersonalityManager = createBotPersonalityManager({
@@ -479,6 +484,7 @@ async function activateBot() {
   await persistentPinManager.initialize();
   await customCommandManager.initialize();
   await eventSubReactionManager.initialize();
+  discordBotService?.startPresence?.({ activity: 'GeneralQwert' });
   await botPersonalityManager.initialize();
   await initializeYouTubeFailOpen('initialization');
   recapManager = createRecapManager({
@@ -576,7 +582,7 @@ runtime = createRuntime({ key: `bot:${channelName}:${botUsername}`, connect: con
     twitchConnection.quiesce(); clearInterval(retentionTimer);
     recapManager?.quiesce(); chatTimerManager?.quiesce(); persistentPinManager?.quiesce();
     void youtubeManager?.quiesce?.();
-    eventSubInbox?.quiesce(); stopTemporaryPinTimer(); cancelAllGeminiRequests();
+    eventSubInbox?.quiesce(); discordBotService?.stopPresence?.(); stopTemporaryPinTimer(); cancelAllGeminiRequests();
   },
   flush: async ({ persist }) => {
     const work = [eventSubInbox?.stop(), youtubeManager?.shutdown?.()];
