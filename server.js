@@ -466,6 +466,7 @@ async function reconcileRecovery() {
     // remove old timer/pin review flags without touching new-stream schedules.
     await eventSubInbox?.reconcileExpired();
     await chatTimerManager?.expireRecovery(recapManager.getStatus());
+    await youtubeManager?.getTimerManager?.().expireRecovery(recapManager.getStatus());
     await persistentPinManager?.expireRecovery(recapManager.getStatus());
     await delivery.expireStale(channelName, () => recapManager.getStatus());
   })().finally(() => { recoverySweep = null; });
@@ -597,6 +598,7 @@ registerReliabilityRoutes(app, {
   channelName,
   getRuntime: () => runtime,
   getChatTimerManager: () => chatTimerManager,
+  getYouTubeTimerManager: () => youtubeManager?.getTimerManager(),
   getRecapManager: () => recapManager,
   getPersistentPinManager: () => persistentPinManager,
   getEventSubInbox: () => eventSubInbox,

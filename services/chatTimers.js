@@ -5,6 +5,7 @@ const delivery = require('./reliability/delivery');
 const { WRITE_OPTIONS } = require('./reliability/store');
 const { createSerialExecutor } = require('./reliability/serialWriter');
 const ChatTimer = require('../models/ChatTimer');
+const rotation = require('../shared/timers/rotation');
 const TimerConfig = require('../models/TimerConfig');
 
 const { createOwnResponseTracker } = require('../shared/ownResponseTracker');
@@ -13,7 +14,7 @@ const MIN_TIMER_INTERVAL_SECONDS = 30;
 const MAX_TIMER_INTERVAL_SECONDS = 86400;
 const MAX_TIMER_RESPONSES = 25;
 const MAX_TIMER_RESPONSE_LENGTH = 500;
-const TIMER_RESPONSE_MODES = ['equal', 'weighted'];
+const TIMER_RESPONSE_MODES = ['sequential'];
 const TIMER_PRIORITIES = ['high', 'normal', 'low'];
 const TIMER_ACTION_TYPES = ['chat_message', 'twitch_announcement'];
 const TIMER_ANNOUNCEMENT_COLORS = ['primary', 'purple', 'blue', 'green', 'orange'];
@@ -42,10 +43,12 @@ function normalizeSettings(input = {}) {
     throw new Error(`Global stream-start delay must be between 0 and ${MAX_START_DELAY_SECONDS} seconds.`);
   }
 
-  return { globalStartDelaySeconds };
+  const minimumSpacingSeconds = wholeNumber(input.minimumSpacingSeconds, 60);
+  if (minimumSpacingSeconds < 0 || minimumSpacingSeconds > 3600) throw new Error('Timer spacing must be between 0 and 3600 seconds.');
+  return { globalStartDelaySeconds, minimumSpacingSeconds };
 }
 
-function normalizeInput(input = {}, settings = {}) {
+function normalizeInput(input = {}, settings = {}, platformOptions = {}) {
   const name = String(input.name || '').trim();
   if (!name) throw new Error('Timer Name is required.');
   if (name.length > MAX_TIMER_NAME_LENGTH) throw new Error(`Timer Name can contain at most ${MAX_TIMER_NAME_LENGTH} characters.`);
@@ -89,53 +92,11 @@ function normalizeInput(input = {}, settings = {}) {
     ? String(input.priority).toLowerCase()
     : 'normal';
 
-  const responses = Array.isArray(input.responses)
-    ? input.responses.map((value) => String(value || '').trim()).filter(Boolean)
-    : [];
-  if (responses.length < 1 || responses.length > MAX_TIMER_RESPONSES) {
-    throw new Error(`Add between 1 and ${MAX_TIMER_RESPONSES} timer actions.`);
-  }
-  if (responses.some((value) => value.length > MAX_TIMER_RESPONSE_LENGTH)) {
-    throw new Error(`Each timer action message can contain at most ${MAX_TIMER_RESPONSE_LENGTH} characters.`);
-  }
+  const responseSettings = rotation.normalizeResponses(input, platformOptions);
+  return { name, intervalSeconds: Math.round(intervalSeconds * 1000) / 1000,
+    startDelaySeconds, minimumChatMessages, minimumViewers, jitterSeconds, priority,
+    ...responseSettings, enabled: input.enabled !== false };
 
-  const responseMode = TIMER_RESPONSE_MODES.includes(String(input.responseMode || '').toLowerCase())
-    ? String(input.responseMode).toLowerCase()
-    : 'equal';
-
-  const responseWeights = responses.map((_, index) => {
-    if (responseMode !== 'weighted') return 1;
-    const value = Number(input.responseWeights?.[index] ?? 1);
-    if (!Number.isFinite(value) || value <= 0) throw new Error('Specified Weight values must be greater than 0.');
-    return value;
-  });
-
-  const actionTypes = responses.map((_, index) => {
-    const value = String(input.actionTypes?.[index] || 'chat_message').toLowerCase();
-    return TIMER_ACTION_TYPES.includes(value) ? value : 'chat_message';
-  });
-  const actionColors = responses.map((_, index) => {
-    const value = String(input.actionColors?.[index] || 'primary').toLowerCase();
-    return TIMER_ANNOUNCEMENT_COLORS.includes(value) ? value : 'primary';
-  });
-
-  return {
-    name,
-    intervalSeconds: Math.round(intervalSeconds * 1000) / 1000,
-    startDelaySeconds,
-    minimumChatMessages,
-    minimumViewers,
-    advancedFilterId,
-    jitterSeconds,
-    priority,
-    responses,
-    responseMode,
-    responseWeights,
-    avoidImmediateRepeat: responseMode === 'equal' && responses.length >= 2 && input.avoidImmediateRepeat === true,
-    actionTypes,
-    actionColors,
-    enabled: input.enabled !== false
-  };
 }
 
 function priorityRank(priority) {
@@ -165,38 +126,8 @@ function randomJitterMs(timer) {
   return (Math.floor(Math.random() * span) - jitterSeconds) * 1000;
 }
 
-function calculateNextDueAt(timer, now = Date.now()) {
-  const intervalMs = Math.max(MIN_TIMER_INTERVAL_SECONDS, finiteNumber(timer?.intervalSeconds, MIN_TIMER_INTERVAL_SECONDS)) * 1000;
-  return now + Math.max(MIN_TIMER_INTERVAL_SECONDS * 1000, intervalMs + randomJitterMs(timer));
-}
-
-function chooseResponse(timer) {
-  const responses = Array.isArray(timer.responses) ? timer.responses.filter(Boolean) : [];
-  if (!responses.length) return { template: '', index: -1, mode: 'equal' };
-
-  const mode = TIMER_RESPONSE_MODES.includes(timer.responseMode) ? timer.responseMode : 'equal';
-  if (mode === 'weighted') {
-    const weights = responses.map((_, index) => {
-      const value = Number(timer.responseWeights?.[index] ?? 1);
-      return Number.isFinite(value) && value > 0 ? value : 0;
-    });
-    const total = weights.reduce((sum, value) => sum + value, 0);
-    if (total <= 0) return { template: '', index: -1, mode };
-    let roll = Math.random() * total;
-    for (let index = 0; index < responses.length; index += 1) {
-      roll -= weights[index];
-      if (roll < 0) return { template: responses[index], index, mode };
-    }
-    return { template: responses[responses.length - 1], index: responses.length - 1, mode };
-  }
-
-  const allIndexes = responses.map((_, index) => index);
-  const lastIndex = Number(timer.lastResponseIndex);
-  const avoidRepeat = mode === 'equal' && timer.avoidImmediateRepeat === true && responses.length >= 2 && Number.isInteger(lastIndex) && lastIndex >= 0 && lastIndex < responses.length;
-  const candidates = avoidRepeat ? allIndexes.filter((index) => index !== lastIndex) : allIndexes;
-  const index = candidates[Math.floor(Math.random() * candidates.length)];
-  return { template: responses[index], index, mode };
-}
+function calculateNextDueAt(timer, now = Date.now()) { return rotation.nextDueAt(timer, now); }
+function chooseResponse(timer, evaluateFilter) { return rotation.chooseResponse(timer, evaluateFilter); }
 
 const MAX_RANDOM_DECIMAL_PLACES = 5;
 
@@ -222,7 +153,7 @@ function randomNumberInclusive(min, max, decimalPlaces = 0) {
   return (scaled / scale).toFixed(decimals);
 }
 
-async function renderTimerResponse(template, getRandomChatters) {
+async function renderTimerResponse(template, getRandomChatters, maxLength = MAX_TIMER_RESPONSE_LENGTH) {
   let output = String(template || '');
   output = output.replace(/\$\(random\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)(?:\s+(\d+))?\)/gi, (match, min, max, decimals) => {
     if (decimals === undefined) {
@@ -245,14 +176,21 @@ async function renderTimerResponse(template, getRandomChatters) {
     });
   }
 
-  return Array.from(output).slice(0, MAX_TIMER_RESPONSE_LENGTH).join('').trim();
+  return Array.from(output).slice(0, maxLength).join('').trim();
 }
 
-function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = null, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null, getAdvancedFilterById = null, evaluateAdvancedFilter = null }) {
+function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = null, getStreamStatus = null, getRandomChatters = null, getEventReactionHoldStatus = null, getAutomationSpacingStatus = null, tryReserveAutomationSlot = null, getAdvancedFilterById = null, evaluateAdvancedFilter = null,
+  platform = 'twitch', TimerModel = ChatTimer, channelField = 'channelName', maxResponseLength = 500,
+  getSettingsOverrides = null, persistSettingsOverrides = null, isEnabled = () => true,
+  canCountMessages = () => true, beforeTick = null, getDeliveryMetadata = null, reviewDeliveryChildren = null
+}) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
+  const settingsKey = platform === 'twitch' ? normalizedChannel : `${platform}:${normalizedChannel}`;
+  const timerKeyPrefix = platform === 'twitch' ? 'timer' : `${platform}-timer`;
+  const platformOptions = { maxLength: maxResponseLength, allowAnnouncements: platform === 'twitch' };
   let cache = [];
   let settings = {
-    globalStartDelaySeconds: DEFAULT_GLOBAL_START_DELAY_SECONDS
+    globalStartDelaySeconds: DEFAULT_GLOBAL_START_DELAY_SECONDS, minimumSpacingSeconds: 60, lastTimerMessageAt: null
   };
   let scheduler = null;
   let checkpointTimer = null;
@@ -264,7 +202,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   let stopping = false;
   let queuedTick = false;
   const fenceFilter = () => ({ $or: [{ schedulerFence: { $exists: false } }, { schedulerFence: { $lte: context.fence() } }] });
-  const occurrenceKey = (timer) => `timer:${normalizedChannel}:${timer._id}:${timer.scheduleStreamId}:${dateMs(timer.nextDueAt)}`;
+  const occurrenceKey = (timer) => `${timerKeyPrefix}:${normalizedChannel}:${timer._id}:${timer.scheduleStreamId}:${dateMs(timer.nextDueAt)}${timer.configurationRevision ? ':' + timer.configurationRevision : ''}`;
 
 
   function eventReactionHoldActive() {
@@ -276,17 +214,16 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
 
-  function automationSpacingStatus() {
-    try {
-      return typeof getAutomationSpacingStatus === 'function'
-        ? (getAutomationSpacingStatus('timer') || { active: false })
-        : { active: false };
-    } catch (_) {
-      return { active: false };
-    }
+  function automationSpacingStatus(timer = null) {
+    let external = { active: false, remainingMs: 0 };
+    try { external = getAutomationSpacingStatus?.('timer') || external; } catch (_) {}
+    const remainingMs = Math.max(0, dateMs(settings.lastTimerMessageAt) + Number(settings.minimumSpacingSeconds || 0) * 1000 - Date.now());
+    return { ...external, active: Boolean(external.active || remainingMs > 0),
+      remainingMs: Math.max(remainingMs, Number(external.remainingMs || 0)) };
   }
 
-  async function reserveAutomationSlot() {
+  async function reserveAutomationSlot(timer) {
+    if (automationSpacingStatus(timer).active) return { allowed: false };
     try {
       return typeof tryReserveAutomationSlot === 'function'
         ? await tryReserveAutomationSlot('timer')
@@ -303,50 +240,48 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       streamId: String(status.currentStreamId || status.streamId || '').trim(),
       startedAt: Number(status.twitchStreamStartedAt || status.startedAt || 0) || 0,
       viewerCount: Math.max(0, wholeNumber(status.currentViewerCount ?? status.viewerCount, 0)),
+      viewerCountAvailable: status.viewerCountAvailable !== false,
       title: String(status.currentStreamTitle || status.title || '').trim(),
       category: String(status.currentStreamCategory || status.category || status.gameName || '').trim()
     };
   }
 
-  function filterEvaluation(timer, status = streamStatus()) {
-    const filterId = String(timer?.advancedFilterId || '').trim();
+  function filterEvaluation(filterId, status = streamStatus()) {
     if (!filterId) return { exists: true, matched: true, filterId: '', filterName: '' };
     if (typeof evaluateAdvancedFilter === 'function') {
-      try { return evaluateAdvancedFilter(filterId, status) || { exists: false, matched: false, filterId, filterName: '' }; }
-      catch (_) { return { exists: false, matched: false, filterId, filterName: '' }; }
+      try { return evaluateAdvancedFilter(filterId, status) || { exists: false, matched: false }; }
+      catch (_) { return { exists: false, matched: false }; }
     }
-    const filter = typeof getAdvancedFilterById === 'function' ? getAdvancedFilterById(filterId) : null;
-    return { exists: Boolean(filter), matched: Boolean(filter), filterId, filterName: String(filter?.name || '') };
+    return { exists: false, matched: false, filterId, filterName: '' };
   }
+  const selectionFor = (item, status = streamStatus()) => chooseResponse(item, (id) => filterEvaluation(id, status));
+  const responseStatesFor = (item, status = streamStatus()) => rotation.evaluateResponses(item, (id) => filterEvaluation(id, status));
+
 
 
   async function loadSettings() {
-    const stored = await TimerConfig.findOne({ channelName: normalizedChannel }).lean();
+    const stored = await TimerConfig.findOne({ channelName: settingsKey }).lean();
     if (!stored) {
       const created = await TimerConfig.findOneAndUpdate(
-        { channelName: normalizedChannel },
-        { $setOnInsert: { channelName: normalizedChannel, ...normalizeSettings({}) } },
+        { channelName: settingsKey },
+        { $setOnInsert: { channelName: settingsKey, ...normalizeSettings({}) } },
         { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true }
       ).lean();
       settings = { ...settings, ...created };
     } else {
       settings = { ...settings, ...stored };
     }
+    if (getSettingsOverrides) settings = { ...settings, ...getSettingsOverrides() };
     return settings;
   }
 
   function scheduleForNewStream(timer, status, now = Date.now()) {
-    const streamStartedAt = status.startedAt || now;
-    const notBefore = streamStartedAt + effectiveStartDelay(timer, settings) * 1000;
-    // Start Delay controls the first scheduled fire. Interval + jitter begin only
-    // after that first successful send, so a 60m timer with a 5m start delay
-    // becomes eligible at +5m, then recurs roughly every 60m thereafter.
-    return Math.max(now, notBefore);
+    return rotation.firstDueAt(timer, { startedAt: status.startedAt, now, globalStartDelaySeconds: settings.globalStartDelaySeconds });
   }
 
   async function persistSchedulePatch(timerId, patch, extra = {}) {
     await context.assertOperation();
-    const result = await ChatTimer.updateOne({ _id: timerId, channelName: normalizedChannel, ...fenceFilter(), ...extra },
+    const result = await TimerModel.updateOne({ _id: timerId, [channelField]: normalizedChannel, ...fenceFilter(), ...extra },
       { $set: { ...patch, schedulerFence: context.fence() } }, WRITE_OPTIONS);
     if (result.matchedCount !== 1) throw context.cancelledError('Timer changed or belongs to a newer deployment.');
   }
@@ -358,16 +293,25 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const streamStartedAt = Number(status.startedAt || 0);
     const lastFiredAt = dateMs(timer.lastFiredAt);
     const firedThisStream = Boolean(streamStartedAt && lastFiredAt >= streamStartedAt) ||
-      String(timer.lastCompletedOccurrence || '').startsWith(`timer:${normalizedChannel}:${timer._id}:${status.streamId}:`);
-    if (sameStream && persistedDue > 0 && firedThisStream) return timer;
+      String(timer.lastCompletedOccurrence || '').startsWith(`${timerKeyPrefix}:${normalizedChannel}:${timer._id}:${status.streamId}:`);
+    const attemptedThisStream = Boolean(streamStartedAt && dateMs(timer.lastAttemptAt) >= streamStartedAt);
+    // A first-send failure is still a real occurrence. Refreshing the UI must
+    // not pull its retry/abandonment schedule back to the start cooldown.
+    if (sameStream && persistedDue > 0 && (firedThisStream || attemptedThisStream || timer.deliveryKey || timer.recoveryRequired)) return timer;
 
+    // Legacy YouTube timers had no durable due time. Resume from their last
+    // successful send, rather than firing again immediately after a deployment.
+    if (!persistedDue && firedThisStream) {
+      const patch = { scheduleStreamId: status.streamId, nextDueAt: new Date(Math.max(now, lastFiredAt + Number(timer.intervalSeconds) * 1000)) };
+      await persistSchedulePatch(timer._id, patch); Object.assign(timer, patch); return timer;
+    }
     const firstDueMs = scheduleForNewStream(timer, status, now);
     if (sameStream && persistedDue > 0 && persistedDue <= firstDueMs) return timer;
     const nextDueAt = new Date(firstDueMs);
     const patch = {
       scheduleStreamId: status.streamId,
       nextDueAt,
-      messagesSinceLastFire: 0,
+      ...(!sameStream ? { messagesSinceLastFire: 0, lastAttemptAt: null, lastResponseId: '', lastResponseIndex: -1, deliveryKey: '', recoveryRequired: false, recoveryReason: '' } : {}),
       retryCount: 0,
       nextRetryAt: null
     };
@@ -378,14 +322,20 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
 
   async function refreshCache() {
     const previous = new Map(cache.map((timer) => [String(timer._id), timer]));
-    const fresh = await ChatTimer.find({ channelName: normalizedChannel }).sort({ createdAt: 1 }).lean();
+    const fresh = await TimerModel.find({ [channelField]: normalizedChannel }).sort({ createdAt: 1 }).lean();
     for (const timer of fresh) {
+      const migration = rotation.migrationPatch(timer, platformOptions);
+      if (migration) { await persistSchedulePatch(timer._id, migration); Object.assign(timer, migration); }
       const old = previous.get(String(timer._id));
       if (old && old.scheduleStreamId === timer.scheduleStreamId && dateMs(old.nextDueAt) === dateMs(timer.nextDueAt)) {
         timer.messagesSinceLastFire = Math.max(wholeNumber(timer.messagesSinceLastFire), wholeNumber(old.messagesSinceLastFire));
       }
     }
     cache = fresh;
+    // Recover spacing even if the secondary spacing checkpoint was interrupted.
+    for (const item of cache) if (dateMs(item.lastFiredAt) > dateMs(settings.lastTimerMessageAt)) {
+      settings.lastTimerMessageAt = item.lastFiredAt;
+    }
     const status = streamStatus();
     if (status.live && status.streamId) {
       for (const timer of cache) await ensureScheduleForCurrentStream(timer, status);
@@ -400,21 +350,25 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const effectiveDelay = effectiveStartDelay(timer, settings);
     const missingMessages = Math.max(0, wholeNumber(timer.minimumChatMessages, 0) - wholeNumber(timer.messagesSinceLastFire, 0));
     const missingViewers = Math.max(0, wholeNumber(timer.minimumViewers, 0) - status.viewerCount);
-    const filter = filterEvaluation(timer, status);
-    const automationStatus = automationSpacingStatus();
+    const responseStates = responseStatesFor(timer, status);
+    const selection = selectionFor(timer, status);
+    const automationStatus = automationSpacingStatus(timer);
     const spacingRemainingMs = Math.max(0, Number(automationStatus.remainingMs || 0));
     const startNotBefore = status.startedAt ? status.startedAt + effectiveDelay * 1000 : 0;
     const startDelayRemainingMs = status.live && startNotBefore ? Math.max(0, startNotBefore - now) : 0;
 
     let waitingFor = '';
     if (timer.recoveryRequired) waitingFor = 'Delivery needs review - no automatic resend';
+    else if (timer.enabled === false) waitingFor = 'Timer disabled';
+    else if (!isEnabled()) waitingFor = 'Platform timers inactive';
     else if (!status.live) waitingFor = 'Stream offline';
     else if (startDelayRemainingMs > 0) waitingFor = 'Stream-start delay';
     else if (dueAt > now) waitingFor = timer.nextRetryAt ? 'Retry delay' : 'Interval';
+    else if (Number(timer.minimumChatMessages) > 0 && !canCountMessages()) waitingFor = 'Chat listening disabled - Min Messages cannot be met';
     else if (missingMessages > 0) waitingFor = `${missingMessages} more chat message${missingMessages === 1 ? '' : 's'}`;
+    else if (Number(timer.minimumViewers) > 0 && !status.viewerCountAvailable) waitingFor = 'Viewer count unavailable';
     else if (missingViewers > 0) waitingFor = `${missingViewers} more viewer${missingViewers === 1 ? '' : 's'}`;
-    else if (!filter.exists) waitingFor = 'Advanced filter unavailable';
-    else if (!filter.matched) waitingFor = 'Advanced filter';
+    else if (selection.index < 0) waitingFor = 'No eligible responses (disabled or filtered)';
     else if (automationStatus.active) waitingFor = 'Automation spacing';
 
     return {
@@ -428,14 +382,14 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       effectiveStartDelaySeconds: effectiveDelay,
       minimumChatMessages: wholeNumber(timer.minimumChatMessages, 0),
       minimumViewers: wholeNumber(timer.minimumViewers, 0),
-      advancedFilterId: String(timer.advancedFilterId || ''),
-      advancedFilterName: filter.filterName || '',
-      advancedFilterExists: filter.exists !== false,
-      advancedFilterMatched: filter.matched !== false,
+      advancedFilterId: '', responseIds: timer.responseIds || [], responseFilterIds: timer.responseFilterIds || [],
+      responseEnabled: timer.responseEnabled || [], responseStates,
+      eligibleResponseCount: responseStates.filter((r) => r.eligible).length, nextResponseIndex: selection.index,
+      lastResponseId: timer.lastResponseId || '', rotationVersion: 1,
       priority: TIMER_PRIORITIES.includes(timer.priority) ? timer.priority : 'normal',
       jitterSeconds: wholeNumber(timer.jitterSeconds, 0),
       responses: Array.isArray(timer.responses) ? timer.responses : [],
-      responseMode: TIMER_RESPONSE_MODES.includes(timer.responseMode) ? timer.responseMode : 'equal',
+      responseMode: 'sequential',
       responseWeights: Array.isArray(timer.responseWeights) ? timer.responseWeights : [],
       avoidImmediateRepeat: timer.responseMode === 'equal' && Array.isArray(timer.responses) && timer.responses.length >= 2 && timer.avoidImmediateRepeat === true,
       actionTypes: Array.isArray(timer.actionTypes) ? timer.actionTypes : [],
@@ -474,23 +428,26 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     if (now < startNotBefore) return false;
     if (wholeNumber(timer.messagesSinceLastFire, 0) < wholeNumber(timer.minimumChatMessages, 0)) return false;
     if (status.viewerCount < wholeNumber(timer.minimumViewers, 0)) return false;
-    if (!filterEvaluation(timer, status).matched) return false;
-    if (automationSpacingStatus().active) return false;
+    if (Number(timer.minimumChatMessages) > 0 && !canCountMessages()) return false;
+    if (Number(timer.minimumViewers) > 0 && !status.viewerCountAvailable) return false;
+    if (selectionFor(timer, status).index < 0) return false;
+    if (automationSpacingStatus(timer).active) return false;
     return true;
   }
 
   async function updateSuccessfulFire(timer, payload, key) {
     await context.assertOperation();
     const now = new Date();
-    const nextDueAt = new Date(Math.max(Number(payload.nextDueAt), calculateNextDueAt(timer, now.getTime())));
+    const nextDueAt = new Date(calculateNextDueAt(timer, now.getTime()));
     const remainingMessages = Math.max(0, wholeNumber(timer.messagesSinceLastFire) - wholeNumber(payload.activityAtStart));
     const historyEntry = { firedAt: now, responseIndex: payload.selection.index, response: payload.rendered,
       actionType: payload.actionType, actionColor: payload.actionColor, reason: payload.reason };
     const patch = { lastFiredAt: now, nextDueAt, nextRetryAt: null, retryCount: 0,
-      lastResponse: payload.rendered, lastResponseIndex: payload.selection.index,
+      lastResponse: payload.rendered, lastResponseIndex: payload.selection.responseId ? (timer.responseIds || []).indexOf(payload.selection.responseId) : payload.selection.index,
+      lastResponseId: payload.selection.responseId || timer.responseIds?.[payload.selection.index] || '',
       messagesSinceLastFire: remainingMessages, lastCompletedOccurrence: key,
       deliveryKey: '', recoveryRequired: false, recoveryReason: '', schedulerFence: context.fence() };
-    const result = await ChatTimer.updateOne({ _id: timer._id, channelName: normalizedChannel,
+    const result = await TimerModel.updateOne({ _id: timer._id, [channelField]: normalizedChannel,
       scheduleStreamId: payload.streamId, nextDueAt: new Date(payload.dueAt),
       lastCompletedOccurrence: { $ne: key }, ...fenceFilter() }, {
       $set: patch, $inc: { timesFired: 1 }, $push: { history: { $each: [historyEntry], $slice: -HISTORY_LIMIT } }
@@ -503,22 +460,31 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       // be overwritten by an old in-flight occurrence.
       await refreshCache();
     }
-    console.log(`[Timers] Committed occurrence ${key}; no replay of its chat send.`);
+    settings.lastTimerMessageAt = now;
+    await TimerConfig.updateOne({ channelName: settingsKey }, { $set: { lastTimerMessageAt: now } }, WRITE_OPTIONS).catch((err) => console.warn(`[${platform} Timers] Spacing checkpoint failed: ${err.message}`));
+    console.log(`[${platform} Timers] Committed occurrence ${key}; no replay of its chat send.`);
   }
 
   async function scheduleFailure(timer, err) {
     if (err?.cancelled || stopping || !context.isActive()) return;
+    if (err?.timerSelectionBlocked) {
+      const key = timer.deliveryKey || occurrenceKey(timer);
+      const row = await delivery.get(key);
+      if (row && ['prepared', 'not_sent'].includes(row.state)) await delivery.dismiss(key, { reason: 'Response is no longer eligible; waiting for another eligible response.' });
+      const patch = { nextDueAt: new Date(Date.now() + 1000), nextRetryAt: null, retryCount: 0, deliveryKey: '' };
+      await persistSchedulePatch(timer._id, patch); Object.assign(timer, patch); return;
+    }
     if (err?.reviewRequired || err?.deliveryState === 'UNKNOWN') {
       const patch = { recoveryRequired: true, recoveryReason: String(err.message).slice(0, 600),
         deliveryKey: err.deliveryKey || occurrenceKey(timer), nextRetryAt: null };
       Object.assign(timer, patch);
       await persistSchedulePatch(timer._id, patch);
-      console.error(`[Timers] ${timer.name} paused for delivery review. No blind retry.`);
+      console.error(`[${platform} Timers] ${timer.name} paused for delivery review. No blind retry.`);
       return;
     }
     if (err?.commitOnly) {
       timer.nextRetryAt = new Date(Date.now() + 10000);
-      console.error(`[Timers] ${timer.name} was sent, but its schedule save failed. Retrying the save, not the send.`);
+      console.error(`[${platform} Timers] ${timer.name} was sent, but its schedule save failed. Retrying the save, not the send.`);
       return;
     }
     const currentRetryCount = wholeNumber(timer.retryCount, 0);
@@ -532,12 +498,15 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       };
       Object.assign(timer, patch);
       await persistSchedulePatch(timer._id, patch);
-      console.warn(`[Timers] ${timer.name} send failed; retry ${currentRetryCount + 1}/${RETRY_DELAYS_MS.length} in ${Math.round(delayMs / 1000)}s: ${err?.message || err}`);
+      console.warn(`[${platform} Timers] ${timer.name} send failed; retry ${currentRetryCount + 1}/${RETRY_DELAYS_MS.length} in ${Math.round(delayMs / 1000)}s: ${err?.message || err}`);
       return;
     }
 
+    const oldKey = timer.deliveryKey;
+    if (oldKey) { const row = await delivery.get(oldKey); if (row && ['prepared', 'not_sent'].includes(row.state)) await delivery.dismiss(oldKey, { reason: 'Send retries exhausted.' }); }
     const nextDueAt = new Date(calculateNextDueAt(timer));
     const patch = {
+      deliveryKey: '',
       lastAttemptAt: attemptAt,
       retryCount: 0,
       nextRetryAt: null,
@@ -545,37 +514,44 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     };
     await persistSchedulePatch(timer._id, patch);
     Object.assign(timer, patch);
-    console.error(`[Timers] ${timer.name} failed after ${RETRY_DELAYS_MS.length} retries; this occurrence was abandoned. Next regular occurrence is ${nextDueAt.toISOString()}:`, err?.message || err);
+    console.error(`[${platform} Timers] ${timer.name} failed after ${RETRY_DELAYS_MS.length} retries; this occurrence was abandoned. Next regular occurrence is ${nextDueAt.toISOString()}:`, err?.message || err);
   }
 
   async function sendSelected(timer, { reason = 'scheduled', affectSchedule = true } = {}) {
     if (timer.recoveryRequired) throw new Error('This timer needs delivery review before another send.');
     await context.assertOperation();
-    const key = affectSchedule ? occurrenceKey(timer) : `timer-test:${normalizedChannel}:${timer._id}:${randomUUID()}`;
+    const key = affectSchedule ? (timer.deliveryKey || occurrenceKey(timer)) : `${timerKeyPrefix}-test:${normalizedChannel}:${timer._id}:${randomUUID()}`;
+    if (affectSchedule && !timer.deliveryKey) { await persistSchedulePatch(timer._id, { deliveryKey: key }); timer.deliveryKey = key; }
     const existing = await delivery.get(key);
     let payload = existing?.payload;
     if (!existing) {
-    const selection = chooseResponse(timer);
-    if (!selection.template) throw new Error(`${timer.name} has no selectable action.`);
-    const rendered = await renderTimerResponse(selection.template, getRandomChatters);
+    const selection = selectionFor(timer);
+    if (!selection.template) throw Object.assign(new Error(`${timer.name} has no eligible response.`), { timerSelectionBlocked: true, deliveryState: 'NOT_SENT' });
+    const rendered = await renderTimerResponse(selection.template, getRandomChatters, maxResponseLength);
     if (!rendered) throw new Error(`${timer.name} rendered an empty action message.`);
     const actionType = TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message';
     const actionColor = TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary';
     payload = { selection, rendered, actionType, actionColor, reason,
+      ...(getDeliveryMetadata ? getDeliveryMetadata() : {}),
+      channelName: normalizedChannel, platform, configurationRevision: timer.configurationRevision,
       streamId: timer.scheduleStreamId, dueAt: dateMs(timer.nextDueAt),
-      nextDueAt: calculateNextDueAt(timer), activityAtStart: wholeNumber(timer.messagesSinceLastFire) };
+      activityAtStart: wholeNumber(timer.messagesSinceLastFire) };
     }
-    const receipt = await delivery.deliver({ key, kind: 'timer', payload, send: async (saved) => {
+    const receipt = await delivery.deliver({ key, kind: timerKeyPrefix, payload, send: async (saved) => {
       const status = streamStatus();
       if (stopping || (affectSchedule && (!status.live || status.streamId !== saved.streamId))) {
         throw Object.assign(context.cancelledError('Timer stream changed before send.'), { deliveryState: 'NOT_SENT' });
+      }
+      const current = responseStatesFor(timer, status).find((r) => saved.selection.responseId ? r.id === saved.selection.responseId : r.index === saved.selection.index);
+      if (!isEnabled() || timer.enabled === false || (saved.configurationRevision && timer.configurationRevision !== saved.configurationRevision) || !current?.eligible) {
+        throw Object.assign(new Error('Timer response is no longer eligible.'), { deliveryState: 'NOT_SENT', timerSelectionBlocked: true });
       }
       if (saved.actionType === 'twitch_announcement') {
         if (typeof sendAnnouncement !== 'function') throw Object.assign(new Error('Announcements are unavailable.'), { deliveryState: 'NOT_SENT' });
         return sendAnnouncement(saved.rendered, { color: saved.actionColor });
       }
       noteOwnResponse(saved.rendered);
-      return sendMessage(normalizedChannel, saved.rendered);
+      return sendMessage(normalizedChannel, saved.rendered, { timerDelivery: saved, deliveryKey: key });
     } });
     if (affectSchedule) {
       try { await updateSuccessfulFire(timer, receipt.payload, key); }
@@ -588,7 +564,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
 
   async function runScheduledTimer(timer) {
     try {
-      const reservation = await reserveAutomationSlot();
+      const reservation = await reserveAutomationSlot(timer);
       if (!reservation?.allowed) return;
       if (eventReactionHoldActive()) return;
       await persistSchedulePatch(timer._id, { lastAttemptAt: new Date() });
@@ -599,13 +575,14 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   }
 
   async function tick() {
-    if (tickBusy || stopping || !context.isActive()) return;
+    if (tickBusy || stopping || !context.isActive() || !isEnabled()) return;
     tickBusy = true;
     try {
       // The scheduler wakes once per second so due timers stay responsive, but
       // an idle/offline tick must remain network-silent. Ownership is asserted
       // immediately before any durable state change/send by the downstream
       // reservation/persistence/delivery paths.
+      if (beforeTick && cache.some((item) => item.enabled !== false && Number(item.minimumViewers) > 0 && isDue(item, Date.now()))) await beforeTick();
       const status = streamStatus();
       if (!status.live || !status.streamId) {
         lastSeenStreamId = '';
@@ -646,11 +623,11 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
         .filter((timer) => timer.enabled !== false)
         .map((timer) => ({
           updateOne: {
-            filter: { _id: timer._id, channelName: normalizedChannel, scheduleStreamId: timer.scheduleStreamId, nextDueAt: timer.nextDueAt, ...fenceFilter() },
+            filter: { _id: timer._id, [channelField]: normalizedChannel, scheduleStreamId: timer.scheduleStreamId, nextDueAt: timer.nextDueAt, ...fenceFilter() },
             update: { $set: { messagesSinceLastFire: wholeNumber(timer.messagesSinceLastFire, 0) } }
           }
         }));
-      if (operations.length) await ChatTimer.bulkWrite(operations, { ...WRITE_OPTIONS, ordered: false });
+      if (operations.length) await TimerModel.bulkWrite(operations, { ...WRITE_OPTIONS, ordered: false });
     } catch (err) {
       activityDirty = true;
       console.error('[Timers] Could not checkpoint chat-activity counters:', err?.message || err);
@@ -672,9 +649,9 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   async function initialize() {
     stopping = false;
     await context.assertOperation();
-    await ChatTimer.updateMany({ channelName: normalizedChannel, ...fenceFilter() },
+    await TimerModel.updateMany({ [channelField]: normalizedChannel, ...fenceFilter() },
       { $set: { schedulerFence: context.fence() } }, WRITE_OPTIONS);
-    await TimerConfig.updateOne({ channelName: normalizedChannel, ...fenceFilter() },
+    await TimerConfig.updateOne({ channelName: settingsKey, ...fenceFilter() },
       { $set: { schedulerFence: context.fence() } }, WRITE_OPTIONS);
     await loadSettings();
     await refreshCache();
@@ -684,7 +661,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
       serialize(tick).catch((err) => console.error('[Timers] Tick failed:', err.message)).finally(() => { queuedTick = false; });
     }, SCHEDULER_TICK_MS));
     if (!checkpointTimer) checkpointTimer = context.detached(() => setInterval(() => { serialize(checkpointActivity).catch((err) => console.error('[Timers] Checkpoint failed:', err.message)); }, ACTIVITY_CHECKPOINT_MS));
-    console.log(`[Timers] Loaded ${cache.length} timer(s) from MongoDB. Global start delay ${settings.globalStartDelaySeconds}s.`);
+    console.log(`[${platform} Timers] Loaded ${cache.length} timer(s) from MongoDB. Global start delay ${settings.globalStartDelaySeconds}s.`);
   }
 
   async function listTimers() {
@@ -696,7 +673,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   async function getSettings() {
     await loadSettings();
     return {
-      globalStartDelaySeconds: wholeNumber(settings.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS)
+      globalStartDelaySeconds: wholeNumber(settings.globalStartDelaySeconds, DEFAULT_GLOBAL_START_DELAY_SECONDS),
+      minimumSpacingSeconds: Number(settings.minimumSpacingSeconds ?? 60)
     };
   }
 
@@ -704,73 +682,89 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     await context.assertOperation();
     const normalized = normalizeSettings(input);
     const saved = await TimerConfig.findOneAndUpdate(
-      { channelName: normalizedChannel, ...fenceFilter() },
-      { $set: { ...normalized, schedulerFence: context.fence() }, $setOnInsert: { channelName: normalizedChannel } },
+      { channelName: settingsKey, ...fenceFilter() },
+      { $set: { ...normalized, schedulerFence: context.fence() }, $setOnInsert: { channelName: settingsKey } },
       { ...WRITE_OPTIONS, new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     ).lean();
     if (normalized.globalStartDelaySeconds > 0) {
-      const adjusted = await ChatTimer.updateMany(
+      const adjusted = await TimerModel.updateMany(
         {
-          channelName: normalizedChannel,
+          [channelField]: normalizedChannel,
           ...fenceFilter(), startDelaySeconds: { $ne: null, $lt: normalized.globalStartDelaySeconds }
         },
         { $set: { startDelaySeconds: normalized.globalStartDelaySeconds, schedulerFence: context.fence() } }, WRITE_OPTIONS
       );
       if (adjusted?.modifiedCount) {
-        console.log(`[Timers] Raised ${adjusted.modifiedCount} per-timer start-delay override(s) to match the new global minimum.`);
+        console.log(`[${platform} Timers] Raised ${adjusted.modifiedCount} per-timer start-delay override(s) to match the new global minimum.`);
       }
     }
+    if (persistSettingsOverrides) await persistSettingsOverrides(normalized);
     settings = { ...settings, ...saved };
     await refreshCache();
-    console.log(`[Timers] Updated settings: start delay ${normalized.globalStartDelaySeconds}s.`);
+    console.log(`[${platform} Timers] Updated settings: start delay ${normalized.globalStartDelaySeconds}s.`);
     return getSettings();
+  }
+
+  async function settleBeforeEdit(id) {
+    const item = cache.find((r) => String(r._id) === String(id));
+    if (!item?.deliveryKey) return;
+    const record = await delivery.get(item.deliveryKey);
+    if (record?.state === 'sent' && !record.recoveryClosed) await updateSuccessfulFire(item, record.payload, item.deliveryKey);
+    else if (record && ['prepared', 'not_sent'].includes(record.state) && !record.recoveryClosed) {
+      await delivery.dismiss(item.deliveryKey, { reason: 'Timer edited or toggled before delivery.' });
+      await persistSchedulePatch(item._id, { deliveryKey: '' }); item.deliveryKey = '';
+    } else if (record && !record.recoveryClosed) throw new Error('Resolve or dismiss this timer delivery in Recovery before editing it.');
   }
 
   async function saveTimer(input = {}) {
     await context.assertOperation();
     await loadSettings();
-    const normalized = normalizeInput(input, settings);
-    if (normalized.advancedFilterId && typeof getAdvancedFilterById === 'function' && !getAdvancedFilterById(normalized.advancedFilterId)) {
-      throw new Error('Selected Advanced Filter was not found. Refresh the filter list and choose another filter.');
+    const normalized = normalizeInput(input, settings, platformOptions);
+    normalized.configurationRevision = randomUUID();
+    for (const id of new Set(normalized.responseFilterIds.filter(Boolean))) {
+      if (!getAdvancedFilterById?.(id)) throw new Error('Selected Advanced Filter was not found. Refresh and choose another filter.');
     }
     const id = String(input.id || '').trim();
+    if (id) await settleBeforeEdit(id);
     let saved;
     if (id) {
-      saved = await ChatTimer.findOneAndUpdate(
-        { _id: id, channelName: normalizedChannel, ...fenceFilter() },
+      saved = await TimerModel.findOneAndUpdate(
+        { _id: id, [channelField]: normalizedChannel, ...fenceFilter() },
         { $set: { ...normalized, schedulerFence: context.fence() } },
         { ...WRITE_OPTIONS, new: true, runValidators: true }
       );
       if (!saved) throw new Error('Timer was not found.');
     } else {
-      [saved] = await ChatTimer.create([{ channelName: normalizedChannel, schedulerFence: context.fence(), ...normalized }], WRITE_OPTIONS);
+      [saved] = await TimerModel.create([{ [channelField]: normalizedChannel, schedulerFence: context.fence(), ...normalized }], WRITE_OPTIONS);
     }
 
     await refreshCache();
     const cached = cache.find((item) => String(item._id) === String(saved._id));
     const status = streamStatus();
     if (cached && status.live && status.streamId) {
-      const nextDueAt = new Date(scheduleForNewStream(cached, status));
+      const fired = dateMs(cached.lastFiredAt) >= status.startedAt && status.startedAt > 0;
+      const nextDueAt = new Date(fired ? Math.max(Date.now(), dateMs(cached.lastFiredAt) + cached.intervalSeconds * 1000) : scheduleForNewStream(cached, status));
       const patch = { scheduleStreamId: status.streamId, nextDueAt, retryCount: 0, nextRetryAt: null, messagesSinceLastFire: 0 };
       await persistSchedulePatch(cached._id, patch);
       Object.assign(cached, patch);
     }
-    console.log(`[Timers] ${id ? 'Updated' : 'Created'} timer ${normalized.name}.`);
+    console.log(`[${platform} Timers] ${id ? 'Updated' : 'Created'} timer ${normalized.name}.`);
     return toClient(cached || saved.toObject());
   }
 
   async function deleteTimer(id) {
     await context.assertOperation();
-    const deleted = await ChatTimer.findOneAndDelete({ _id: id, channelName: normalizedChannel, ...fenceFilter() }, WRITE_OPTIONS);
+    const deleted = await TimerModel.findOneAndDelete({ _id: id, [channelField]: normalizedChannel, ...fenceFilter() }, WRITE_OPTIONS);
     if (!deleted) throw new Error('Timer was not found.');
     await refreshCache();
-    console.log(`[Timers] Deleted timer ${deleted.name}.`);
+    console.log(`[${platform} Timers] Deleted timer ${deleted.name}.`);
   }
 
   async function setEnabled(id, enabled) {
     await context.assertOperation();
-    const saved = await ChatTimer.findOneAndUpdate(
-      { _id: id, channelName: normalizedChannel, ...fenceFilter() },
+    await settleBeforeEdit(id);
+    const saved = await TimerModel.findOneAndUpdate(
+      { _id: id, [channelField]: normalizedChannel, ...fenceFilter() },
       { $set: { enabled: Boolean(enabled), retryCount: 0, nextRetryAt: null, schedulerFence: context.fence() } },
       { ...WRITE_OPTIONS, new: true, runValidators: true }
     );
@@ -779,12 +773,13 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const cached = cache.find((item) => String(item._id) === String(saved._id));
     const status = streamStatus();
     if (cached && cached.enabled !== false && status.live && status.streamId) {
-      const nextDueAt = new Date(scheduleForNewStream(cached, status));
+      const fired = dateMs(cached.lastFiredAt) >= status.startedAt && status.startedAt > 0;
+      const nextDueAt = new Date(fired ? Math.max(Date.now(), dateMs(cached.lastFiredAt) + cached.intervalSeconds * 1000) : scheduleForNewStream(cached, status));
       const patch = { scheduleStreamId: status.streamId, nextDueAt, messagesSinceLastFire: 0 };
       await persistSchedulePatch(cached._id, patch);
       Object.assign(cached, patch);
     }
-    console.log(`[Timers] ${saved.enabled ? 'Enabled' : 'Disabled'} timer ${saved.name}.`);
+    console.log(`[${platform} Timers] ${saved.enabled ? 'Enabled' : 'Disabled'} timer ${saved.name}.`);
     return toClient(cached || saved.toObject());
   }
 
@@ -797,9 +792,9 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
 
   async function previewTimer(id) {
     const timer = await findTimerOrThrow(id);
-    const selection = chooseResponse(timer);
+    const selection = selectionFor(timer);
     if (!selection.template) throw new Error('Timer has no selectable action.');
-    const rendered = await renderTimerResponse(selection.template, getRandomChatters);
+    const rendered = await renderTimerResponse(selection.template, getRandomChatters, maxResponseLength);
     return { rendered, responseIndex: selection.index, responseMode: selection.mode, actionType: TIMER_ACTION_TYPES.includes(timer.actionTypes?.[selection.index]) ? timer.actionTypes[selection.index] : 'chat_message', actionColor: TIMER_ANNOUNCEMENT_COLORS.includes(timer.actionColors?.[selection.index]) ? timer.actionColors[selection.index] : 'primary' };
   }
 
@@ -807,7 +802,7 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     await context.assertOperation();
     const timer = await findTimerOrThrow(id);
     const result = await sendSelected(timer, { reason: 'scheduled', affectSchedule: false });
-    console.log(`[Timers] Test sent for ${timer.name}; schedule and history were not changed.`);
+    console.log(`[${platform} Timers] Test sent for ${timer.name}; schedule and history were not changed.`);
     return result;
   }
 
@@ -815,9 +810,10 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     await context.assertOperation();
     const timer = await findTimerOrThrow(id);
     const status = streamStatus();
+    if (!isEnabled() || timer.enabled === false) throw new Error('Timer or platform is disabled.');
     if (!status.live || !status.streamId) throw new Error('Fire Now is only available while Qwert is live. Use Test for an offline send check.');
     const result = await sendSelected(timer, { reason: 'manual', affectSchedule: true });
-    console.log(`[Timers] Fire Now sent for ${timer.name} and reset its timer schedule.`);
+    console.log(`[${platform} Timers] Fire Now sent for ${timer.name} and reset its timer schedule.`);
     return result;
   }
 
@@ -830,6 +826,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
   async function dismissReview(id, expectedDeliveryKey) {
     const timer = await findTimerOrThrow(id);
     if (!expectedDeliveryKey || timer.deliveryKey !== expectedDeliveryKey) throw new Error('This timer occurrence changed. Refresh before dismissing it.');
+    const pending = await delivery.get(expectedDeliveryKey);
+    if (reviewDeliveryChildren && pending) await reviewDeliveryChildren(expectedDeliveryKey, pending.payload, 'dismiss');
     const record = await delivery.dismiss(expectedDeliveryKey);
     if (!record) throw new Error('Delivery changed. Refresh the page.');
     // Skip one occurrence. Do not pretend it fired or increment sent counters.
@@ -862,6 +860,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     const timer = await findTimerOrThrow(id);
     if (expectedDeliveryKey !== undefined && timer.deliveryKey !== expectedDeliveryKey) throw new Error('This timer occurrence changed. Refresh before reviewing it.');
     if (!timer.deliveryKey) throw new Error('Timer has no pending delivery review.');
+    const pending = await delivery.get(timer.deliveryKey);
+    if (reviewDeliveryChildren && pending) await reviewDeliveryChildren(timer.deliveryKey, pending.payload, outcome);
     const record = await delivery.resolve(timer.deliveryKey, outcome);
     if (!record) throw new Error('Delivery was already resolved or changed. Refresh the page.');
     const key = timer.deliveryKey;
@@ -879,6 +879,8 @@ function createChatTimerManager({ channelName, sendMessage, sendAnnouncement = n
     expireRecovery: (...args) => serialize(() => expireRecovery(...args)),
     resolveReview: (...args) => serialize(() => resolveReview(...args)),
     initialize: () => serialize(initialize),
+    tick: () => serialize(tick),
+    reloadSettings: () => serialize(async () => { await loadSettings(); await refreshCache(); }),
     listTimers: (...args) => serialize(() => listTimers(...args)),
     getSettings: (...args) => serialize(() => getSettings(...args)),
     saveSettings: (...args) => serialize(() => saveSettings(...args)),
@@ -909,5 +911,5 @@ module.exports = {
   TIMER_PRIORITIES,
   TIMER_ACTION_TYPES,
   TIMER_ANNOUNCEMENT_COLORS,
-  createChatTimerManager
+  createChatTimerManager, normalizeInput, chooseResponse, calculateNextDueAt
 };

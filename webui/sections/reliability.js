@@ -6,7 +6,10 @@ export function initReliabilitySection({ $, postJson, isLoggedIn, onResolved }) 
 
   async function resolve(item, outcome) {
     if (acting) return;
-    const confirmation = outcome === 'sent'
+    const youtube = item.target === 'youtube-timer' || String(item.title || '').startsWith('youtube-timer');
+    const confirmation = youtube ? (outcome === 'sent'
+      ? 'CONFIRM YOUTUBE DELIVERY? Check all destination chats first. This completes the timer occurrence without resending it.'
+      : 'CONFIRM UNFINISHED YOUTUBE DESTINATIONS WERE NOT DELIVERED? Check every destination first. Confirmed destinations will NOT be resent; only unfinished ones can retry. Incorrect confirmation can duplicate a message.') : outcome === 'sent'
       ? 'CONFIRM ALREADY DELIVERED?\n\nCheck Twitch chat first. This marks the uncertain action as handled and prevents another copy from being sent. A reviewed rotating pinned banner will be skipped for the rest of this stream when its message ID is unavailable.'
       : 'CONFIRM DEFINITELY NOT DELIVERED?\n\nOnly proceed after checking Twitch chat. This permits the unfinished action to be retried and could create a duplicate if Twitch actually received the first attempt.';
     if (!window.confirm(confirmation)) return;
@@ -31,9 +34,9 @@ export function initReliabilitySection({ $, postJson, isLoggedIn, onResolved }) 
 
   async function dismiss(item) {
     if (acting) return;
-    let detail = 'The remaining actions will be abandoned, not retried. This does not delete a message already delivered to Twitch or Discord, and does not claim it was delivered.';
+    let detail = 'The remaining actions will be abandoned, not retried. This does not delete a message already delivered to Twitch, YouTube or Discord, and does not claim it was delivered.';
     if (item.target === 'recap') detail += '\n\nThe old recap snapshot will be skipped; newer chat is retained. Recaps stay paused until Resume.';
-    if (item.target === 'timer') detail += '\n\nOnly this timer occurrence is skipped. The timer itself remains configured.';
+    if (['timer', 'youtube-timer'].includes(item.target)) detail += '\n\nOnly this timer occurrence is skipped. The timer itself remains configured.';
     if (item.target === 'pin') detail += '\n\nAutomatic banner posting is skipped for the rest of this stream to prevent duplicate pins.';
     if (!window.confirm(`DISMISS WITHOUT RETRYING?\n\n${detail}`)) return;
     acting = true;

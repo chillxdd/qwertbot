@@ -1,5 +1,7 @@
 'use strict';
 
+const context = require('./reliability/context');
+const { deliverTimerFanout } = require('./youtubeTimerDelivery');
 const YouTubeConfig = require('../models/YouTubeConfig');
 const { createYouTubeQuotaManager } = require('./youtubeQuota');
 const { createYouTubeAuthManager } = require('./youtubeAuth');
@@ -75,6 +77,12 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     sendToAllChats: (text, options) => sendToAllChats(text, options),
     isEnabled: () => Boolean(config.enabled && config.timersEnabled && twitchLive && !quiesced),
     getGlobalStartDelaySeconds: () => Number(config.globalTimerStartDelaySeconds || 0),
+    saveGlobalStartDelaySeconds: async (seconds) => {
+      await YouTubeConfig.updateOne({ channelKey }, { $set: { globalTimerStartDelaySeconds: seconds } });
+      config.globalTimerStartDelaySeconds = seconds;
+    },
+    canCountMessages: () => Boolean(config.commandsEnabled),
+    getDeliveryMetadata: () => ({ targetIds: [...discoveredChatIds()] }),
     getSessionStartedAtMs: () => twitchStreamStartedAt,
     getStreamStatus: () => typeof getStreamStatus === 'function' ? (getStreamStatus() || {}) : {},
     getAdvancedFilterById,
@@ -340,9 +348,16 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     startDiscoveryWindow();
   }
 
-  async function sendRaw(liveChatId, text, token) {
+  async function sendRaw(liveChatId, text, token, { confirmedTimer = false } = {}) {
+    const controller = new AbortController();
+    const parents = confirmedTimer ? context.signals() : [];
+    const abort = () => controller.abort();
+    parents.forEach((signal) => { signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort(); });
+    const deadline = confirmedTimer ? setTimeout(abort, 20000) : null;
+    try {
     const response = await fetch('https://www.googleapis.com/youtube/v3/liveChat/messages?part=snippet', {
       method: 'POST',
+      ...(confirmedTimer ? { signal: controller.signal } : {}),
       headers: {
         authorization: `Bearer ${token}`,
         'content-type': 'application/json'
@@ -351,7 +366,7 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
         snippet: {
           liveChatId,
           type: 'textMessageEvent',
-          textMessageDetails: { messageText: String(text || '').slice(0, 200) }
+          textMessageDetails: { messageText: confirmedTimer ? Array.from(String(text || '')).slice(0, 200).join('') : String(text || '').slice(0, 200) }
         }
       })
     });
@@ -359,23 +374,37 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     if (!response.ok) {
       const err = new Error(data?.error?.message || `YouTube chat send failed (${response.status}).`);
       err.status = Number(response.status || 0);
+      if (confirmedTimer && response.status < 500) err.deliveryState = 'NOT_SENT';
       err.reason = data?.error?.errors?.[0]?.reason || null;
       throw err;
     }
+    if (confirmedTimer && !data?.id) throw new Error('YouTube returned no confirmed message ID; delivery needs review.');
     return data;
+    } finally { if (deadline) clearTimeout(deadline); parents.forEach((s) => s.removeEventListener('abort', abort)); }
   }
 
-  async function attemptSendNow(liveChatId, text, { kind = 'command' } = {}) {
+  async function attemptSendNow(liveChatId, text, { kind = 'command', confirmedTimer = false } = {}) {
+    let token;
+    try {
+    if (confirmedTimer) await context.assertOperation();
     if (quiesced || !twitchLive || !config.enabled) throw new Error('YouTube bot is not active.');
     if (kind === 'command' && !config.commandsEnabled) throw new Error('YouTube commands are disabled.');
     if (kind === 'timer' && !config.timersEnabled) throw new Error('YouTube timers are disabled.');
-    const content = String(text || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+    const normalized = String(text || '').replace(/[\r\n]+/g, ' ').trim();
+    const content = confirmedTimer ? Array.from(normalized).slice(0, 200).join('') : normalized.slice(0, 200);
     if (!content) throw new Error('YouTube chat message is empty.');
     const limit = kind === 'timer' ? config.timerSafetyStopUnits : config.hardSafetyStopUnits;
     await quotaManager.reserveMainUnits(YOUTUBE_INSERT_COST, kind === 'timer' ? { timerMessages: 1 } : { commandMessages: 1 }, { limit });
-    const token = await authManager.getValidAccessToken();
+    token = await authManager.getValidAccessToken();
+    if (confirmedTimer) {
+      await context.assertOperation();
+      if (!isTimerSendTarget(liveChatId)) throw Object.assign(new Error('YouTube timer destination is no longer active.'), { timerSelectionBlocked: true });
+    }
+    } catch (err) { if (confirmedTimer) err.deliveryState = 'NOT_SENT'; throw err; }
+    const normalized = String(text || '').replace(/[\r\n]+/g, ' ').trim();
+    const content = confirmedTimer ? Array.from(normalized).slice(0, 200).join('') : normalized.slice(0, 200);
     try {
-      return await sendRaw(String(liveChatId), content, token);
+      return await sendRaw(String(liveChatId), content, token, { confirmedTimer });
     } catch (err) {
       if (String(err?.reason || '').toLowerCase() === 'quotaexceeded') {
         await quotaManager.markGoogleQuotaExceeded(err).catch(() => {});
@@ -388,7 +417,8 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     return deliveryQueue.deliver(String(liveChatId), text, options);
   }
 
-  async function sendToAllChats(text, { kind = 'timer', timerId = '', manual = false } = {}) {
+  async function sendToAllChats(text, { kind = 'timer', timerId = '', manual = false, strictConfirmed = false, timerDelivery, deliveryKey } = {}) {
+    if (strictConfirmed) return deliverTimerFanout({ text, timerDelivery, deliveryKey, isTarget: isTimerSendTarget, sendNow: attemptSendNow });
     if (kind === 'timer' && !config.timersEnabled) return { sentCount: 0, queuedCount: 0, dedupedCount: 0, failedCount: 0, failures: [] };
     const targetIds = kind === 'timer'
       ? [...discoveredChatIds()]
@@ -469,7 +499,7 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
 
       if (!wasEnabled && config.enabled && twitchLive) startDiscoveryWindow();
     }
-    if (previousGlobalTimerStartDelaySeconds !== config.globalTimerStartDelaySeconds) timerManager.applyGlobalStartDelay();
+    if (previousGlobalTimerStartDelaySeconds !== config.globalTimerStartDelaySeconds) await timerManager.applyGlobalStartDelay();
     return { ...config };
   }
 
@@ -579,7 +609,7 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
   async function shutdown() {
     quiesced = true;
     await stopWorkers('shutdown');
-    timerManager.shutdown();
+    await timerManager.shutdown();
     chatFactory.shutdown();
   }
 
@@ -596,6 +626,7 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     reloadCommands,
     reloadTimers,
     fireTimerNow,
+    getTimerManager: () => timerManager,
     listTimers,
     quiesce,
     resume,

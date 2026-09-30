@@ -1,5 +1,6 @@
 const context = require('./reliability/context');
 const { WRITE_OPTIONS } = require('./reliability/store');
+const { responseRows } = require('../shared/timers/rotation');
 const AdvancedFilter = require('../models/AdvancedFilter');
 const ChatTimer = require('../models/ChatTimer');
 const YouTubeChatTimer = require('../models/YouTubeChatTimer');
@@ -179,12 +180,19 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
     return { ...result, filterId: key, filterName: String(filter.name || '') };
   }
 
+  function timerUsage(timers, key) {
+    return timers.flatMap((timer) => {
+      const responses = responseRows(timer).filter((row) => row.filterId === key).map((row) => ({ index: row.index, id: row.id, message: row.text }));
+      return responses.length ? [{ id: String(timer._id), name: String(timer.name || 'Timer'), responses }] : [];
+    });
+  }
+
   async function usageFor(id) {
     const key = String(id || '').trim();
     if (!key) return { timers: [], youtubeTimers: [], banners: [] };
     const [timers, youtubeTimers, pin] = await Promise.all([
-      ChatTimer.find({ channelName: normalizedChannel, advancedFilterId: key }).select({ name: 1 }).lean(),
-      YouTubeChatTimer.find({ channelKey: normalizedChannel, advancedFilterId: key }).select({ name: 1 }).lean(),
+      ChatTimer.find({ channelName: normalizedChannel }).select({ name: 1, responses: 1, responseIds: 1, responseFilterIds: 1, advancedFilterId: 1 }).lean(),
+      YouTubeChatTimer.find({ channelKey: normalizedChannel }).select({ name: 1, responses: 1, responseIds: 1, responseFilterIds: 1, advancedFilterId: 1 }).lean(),
       PersistentPinConfig.findOne({ channelName: normalizedChannel }).select({ messages: 1, bannerFilterIds: 1 }).lean()
     ]);
     const banners = [];
@@ -194,8 +202,8 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
       if (String(filterId || '') === key) banners.push({ index, label: `Banner ${index + 1}`, message: String(messages[index] || '') });
     });
     return {
-      timers: timers.map((timer) => ({ id: String(timer._id), name: String(timer.name || 'Timer') })),
-      youtubeTimers: youtubeTimers.map((timer) => ({ id: String(timer._id), name: String(timer.name || 'Timer') })),
+      timers: timerUsage(timers, key),
+      youtubeTimers: timerUsage(youtubeTimers, key),
       banners
     };
   }
@@ -203,18 +211,14 @@ function createAdvancedFilterManager({ channelName, getStreamStatus = null }) {
   async function listFilters() {
     await refresh();
     const [timers, youtubeTimers, pin] = await Promise.all([
-      ChatTimer.find({ channelName: normalizedChannel, advancedFilterId: { $ne: '' } }).select({ name: 1, advancedFilterId: 1 }).lean(),
-      YouTubeChatTimer.find({ channelKey: normalizedChannel, advancedFilterId: { $ne: '' } }).select({ name: 1, advancedFilterId: 1 }).lean(),
+      ChatTimer.find({ channelName: normalizedChannel }).select({ name: 1, responses: 1, responseIds: 1, responseFilterIds: 1, advancedFilterId: 1 }).lean(),
+      YouTubeChatTimer.find({ channelKey: normalizedChannel }).select({ name: 1, responses: 1, responseIds: 1, responseFilterIds: 1, advancedFilterId: 1 }).lean(),
       PersistentPinConfig.findOne({ channelName: normalizedChannel }).select({ messages: 1, bannerFilterIds: 1 }).lean()
     ]);
     const usageMap = new Map(cache.map((filter) => [String(filter._id), { timers: [], youtubeTimers: [], banners: [] }]));
-    for (const timer of timers) {
-      const key = String(timer.advancedFilterId || '').trim();
-      if (usageMap.has(key)) usageMap.get(key).timers.push({ id: String(timer._id), name: String(timer.name || 'Timer') });
-    }
-    for (const timer of youtubeTimers) {
-      const key = String(timer.advancedFilterId || '').trim();
-      if (usageMap.has(key)) usageMap.get(key).youtubeTimers.push({ id: String(timer._id), name: String(timer.name || 'Timer') });
+    for (const [key, usage] of usageMap) {
+      usage.timers = timerUsage(timers, key);
+      usage.youtubeTimers = timerUsage(youtubeTimers, key);
     }
     const ids = Array.isArray(pin?.bannerFilterIds) ? pin.bannerFilterIds : [];
     const messages = Array.isArray(pin?.messages) ? pin.messages : [];

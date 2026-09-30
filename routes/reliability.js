@@ -9,6 +9,7 @@ function registerReliabilityRoutes(app, options) {
     channelName,
     getRuntime,
     getChatTimerManager,
+    getYouTubeTimerManager = () => null,
     getRecapManager,
     getPersistentPinManager,
     getEventSubInbox,
@@ -27,7 +28,8 @@ function registerReliabilityRoutes(app, options) {
     const chatTimerManager = getChatTimerManager();
     const recapManager = getRecapManager();
     const persistentPinManager = getPersistentPinManager();
-    const timers = await chatTimerManager.listTimers();
+    const timers = [...(await chatTimerManager.listTimers()).map((x) => ({ ...x, platform: 'twitch' })),
+      ...((await getYouTubeTimerManager()?.listTimers()) || []).map((x) => ({ ...x, platform: 'youtube' }))];
     const recap = recapManager.getStatus();
     const pin = persistentPinManager.getConfig();
     const pendingKeys = [recap.recoveryDeliveryKey,
@@ -49,13 +51,15 @@ function registerReliabilityRoutes(app, options) {
         continue;
       }
       if (delivery.isInFlight(row.key) || eventKeys.has(row.key)) continue;
+      // Destination receipts are handled through their parent timer review.
+      if (row.deliveryKind === 'youtube-timer-chat' && timers.some((t) => t.recoveryRequired && t.deliveryKey && row.key.startsWith(t.deliveryKey + ':chat:'))) continue;
       const timer = timers.find((item) => item.deliveryKey === row.key);
       const isRecap = recap.recoveryDeliveryKey === row.key;
       const isPin = pin.deliveryKey === row.key && pin.recoveryRequired;
-      review.push({ target: isRecap ? 'recap' : timer ? 'timer' : isPin ? 'pin' : 'delivery',
+      review.push({ target: isRecap ? 'recap' : timer ? (timer.platform === 'youtube' ? 'youtube-timer' : 'timer') : isPin ? 'pin' : 'delivery',
         id: timer ? timer.id : row.key, deliveryKey: row.key, state: row.state,
-        title: isRecap ? 'Hourly recap' : timer ? `Timer: ${timer.name}` : isPin ? 'Rotating pinned banner' : row.deliveryKind,
-        detail: row.lastError || 'Twitch may have received this action before its acknowledgement was saved.',
+        title: isRecap ? 'Hourly recap' : timer ? `${timer.platform === 'youtube' ? 'YouTube' : 'Twitch'} timer: ${timer.name}` : isPin ? 'Rotating pinned banner' : row.deliveryKind,
+        detail: timer?.platform === 'youtube' ? `YouTube timer delivery needs review across ${(row.payload?.targetIds || []).length} destination(s). Check the target chats. ${row.lastError || ''}` : row.lastError || 'The platform may have received this action before its acknowledgement was saved.',
         preview: String(row.payload?.message || row.payload?.rendered || row.payload?.content || '').slice(0, 500), createdAt: row.createdAt });
     }
     res.json({ success: true, runtime: state, review });
@@ -76,6 +80,7 @@ function registerReliabilityRoutes(app, options) {
     const eventSubInbox = getEventSubInbox();
     let result;
     if (target === 'recap') result = await recapManager.resolveDeliveryReview(outcome, expectedDeliveryKey);
+    else if (target === 'youtube-timer') result = await getYouTubeTimerManager().resolveReview(id, outcome, expectedDeliveryKey);
     else if (target === 'timer') result = await chatTimerManager.resolveReview(id, outcome, expectedDeliveryKey);
     else if (target === 'pin') result = await persistentPinManager.resolveReview(outcome, expectedDeliveryKey);
     else if (target === 'event') {
@@ -104,6 +109,7 @@ function registerReliabilityRoutes(app, options) {
     let result;
     if (target === 'event') result = await getEventSubInbox().dismiss(id, expectedDeliveryKey);
     else if (target === 'recap') result = await getRecapManager().dismissDeliveryReview(expectedDeliveryKey);
+    else if (target === 'youtube-timer') result = await getYouTubeTimerManager().dismissReview(id, expectedDeliveryKey);
     else if (target === 'timer') result = await getChatTimerManager().dismissReview(id, expectedDeliveryKey);
     else if (target === 'pin') result = await getPersistentPinManager().dismissReview(expectedDeliveryKey);
     else if (target === 'delivery') {

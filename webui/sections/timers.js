@@ -1,657 +1,230 @@
-export function initTimersSection({ $, esc, postJson, config = {}, advancedFilters = null }) {
-  const maxTimerNameLength = Number(config.maxTimerNameLength || 80);
-  const minIntervalSeconds = Number(config.minIntervalSeconds || 30);
-  const maxIntervalSeconds = Number(config.maxIntervalSeconds || 86400);
-  const maxResponses = Number(config.maxResponses || 25); // backend limit; shown as actions in the UI
-  const maxResponseLength = Number(config.maxResponseLength || 500);
-  const maxStartDelaySeconds = Number(config.maxStartDelaySeconds || 86400);
-  const maxJitterSeconds = Number(config.maxJitterSeconds || 86400);
-  const maxMinimumChatMessages = Number(config.maxMinimumChatMessages || 100000);
-  const maxMinimumViewers = Number(config.maxMinimumViewers || 1000000);
-
-  let timers = [];
-  let settings = { globalStartDelaySeconds: 0 };
-  let editingId = null;
-  let loaded = false;
-  let currentPage = 1;
-
-  const SORT_STORAGE_KEY = 'sqwert-timer-sort';
-  const VALID_SORTS = new Set(['created_asc', 'created_desc', 'name_asc', 'name_desc', 'interval_asc', 'interval_desc']);
-  const PAGE_SIZE_STORAGE_KEY = 'sqwert-timer-page-size';
-  const VALID_PAGE_SIZES = new Set([10, 25, 50]);
-
-  const listEl = $('timerList');
-  const editorEl = $('timerEditor');
-  const responsesEl = $('timerResponses');
-  const msgEl = $('timersMsg');
-  const settingsMsgEl = $('timerSettingsMsg');
-  const editorMsgEl = $('timerEditorMsg');
-  const scheduleMsgEl = $('timerScheduleMsg');
-  const activityMsgEl = $('timerActivityMsg');
-  const filterMsgEl = $('timerAdvancedFilterMsg');
-  const responseMsgEl = $('timerResponseMsg');
-
-  function setMessage(el, text, isError = false) {
-    el.textContent = text || '';
-    el.classList.toggle('bad', Boolean(isError));
-  }
-
-  const setListMessage = (text, isError = false) => setMessage(msgEl, text, isError);
-  const setSettingsMessage = (text, isError = false) => setMessage(settingsMsgEl, text, isError);
-  const setEditorMessage = (text, isError = false) => setMessage(editorMsgEl, text, isError);
-  const setScheduleMessage = (text, isError = false) => setMessage(scheduleMsgEl, text, isError);
-  const setActivityMessage = (text, isError = false) => setMessage(activityMsgEl, text, isError);
-  const setFilterMessage = (text, isError = false) => setMessage(filterMsgEl, text, isError);
-  const setResponseMessage = (text, isError = false) => setMessage(responseMsgEl, text, isError);
-
-  function availableAdvancedFilters() {
-    return typeof advancedFilters?.getFilters === 'function' ? advancedFilters.getFilters() : [];
-  }
-
-  function populateAdvancedFilterSelect(selectedId = '') {
-    const select = $('timerAdvancedFilterId');
-    const selected = String(selectedId || '').trim();
-    const rows = availableAdvancedFilters();
-    select.innerHTML = '<option value="">Choose filter...</option>';
-    rows.forEach((filter) => {
-      const option = document.createElement('option');
-      option.value = String(filter.id || '');
-      option.textContent = String(filter.name || 'Filter');
-      select.appendChild(option);
-    });
-    if (selected && !rows.some((filter) => String(filter.id || '') === selected)) {
-      const option = document.createElement('option');
-      option.value = selected;
-      option.textContent = 'Missing filter';
-      select.appendChild(option);
-    }
-    select.value = selected;
-  }
-
-  function syncAdvancedFilterUi() {
-    const useFilter = $('timerUseAdvancedFilter').checked;
-    $('timerAdvancedFilterSelectWrap').hidden = !useFilter;
-    if (!useFilter) {
-      setFilterMessage('');
-      return;
-    }
-    const rows = availableAdvancedFilters();
-    if (!rows.length) setFilterMessage('No Advanced Filters exist yet. Create one under General Settings → Advanced Filters.', true);
-    else setFilterMessage('');
-  }
-
-  async function refreshAdvancedFilterOptions(selectedId = '') {
-    if (typeof advancedFilters?.ensureLoaded === 'function') await advancedFilters.ensureLoaded();
-    populateAdvancedFilterSelect(selectedId);
-    syncAdvancedFilterUi();
-  }
-
-  function formatInterval(seconds) {
-    const total = Math.max(0, Number(seconds || 0));
-    if (total >= 3600 && total % 3600 === 0) return `${total / 3600}h`;
-    if (total >= 60 && total % 60 === 0) return `${total / 60}m`;
-    return `${total}s`;
-  }
-
-  function formatDate(value) {
-    if (!value) return 'Never';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
-  }
-
-  function modeLabel(mode) { return mode === 'weighted' ? 'Specified Weight' : 'Equal Odds'; }
-  function priorityLabel(value) { return value === 'high' ? 'High' : value === 'low' ? 'Low' : 'Normal'; }
-
-  function selectedSort() {
-    const value = $('timerSort')?.value || 'created_asc';
-    return VALID_SORTS.has(value) ? value : 'created_asc';
-  }
-
-  function timerCreatedMs(timer) {
-    const value = Date.parse(timer?.createdAt || '');
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  function compareTimerNames(a, b) {
-    return String(a?.name || 'Timer').localeCompare(String(b?.name || 'Timer'), undefined, { sensitivity: 'base', numeric: true });
-  }
-
-  function sortedTimers() {
-    const sort = selectedSort();
-    return [...timers].sort((a, b) => {
-      let result = 0;
-      if (sort === 'name_asc') result = compareTimerNames(a, b);
-      else if (sort === 'name_desc') result = compareTimerNames(b, a);
-      else if (sort === 'interval_asc') result = Number(a?.intervalSeconds || 0) - Number(b?.intervalSeconds || 0);
-      else if (sort === 'interval_desc') result = Number(b?.intervalSeconds || 0) - Number(a?.intervalSeconds || 0);
-      else if (sort === 'created_desc') result = timerCreatedMs(b) - timerCreatedMs(a);
-      else result = timerCreatedMs(a) - timerCreatedMs(b);
-      if (result === 0) result = compareTimerNames(a, b);
-      if (result === 0) result = String(a?.id || '').localeCompare(String(b?.id || ''));
-      return result;
-    });
-  }
-
-  function renderHistory(timer) {
-    const history = Array.isArray(timer.history) ? [...timer.history].reverse() : [];
-    if (!history.length) return '<div class="detail">No successful fires recorded yet.</div>';
-    return history.slice(0, 10).map((entry) => {
-      const responseNumber = Number(entry.responseIndex) >= 0 ? `action #${Number(entry.responseIndex) + 1}` : 'action';
-      const actionType = entry.actionType === 'twitch_announcement' ? `Announcement (${entry.actionColor || 'primary'})` : 'Chat Message';
-      const reason = entry.reason === 'manual' ? 'manual Fire Now' : 'scheduled';
-      return `<div class="detail">${esc(formatDate(entry.firedAt))} — ${esc(responseNumber)} · ${esc(actionType)} · ${esc(reason)}</div>`;
-    }).join('');
-  }
-
-
-  function selectedPageSize() {
-    const value = Number($('timerPageSize')?.value || 10);
-    return VALID_PAGE_SIZES.has(value) ? value : 10;
-  }
-
-  function searchQuery() {
-    return String($('timerSearch')?.value || '').trim().toLocaleLowerCase();
-  }
-
-  function matchesSearch(timer, query) {
-    if (!query) return true;
-    const haystack = [
-      timer?.name,
-      timer?.priority,
-      timer?.responseMode,
-      timer?.lastResponse,
-      timer?.waitingFor,
-      timer?.advancedFilterName,
-      ...(Array.isArray(timer?.responses) ? timer.responses : [])
-    ].filter(Boolean).join(' ').toLocaleLowerCase();
-    return haystack.includes(query);
-  }
-
-  function filteredTimers() {
-    const query = searchQuery();
-    return sortedTimers().filter((timer) => matchesSearch(timer, query));
-  }
-
-  function updatePagination(totalItems) {
-    const pageSize = selectedPageSize();
-    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-    currentPage = Math.min(Math.max(1, currentPage), totalPages);
-    $('timerPageLabel').textContent = `Page ${currentPage} of ${totalPages}`;
-    $('timerPrevPage').disabled = currentPage <= 1;
-    $('timerNextPage').disabled = currentPage >= totalPages;
-    $('timerPagination').hidden = timers.length === 0;
-    return { pageSize, totalPages };
-  }
-
-  function renderList() {
-    listEl.innerHTML = '';
-    if (!timers.length) {
-      listEl.innerHTML = '<div class="custom-empty-state detail">No timers yet.</div>';
-      $('timerPagination').hidden = true;
-      return;
-    }
-
-    const filtered = filteredTimers();
-    const { pageSize } = updatePagination(filtered.length);
-    const start = (currentPage - 1) * pageSize;
-    const visibleTimers = filtered.slice(start, start + pageSize);
-
-    if (!visibleTimers.length) {
-      listEl.innerHTML = '<div class="custom-empty-state detail">No timers match your search.</div>';
-      return;
-    }
-
-    for (const timer of visibleTimers) {
-      const card = document.createElement('div');
-      card.className = 'custom-command-card timer-card';
-      const responseCount = Array.isArray(timer.responses) ? timer.responses.length : 0;
-      const jitter = Number(timer.jitterSeconds || 0) > 0 ? ` · ±${esc(formatInterval(timer.jitterSeconds))} jitter` : '';
-      const activity = [];
-      if (Number(timer.minimumChatMessages || 0) > 0) activity.push(`${timer.messagesSinceLastFire || 0}/${timer.minimumChatMessages} chat messages`);
-      if (Number(timer.minimumViewers || 0) > 0) activity.push(`${timer.currentViewerCount || 0}/${timer.minimumViewers} viewers`);
-      const activityText = activity.length ? activity.join(' · ') : 'No activity minimums';
-      const overrideText = timer.startDelaySeconds === null ? `Global start delay (${formatInterval(timer.effectiveStartDelaySeconds || 0)})` : `Start delay ${formatInterval(timer.startDelaySeconds)}`;
-      const nextLabel = timer.nextRetryAt ? 'Next retry' : 'Next eligible time';
-      const waiting = timer.waitingFor ? ` · Waiting for: ${timer.waitingFor}` : '';
-      let filterDetail = 'Filter: None';
-      if (timer.advancedFilterId) {
-        if (timer.advancedFilterExists === false) filterDetail = 'Filter: Missing';
-        else filterDetail = `Filter: ${timer.advancedFilterName || 'Advanced Filter'} · ${timer.advancedFilterMatched ? 'MATCH' : 'WAITING'}`;
-      }
-
-      card.innerHTML = `
-        <div class="custom-command-card-main">
-          <div class="custom-command-title-row">
-            <strong class="custom-command-name">${esc(timer.name || 'Timer')}</strong>
-            <span class="custom-command-state ${timer.enabled ? 'enabled' : 'disabled'}">${timer.enabled ? 'Enabled' : 'Disabled'}</span>
-          </div>
-          <div class="detail">Every ${esc(formatInterval(timer.intervalSeconds))}${jitter} · ${esc(priorityLabel(timer.priority))} priority · ${responseCount} action${responseCount === 1 ? '' : 's'} · ${esc(modeLabel(timer.responseMode))}</div>
-          <div class="detail">${esc(overrideText)} · ${esc(activityText)}</div>
-          <div class="detail">${esc(filterDetail)}</div>
-          <div class="detail">Last fired: ${esc(formatDate(timer.lastFiredAt))} · ${esc(nextLabel)}: ${esc(formatDate(timer.nextRetryAt || timer.nextDueAt))}${esc(waiting)}</div>
-          <div class="detail">Times fired: ${Number(timer.timesFired || 0)}${timer.lastResponse ? ` · Last action: ${esc(timer.lastResponse)}` : ''}</div>
-          <details class="timer-history"><summary>Recent fire history</summary>${renderHistory(timer)}</details>
-        </div>
-        <div class="custom-command-actions timer-card-actions">
-          <button class="secondary timer-preview-btn" type="button">Preview</button>
-          <button class="secondary timer-test-btn" type="button">Test</button>
-          <button class="secondary timer-fire-btn" type="button">Fire Now</button>
-          <button class="secondary timer-edit-btn" type="button">Edit</button>
-          <button class="secondary timer-toggle-btn" type="button">${timer.enabled ? 'Disable' : 'Enable'}</button>
-          <button class="danger timer-delete-btn" type="button">Delete</button>
-        </div>`;
-
-      card.querySelector('.timer-preview-btn').onclick = () => previewTimer(timer);
-      card.querySelector('.timer-test-btn').onclick = () => testTimer(timer);
-      card.querySelector('.timer-fire-btn').onclick = () => fireNow(timer);
-      card.querySelector('.timer-edit-btn').onclick = () => openEditor(timer);
-      card.querySelector('.timer-toggle-btn').onclick = () => toggleTimer(timer);
-      card.querySelector('.timer-delete-btn').onclick = () => deleteTimer(timer);
-      listEl.appendChild(card);
-    }
-  }
-
-  function applySettingsToUi() {
-    $('timerGlobalStartDelay').value = String(Number(settings.globalStartDelaySeconds || 0));
-    $('timerStartDelay').min = String(Number(settings.globalStartDelaySeconds || 0));
-  }
-
-  async function loadTimers() {
-    setListMessage('Loading timers...');
-    try {
-      const d = await postJson('/timers/list', {});
-      if (!d.success) throw new Error(d.error || 'Could not load timers.');
-      timers = Array.isArray(d.timers) ? d.timers : [];
-      settings = { ...settings, ...(d.settings || {}) };
-      loaded = true;
-      applySettingsToUi();
-      renderList();
-      setListMessage(`${timers.length} timer${timers.length === 1 ? '' : 's'}.`);
-    } catch (err) {
-      setListMessage(err.message || 'Could not load timers.', true);
-    }
-  }
-
-
-  async function saveSettings() {
-    setSettingsMessage('');
-    const globalStartDelaySeconds = Number($('timerGlobalStartDelay').value);
-    if (!Number.isInteger(globalStartDelaySeconds) || globalStartDelaySeconds < 0 || globalStartDelaySeconds > maxStartDelaySeconds) {
-      return setSettingsMessage(`Start Delay must be a whole number between 0 and ${maxStartDelaySeconds} seconds.`, true);
-    }
-    $('saveTimerSettingsBtn').disabled = true;
-    try {
-      const d = await postJson('/timers/settings', { globalStartDelaySeconds });
-      if (!d.success) throw new Error(d.error || 'Could not save timer settings.');
-      settings = { ...settings, ...(d.settings || {}) };
-      applySettingsToUi();
-      setSettingsMessage('Timer settings saved.');
-      await loadTimers();
-    } catch (err) {
-      setSettingsMessage(err.message || 'Could not save timer settings.', true);
-    } finally {
-      $('saveTimerSettingsBtn').disabled = false;
-    }
-  }
-
-  function makeResponseRow(value = '', weight = 1, actionType = 'chat_message', actionColor = 'primary') {
-    const row = document.createElement('div');
-    row.className = 'custom-response-row timer-response-row';
-    row.innerHTML = `
-      <div class="custom-response-rule-row timer-action-type-row">
-        <label>Action
-          <select class="timer-action-type">
-            <option value="chat_message">Chat Message</option>
-            <option value="twitch_announcement">Twitch Announcement</option>
-          </select>
-        </label>
-        <label class="timer-action-color-wrap">Announcement Color
-          <select class="timer-action-color">
-            <option value="primary">Primary</option>
-            <option value="purple">Purple</option>
-            <option value="blue">Blue</option>
-            <option value="green">Green</option>
-            <option value="orange">Orange</option>
-          </select>
-        </label>
+// One editor and one API contract for both platforms. Only native provider
+// capabilities (message limit / Twitch announcements) differ.
+export function initTimersSection({ $: find, esc, postJson, config = {}, advancedFilters = null, platform = 'twitch' }) {
+  const youtube = platform === 'youtube';
+  const maxLength = youtube ? 200 : Number(config.maxResponseLength || 500);
+  const prefix = youtube ? '/youtube/timers' : '/timers';
+  const id = (name) => youtube ? `youtube${name[0].toUpperCase()}${name.slice(1)}` : name;
+  const $ = (name) => find(id(name));
+  const root = find(youtube ? 'youtubeTimersView' : 'timersView');
+  const numberField = (name, label, value, min, max, placeholder = '') => `<label>${label}<div class="duration-field"><input id="${id(name)}" type="number" min="${min}" max="${max}" step="1" value="${value}" placeholder="${placeholder}"><span class="duration-unit">seconds</span></div></label>`;
+  root.innerHTML = `
+    <div class="custom-command-header"><h3>Timers</h3><div class="custom-command-list-controls">
+      <input id="${id('timerSearch')}" class="list-search-input" type="search" placeholder="Search timers or responses..." aria-label="Search timers">
+      <select id="${id('timerSort')}" aria-label="Sort timers"><option value="created_asc">Oldest first</option><option value="created_desc">Newest first</option><option value="name_asc">Name A-Z</option><option value="name_desc">Name Z-A</option><option value="interval_asc">Shortest interval</option><option value="interval_desc">Longest interval</option></select>
+      <button id="${id('refreshTimersBtn')}" class="secondary" type="button">Refresh</button></div></div>
+    <div class="detail timer-rotation-intro">Each timer rotates through its own responses, one message per interval. Separate timers keep independent clocks; combine routine reminders in one timer for a smoother cadence.</div>
+    <div class="custom-editor-block timer-global-settings"><div class="custom-response-heading"><strong>Global Timer Settings</strong><button id="${id('saveTimerSettingsBtn')}" class="secondary" type="button">Save Settings</button></div>
+      <div class="timer-settings-grid">${numberField('timerGlobalStartDelay', 'Global Start Delay', 0, 0, 86400)}${numberField('timerMinimumSpacing', 'Minimum timer-message spacing', 60, 0, 3600)}</div>
+      <div class="detail">Applies only to ${youtube ? 'YouTube' : 'Twitch'}. Start Delay gates the first response. Spacing is an additional minimum gap between any timer messages on this platform (0 = off). It can delay a response when greater than its interval.</div>
+      <div id="${id('timerSettingsMsg')}" class="detail" aria-live="polite"></div></div>
+    ${youtube ? '<div class="detail">YouTube responses use the existing shared stream title/category context. With chat listening off, set Min Messages to 0. No chat listener is enabled by a timer.</div>' : ''}
+    <div id="${id('timersMsg')}" class="detail" aria-live="polite"></div><div id="${id('timerList')}" class="custom-command-list"></div>
+    <div id="${id('timerPagination')}" class="list-pagination"><label>Show <select id="${id('timerPageSize')}" aria-label="Timers per page"><option>10</option><option>25</option><option>50</option></select></label><span id="${id('timerPageLabel')}"></span><div class="list-page-buttons"><button id="${id('timerPrevPage')}" class="secondary" type="button" aria-label="Previous page">&larr;</button><button id="${id('timerNextPage')}" class="secondary" type="button" aria-label="Next page">&rarr;</button></div></div>
+    <div class="custom-command-add-row"><button id="${id('addTimerBtn')}" type="button">Add Timer</button></div>
+    <dialog id="${id('timerEditor')}" class="custom-command-editor entity-editor-dialog">
+      <div class="custom-editor-header"><h3 id="${id('timerEditorTitle')}">Add Timer</h3><div class="custom-editor-header-actions"><label class="inline-check"><input id="${id('timerEnabled')}" type="checkbox" checked> Enabled</label><button id="${id('closeTimerEditorBtn')}" class="secondary" type="button">Close</button></div></div>
+      <div class="custom-editor-block"><label class="prompt-label" for="${id('timerName')}">Timer Name</label><input id="${id('timerName')}" maxlength="80" placeholder="Example: Stream reminders"></div>
+      <div class="custom-editor-block"><strong class="custom-block-title">Schedule</strong><div class="timer-settings-grid">
+        ${numberField('timerInterval', 'Wait between responses', 600, 30, 86400)}${numberField('timerStartDelay', 'Start Delay (optional override)', '', 0, 86400, 'Use global')}${numberField('timerJitter', 'Optional jitter (+/-)', 0, 0, 86400)}
+        <label>Priority<select id="${id('timerPriority')}"><option value="high">High</option><option value="normal" selected>Normal</option><option value="low">Low</option></select></label>
+      </div><div class="detail">First eligible response: after Start Delay, with no jitter. Then one response per interval after successful delivery. Jitter 0 keeps an exact interval; optional jitter only varies recurring waits. Per-timer Start Delay cannot be below global.</div></div>
+      <div class="custom-editor-block"><strong class="custom-block-title">Activity</strong><div class="timer-settings-grid">
+        <label>Min Messages (0 = off)<input id="${id('timerMinimumMessages')}" type="number" min="0" max="100000" value="0"></label><label>Min Viewers (0 = off)<input id="${id('timerMinimumViewers')}" type="number" min="0" max="1000000" value="0"></label>
+      </div><div class="detail">Activity is checked before every response, not just the first. Chat messages count since this timer's previous send.</div></div>
+      <div class="custom-editor-block"><div class="custom-response-heading"><strong>Responses - in order</strong><span id="${id('timerResponseTotal')}" class="detail"></span></div>
+        <div class="detail">Use the arrows to reorder. Disabled or nonmatching responses are skipped. One eligible response repeats each interval; zero eligible responses means silence. Filters are managed in General Settings &rarr; Advanced Filters.</div>
+        <div id="${id('timerResponses')}"></div><div class="custom-response-bottom-actions"><button id="${id('showTimerVariablesBtn')}" class="secondary" type="button">Variables</button><button id="${id('addTimerResponseBtn')}" class="secondary" type="button">Add Response</button></div>
       </div>
-      <textarea class="custom-response-input timer-response-input" maxlength="${maxResponseLength}" placeholder="Action message"></textarea>
-      <div class="custom-response-rule-row timer-weight-row">
-        <label>Weight
-          <input class="timer-response-weight" type="number" min="0.001" step="0.001" value="1">
-        </label>
-      </div>
-      <div class="custom-response-footer">
-        <span class="detail timer-response-count">0/${maxResponseLength}</span>
-        <button class="secondary timer-remove-response" type="button">Remove</button>
-      </div>`;
-    const input = row.querySelector('.timer-response-input');
-    const weightInput = row.querySelector('.timer-response-weight');
-    const typeInput = row.querySelector('.timer-action-type');
-    const colorInput = row.querySelector('.timer-action-color');
-    const colorWrap = row.querySelector('.timer-action-color-wrap');
-    const count = row.querySelector('.timer-response-count');
-    input.value = value;
-    weightInput.value = Number(weight) > 0 ? Number(weight) : 1;
-    typeInput.value = actionType === 'twitch_announcement' ? 'twitch_announcement' : 'chat_message';
-    colorInput.value = ['primary', 'purple', 'blue', 'green', 'orange'].includes(actionColor) ? actionColor : 'primary';
-    const syncType = () => {
-      const announcement = typeInput.value === 'twitch_announcement';
-      colorWrap.hidden = !announcement;
-      input.placeholder = announcement ? 'Announcement message' : 'Chat message';
-    };
-    const updateCount = () => {
-      count.textContent = `${Array.from(input.value).length}/${maxResponseLength}`;
-      syncResponseMode();
-    };
-    input.oninput = updateCount;
-    typeInput.onchange = syncType;
-    row.querySelector('.timer-remove-response').onclick = () => { row.remove(); syncResponseMode(); };
-    updateCount();
-    syncType();
-    responsesEl.appendChild(row);
-    syncResponseMode();
-  }
+      <div class="custom-editor-actions"><button id="${id('saveTimerBtn')}" type="button">Save Timer</button><button id="${id('cancelTimerBtn')}" class="secondary" type="button">Cancel</button></div><div id="${id('timerEditorMsg')}" class="detail" aria-live="polite"></div>
+    </dialog>
+    <dialog id="${id('timerPreviewDialog')}" class="custom-variables-dialog"><div class="custom-dialog-header"><h3>Next Response Preview</h3><button id="${id('closeTimerPreviewBtn')}" class="secondary" type="button">Close</button></div><div id="${id('timerPreviewBody')}" class="timer-preview-text"></div></dialog>
+    <dialog id="${id('timerVariablesDialog')}" class="custom-variables-dialog"><div class="custom-dialog-header"><h3>Timer Variables</h3><button id="${id('closeTimerVariablesBtn')}" class="secondary" type="button">Close</button></div><p><code>$(random MIN MAX [DEC])</code> generates a random number. Optional DEC is 0-5 decimal places.</p>${youtube ? '' : '<p><code>$(randomuser)</code> uses an eligible current Twitch chatter.</p>'}<p>Timer responses have no triggering viewer, query or counter. ${maxLength} characters maximum per response.</p></dialog>`;
 
-  function syncResponseMode() {
-    const weighted = $('timerResponseMode').value === 'weighted';
-    $('timerResponseModeHelp').textContent = weighted
-      ? 'Chosen proportionally by weight.'
-      : '';
-    responsesEl.querySelectorAll('.timer-weight-row').forEach((el) => { el.hidden = !weighted; });
-    const nonblankActions = [...responsesEl.querySelectorAll('.timer-response-input')].filter((input) => input.value.trim()).length;
-    const avoidAvailable = !weighted && nonblankActions >= 2;
-    $('timerAvoidImmediateRepeatWrap').hidden = !avoidAvailable;
-    $('timerAvoidImmediateRepeatHelp').hidden = !avoidAvailable;
-  }
+  const editor = $('timerEditor');
+  const rowsEl = $('timerResponses');
+  let timers = [], settings = { globalStartDelaySeconds: 0, minimumSpacingSeconds: 60 }, editingId = null, page = 1, loading = false, visible = false, poll = null;
+  const storage = `qwertbot.${platform}.rotation-timers`;
+  const filters = () => advancedFilters?.getFilters?.() || [];
+  const msg = (name, text = '', bad = false) => { $(name).textContent = text; $(name).classList.toggle('bad', bad); };
+  const fmt = (seconds) => Number(seconds) % 60 === 0 ? `${Number(seconds) / 60}m` : `${Number(seconds)}s`;
+  const date = (value) => value ? new Date(value).toLocaleString() : 'Not scheduled';
+  const open = (dialog) => { dialog.classList.add('open'); if (!dialog.open) dialog.showModal(); };
+  const close = (dialog) => { dialog.classList.remove('open'); if (dialog.open) dialog.close(); };
+  const integer = (name, min, max) => {
+    const n = Number($(name).value);
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${$(name).closest('label')?.childNodes[0]?.textContent?.trim() || name} must be a whole number from ${min} to ${max}.`);
+    return n;
+  };
+  async function call(action, body = {}) { const d = await postJson(`${prefix}/${action}`, body); if (!d.success) throw new Error(d.error || 'Timer request failed.'); return d; }
 
-  function clearEditor() {
-    editingId = null;
-    $('timerEditorTitle').textContent = 'Add Timer';
-    $('timerName').value = '';
-    $('timerInterval').value = '900';
-    $('timerStartDelay').value = '';
-    $('timerJitter').value = '0';
-    $('timerPriority').value = 'normal';
-    $('timerMinimumMessages').value = '0';
-    $('timerMinimumViewers').value = '0';
-    $('timerUseAdvancedFilter').checked = false;
-    populateAdvancedFilterSelect('');
-    $('timerAdvancedFilterSelectWrap').hidden = true;
-    $('timerResponseMode').value = 'equal';
-    $('timerAvoidImmediateRepeat').checked = false;
-    $('timerEnabled').checked = true;
-    responsesEl.innerHTML = '';
-    makeResponseRow();
-    setEditorMessage('');
-    setScheduleMessage('');
-    setActivityMessage('');
-    setFilterMessage('');
-    setResponseMessage('');
-    syncResponseMode();
-    applySettingsToUi();
+  function fillFilterOptions(select, value) {
+    select.replaceChildren(new Option('Choose filter...', ''));
+    for (const f of filters()) select.appendChild(new Option(f.name, f.id));
+    if (value && !filters().some((f) => f.id === value)) select.appendChild(new Option('Missing filter - select another', value));
+    select.value = value || '';
   }
-
-  function openEditor(timer = null) {
-    clearEditor();
-    if (timer) {
-      editingId = timer.id;
-      $('timerEditorTitle').textContent = 'Edit Timer';
-      $('timerName').value = timer.name || '';
-      $('timerInterval').value = String(timer.intervalSeconds || 900);
-      $('timerStartDelay').value = timer.startDelaySeconds === null || timer.startDelaySeconds === undefined ? '' : String(timer.startDelaySeconds);
-      $('timerJitter').value = String(timer.jitterSeconds || 0);
-      $('timerPriority').value = ['high', 'normal', 'low'].includes(timer.priority) ? timer.priority : 'normal';
-      $('timerMinimumMessages').value = String(timer.minimumChatMessages || 0);
-      $('timerMinimumViewers').value = String(timer.minimumViewers || 0);
-      const filterId = String(timer.advancedFilterId || '').trim();
-      $('timerUseAdvancedFilter').checked = Boolean(filterId);
-      populateAdvancedFilterSelect(filterId);
-      syncAdvancedFilterUi();
-      void refreshAdvancedFilterOptions(filterId);
-      $('timerResponseMode').value = timer.responseMode === 'weighted' ? 'weighted' : 'equal';
-      $('timerAvoidImmediateRepeat').checked = timer.avoidImmediateRepeat === true;
-      $('timerEnabled').checked = timer.enabled !== false;
-      responsesEl.innerHTML = '';
-      const responses = Array.isArray(timer.responses) && timer.responses.length ? timer.responses : [''];
-      responses.forEach((response, index) => makeResponseRow(response, timer.responseWeights?.[index] ?? 1, timer.actionTypes?.[index] || 'chat_message', timer.actionColors?.[index] || 'primary'));
-      syncResponseMode();
-    } else {
-      void refreshAdvancedFilterOptions('');
-    }
-    editorEl.classList.add('open');
-    if (typeof editorEl.showModal === 'function' && !editorEl.open) editorEl.showModal();
-    else editorEl.setAttribute('open', '');
+  function updateRows() {
+    const rows = [...rowsEl.children];
+    rows.forEach((row, index) => {
+      row.querySelector('.timer-response-label').textContent = `Response ${index + 1}`;
+      row.querySelector('.timer-response-up').disabled = index === 0;
+      row.querySelector('.timer-response-down').disabled = index === rows.length - 1;
+      const input = row.querySelector('textarea');
+      row.querySelector('.timer-response-count').textContent = `${Array.from(input.value).length}/${maxLength}`;
+      row.querySelector('.timer-filter-select-wrap').hidden = !row.querySelector('.timer-response-use-filter').checked;
+      const chosen = filters().find((f) => f.id === row.querySelector('.timer-response-filter').value);
+      const use = row.querySelector('.timer-response-use-filter').checked;
+      row.querySelector('.timer-response-filter-detail').textContent = !use ? 'No filter' : chosen ? `${chosen.name}: ${chosen.currentMatch ? 'MATCH' : 'WAITING'} - ${chosen.summary || ''}` : 'Select a saved Advanced Filter.';
+      row.querySelector('.timer-action-color-wrap').hidden = row.querySelector('.timer-action-type').value !== 'twitch_announcement';
+    });
+    $('timerResponseTotal').textContent = `${rows.length}/25`;
+    $('addTimerResponseBtn').disabled = rows.length >= 25;
   }
-
-  function closeEditor() {
-    editorEl.classList.remove('open');
-    if (editorEl.open && typeof editorEl.close === 'function') editorEl.close();
-    else editorEl.removeAttribute('open');
-    clearEditor();
+  function addRow(response = {}) {
+    if (rowsEl.children.length >= 25) return;
+    const row = document.createElement('div'); row.className = 'custom-response-row timer-response-row';
+    row.dataset.responseId = response.id || globalThis.crypto?.randomUUID?.() || `r-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    row.innerHTML = `<div class="custom-response-heading"><strong class="timer-response-label"></strong><label class="inline-check"><input class="timer-response-enabled" type="checkbox" checked> Enabled</label></div>
+      <div class="timer-settings-grid"><label>Action<select class="timer-action-type"><option value="chat_message">Chat Message</option>${youtube ? '' : '<option value="twitch_announcement">Twitch Announcement</option>'}</select></label><label class="timer-action-color-wrap" hidden>Announcement Color<select class="timer-action-color"><option>primary</option><option>purple</option><option>blue</option><option>green</option><option>orange</option></select></label></div>
+      <label class="prompt-label">Message<textarea class="custom-response-input timer-response-input" maxlength="${maxLength}" placeholder="Message to send at this step"></textarea></label>
+      <label class="inline-check timer-use-filter-check"><input class="timer-response-use-filter" type="checkbox"> Use filter</label><div class="timer-filter-select-wrap" hidden><select class="timer-response-filter" aria-label="Response Advanced Filter"></select></div><div class="detail timer-response-filter-detail"></div>
+      <div class="custom-response-footer"><span class="detail timer-response-count"></span><div class="timer-response-order"><button class="secondary timer-response-up" type="button" aria-label="Move response up">&uarr;</button><button class="secondary timer-response-down" type="button" aria-label="Move response down">&darr;</button><button class="secondary timer-response-remove" type="button">Remove</button></div></div>`;
+    row.querySelector('textarea').value = response.text || '';
+    row.querySelector('.timer-response-enabled').checked = response.enabled !== false;
+    row.querySelector('.timer-response-use-filter').checked = Boolean(response.filterId);
+    fillFilterOptions(row.querySelector('.timer-response-filter'), response.filterId);
+    row.querySelector('.timer-action-type').value = response.actionType || 'chat_message';
+    row.querySelector('.timer-action-color').value = response.actionColor || 'primary';
+    row.addEventListener('input', updateRows); row.addEventListener('change', updateRows);
+    row.querySelector('.timer-response-remove').onclick = () => { row.remove(); updateRows(); };
+    row.querySelector('.timer-response-up').onclick = () => { if (row.previousElementSibling) rowsEl.insertBefore(row, row.previousElementSibling); updateRows(); };
+    row.querySelector('.timer-response-down').onclick = () => { if (row.nextElementSibling) rowsEl.insertBefore(row.nextElementSibling, row); updateRows(); };
+    rowsEl.appendChild(row); updateRows();
   }
-
-  function collectResponses() {
-    return [...responsesEl.querySelectorAll('.timer-response-row')].map((row) => ({
-      response: row.querySelector('.timer-response-input').value.trim(),
-      weight: Number(row.querySelector('.timer-response-weight').value),
-      actionType: row.querySelector('.timer-action-type').value,
-      actionColor: row.querySelector('.timer-action-color').value
-    }));
+  async function openEditor(item = null) {
+    try {
+      await advancedFilters?.ensureLoaded?.();
+      editingId = item?.id || item?._id || null;
+      $('timerEditorTitle').textContent = item ? 'Edit Timer' : 'Add Timer';
+      $('timerName').value = item?.name || '';
+      $('timerEnabled').checked = item?.enabled !== false;
+      $('timerInterval').value = item?.intervalSeconds ?? 600;
+      $('timerStartDelay').value = item?.startDelaySeconds ?? '';
+      $('timerStartDelay').min = settings.globalStartDelaySeconds;
+      $('timerJitter').value = item?.jitterSeconds ?? 0;
+      $('timerPriority').value = item?.priority || 'normal';
+      $('timerMinimumMessages').value = item?.minimumChatMessages ?? 0;
+      $('timerMinimumViewers').value = item?.minimumViewers ?? 0;
+      rowsEl.replaceChildren();
+      (item?.responses?.length ? item.responses : ['']).forEach((text, index) => addRow({ text,
+        id: item?.responseIds?.[index], enabled: item?.responseEnabled?.[index] !== false,
+        filterId: item?.responseFilterIds?.[index] ?? item?.advancedFilterId ?? '',
+        actionType: item?.actionTypes?.[index] || 'chat_message', actionColor: item?.actionColors?.[index] || 'primary' }));
+      msg('timerEditorMsg'); open(editor); $('timerName').focus();
+    } catch (err) { msg('timersMsg', err.message, true); }
   }
-
   async function saveTimer() {
-    setEditorMessage('');
-    setScheduleMessage('');
-    setActivityMessage('');
-    setFilterMessage('');
-    setResponseMessage('');
-
-    const name = $('timerName').value.trim();
-    if (!name) return setEditorMessage('Name is required.', true);
-    if (name.length > maxTimerNameLength) return setEditorMessage(`Name can contain at most ${maxTimerNameLength} characters.`, true);
-
-    const intervalSeconds = Number($('timerInterval').value);
-    const startDelayRaw = $('timerStartDelay').value.trim();
-    const startDelaySeconds = startDelayRaw === '' ? null : Number(startDelayRaw);
-    const jitterSeconds = Number($('timerJitter').value);
-    const priority = $('timerPriority').value;
-
-    if (!Number.isFinite(intervalSeconds) || intervalSeconds < minIntervalSeconds || intervalSeconds > maxIntervalSeconds) {
-      return setScheduleMessage(`Interval must be between ${minIntervalSeconds} and ${maxIntervalSeconds} seconds.`, true);
-    }
-    if (startDelaySeconds !== null && (!Number.isInteger(startDelaySeconds) || startDelaySeconds < Number(settings.globalStartDelaySeconds || 0) || startDelaySeconds > maxStartDelaySeconds)) {
-      return setScheduleMessage(`Start Delay must be blank or a whole number from the global delay (${settings.globalStartDelaySeconds || 0}s) through ${maxStartDelaySeconds}s.`, true);
-    }
-    if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > maxJitterSeconds) {
-      return setScheduleMessage(`Jitter must be a whole number between 0 and ${maxJitterSeconds} seconds.`, true);
-    }
-
-    const minimumChatMessages = Number($('timerMinimumMessages').value);
-    const minimumViewers = Number($('timerMinimumViewers').value);
-    if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > maxMinimumChatMessages) {
-      return setActivityMessage(`Min Messages must be a whole number between 0 and ${maxMinimumChatMessages}.`, true);
-    }
-    if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > maxMinimumViewers) {
-      return setActivityMessage(`Min Viewers must be a whole number between 0 and ${maxMinimumViewers}.`, true);
-    }
-
-    const useAdvancedFilter = $('timerUseAdvancedFilter').checked;
-    const advancedFilterId = useAdvancedFilter ? String($('timerAdvancedFilterId').value || '').trim() : '';
-    if (useAdvancedFilter && !advancedFilterId) return setFilterMessage('Choose an Advanced Filter, or turn Use filter off.', true);
-
-    const rows = collectResponses();
-    const nonblank = rows.filter((row) => row.response);
-    if (!nonblank.length) return setResponseMessage('Add at least one action.', true);
-    if (nonblank.length > maxResponses) return setResponseMessage(`A timer can have at most ${maxResponses} actions.`, true);
-    if (nonblank.some((row) => Array.from(row.response).length > maxResponseLength)) return setResponseMessage(`Each action message can contain at most ${maxResponseLength} characters.`, true);
-
-    const responseMode = $('timerResponseMode').value === 'weighted' ? 'weighted' : 'equal';
-    if (responseMode === 'weighted' && nonblank.some((row) => !Number.isFinite(row.weight) || row.weight <= 0)) {
-      return setResponseMessage('Every Specified Weight value must be greater than 0.', true);
-    }
-
-    $('saveTimerBtn').disabled = true;
+    msg('timerEditorMsg');
     try {
-      const d = await postJson('/timers/save', {
-        id: editingId,
-        name,
-        intervalSeconds,
-        startDelaySeconds,
-        jitterSeconds,
-        priority,
-        minimumChatMessages,
-        minimumViewers,
-        advancedFilterId,
-        responses: nonblank.map((row) => row.response),
-        responseMode,
-        responseWeights: nonblank.map((row) => responseMode === 'weighted' ? row.weight : 1),
-        avoidImmediateRepeat: responseMode === 'equal' && nonblank.length >= 2 && $('timerAvoidImmediateRepeat').checked,
-        actionTypes: nonblank.map((row) => row.actionType),
-        actionColors: nonblank.map((row) => row.actionColor),
-        enabled: $('timerEnabled').checked
+      const name = $('timerName').value.trim();
+      if (!name || name.length > 80) throw new Error('Timer Name needs 1-80 characters.');
+      const responses = [...rowsEl.children].map((row) => {
+        const text = row.querySelector('textarea').value.trim();
+        if (!text || Array.from(text).length > maxLength) throw new Error(`Every response needs 1-${maxLength} characters. Remove blank rows.`);
+        const use = row.querySelector('.timer-response-use-filter').checked;
+        const filterId = use ? row.querySelector('.timer-response-filter').value : '';
+        if (use && !filters().some((f) => f.id === filterId)) throw new Error('Each enabled Use filter setting needs an existing filter.');
+        return { text, filterId, id: row.dataset.responseId, enabled: row.querySelector('.timer-response-enabled').checked,
+          actionType: row.querySelector('.timer-action-type').value, actionColor: row.querySelector('.timer-action-color').value };
       });
-      if (!d.success) throw new Error(d.error || 'Could not save timer.');
-      closeEditor();
-      await loadTimers();
-      setListMessage(`Saved ${d.timer?.name || 'timer'}.`);
-    } catch (err) {
-      setEditorMessage(err.message || 'Could not save timer.', true);
-    } finally {
-      $('saveTimerBtn').disabled = false;
+      if (!responses.length) throw new Error('Add at least one response.');
+      const payload = { id: editingId, name, enabled: $('timerEnabled').checked,
+        intervalSeconds: integer('timerInterval', 30, 86400), startDelaySeconds: $('timerStartDelay').value.trim() === '' ? null : integer('timerStartDelay', settings.globalStartDelaySeconds, 86400),
+        jitterSeconds: integer('timerJitter', 0, 86400), priority: $('timerPriority').value,
+        minimumChatMessages: integer('timerMinimumMessages', 0, 100000), minimumViewers: integer('timerMinimumViewers', 0, 1000000),
+        responseMode: 'sequential', advancedFilterId: '', responses: responses.map((r) => r.text),
+        responseIds: responses.map((r) => r.id), responseEnabled: responses.map((r) => r.enabled), responseFilterIds: responses.map((r) => r.filterId),
+        actionTypes: responses.map((r) => r.actionType), actionColors: responses.map((r) => r.actionColor) };
+      $('saveTimerBtn').disabled = true; await call('save', payload); close(editor); await loadTimers(); msg('timersMsg', `Saved ${name}.`);
+    } catch (err) { msg('timerEditorMsg', err.message, true); }
+    finally { $('saveTimerBtn').disabled = false; }
+  }
+  function renderList() {
+    const search = $('timerSearch').value.toLowerCase();
+    const items = timers.filter((t) => [t.name, ...(t.responses || []), ...(t.responseStates || []).map((r) => r.filterName)].join(' ').toLowerCase().includes(search));
+    const sort = $('timerSort').value;
+    items.sort((a, b) => { const field = sort.startsWith('name') ? 'name' : sort.startsWith('interval') ? 'intervalSeconds' : 'createdAt';
+      const diff = field === 'name' ? a.name.localeCompare(b.name) : field === 'createdAt' ? new Date(a[field] || 0) - new Date(b[field] || 0) : a[field] - b[field];
+      return sort.endsWith('desc') ? -diff : diff; });
+    const size = Number($('timerPageSize').value); const pages = Math.max(1, Math.ceil(items.length / size)); page = Math.min(page, pages);
+    $('timerPageLabel').textContent = `Page ${page} of ${pages}`; $('timerPrevPage').disabled = page <= 1; $('timerNextPage').disabled = page >= pages;
+    $('timerPagination').hidden = !timers.length;
+    $('timerList').replaceChildren();
+    if (!items.length) $('timerList').innerHTML = '<div class="detail custom-empty-state">No matching timers.</div>';
+    for (const item of items.slice((page - 1) * size, page * size)) {
+      const card = document.createElement('div'); card.className = 'custom-command-card timer-card';
+      const next = Number(item.nextResponseIndex ?? -1);
+      const filterRows = (item.responseStates || []).map((r) => `<div class="detail">${r.index + 1}. ${esc(r.text)} &mdash; ${!r.enabled ? 'DISABLED' : !r.filterId ? 'No filter' : !r.filterExists ? 'Missing filter' : `${esc(r.filterName || 'Filter')}: ${r.filterMatched ? 'MATCH' : 'WAITING'}`}</div>`).join('');
+      const history = [...(item.history || [])].reverse().slice(0, 10).map((h) => `<div class="detail">${esc(date(h.firedAt))} &middot; Response ${Number(h.responseIndex) + 1} &middot; ${esc(h.reason)}</div>`).join('');
+      card.innerHTML = `<div class="custom-command-card-main"><div class="custom-command-title-row"><strong class="custom-command-name">${esc(item.name)}</strong><span class="custom-command-state ${item.enabled ? 'enabled' : 'disabled'}">${item.enabled ? 'Enabled' : 'Disabled'}</span></div>
+        <div class="detail">One response every ${fmt(item.intervalSeconds)}${item.jitterSeconds ? ` +/- ${fmt(item.jitterSeconds)}` : ''} &middot; In order &middot; ${esc(item.priority || 'normal')} priority</div>
+        <div class="detail">${Number(item.eligibleResponseCount || 0)}/${item.responses.length} responses eligible &middot; Next: ${next >= 0 ? `#${next + 1}` : 'None'} &middot; Start delay ${fmt(item.effectiveStartDelaySeconds || 0)}</div>
+        <div class="detail">Next eligible time: ${esc(date(item.nextRetryAt || item.nextDueAt))}${item.waitingFor ? ` &middot; Waiting: ${esc(item.waitingFor)}` : ''}</div>
+        <div class="detail">Messages: ${Number(item.messagesSinceLastFire || 0)}/${Number(item.minimumChatMessages || 0)} &middot; Viewers: ${item.currentViewerCount ?? '?'} / ${Number(item.minimumViewers || 0)} &middot; Sent: ${Number(item.timesFired || 0)}</div>
+        <details class="timer-history"><summary>Responses and filters</summary>${filterRows}</details><details class="timer-history"><summary>Recent fire history</summary>${history || '<div class="detail">No sends yet.</div>'}</details></div>
+        <div class="custom-command-actions timer-card-actions">${['Preview', 'Test', 'Fire Now', 'Edit', item.enabled ? 'Disable' : 'Enable', 'Delete'].map((label, index) => `<button class="${index === 5 ? 'danger' : 'secondary'}" type="button" data-action="${index}">${label}</button>`).join('')}</div>`;
+      for (const button of card.querySelectorAll('[data-action]')) button.onclick = async () => {
+        const action = Number(button.dataset.action); if (action === 3) return openEditor(item);
+        if (action === 1 && !confirm(`Send one TEST response from "${item.name}"? Uses current response filters, but does not advance its rotation or interval.`)) return;
+        if (action === 2 && !confirm(`Fire one eligible response from "${item.name}" now? Bypasses timing/activity waits, advances rotation and resets its interval.`)) return;
+        if (action === 5 && !confirm(`Delete timer "${item.name}" and its responses?`)) return;
+        card.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        try {
+          const d = await call(['preview', 'test', 'fire-now', '', 'toggle', 'delete'][action], { id: item.id || item._id, enabled: !item.enabled });
+          if (action === 0) { $('timerPreviewBody').textContent = `Response ${Number(d.preview.responseIndex) + 1}: ${d.preview.rendered}`; open($('timerPreviewDialog')); }
+          else { await loadTimers(); msg('timersMsg', action === 1 ? 'Test sent. Rotation, counters and schedule unchanged.' : 'Timer updated.'); }
+        } catch (err) { msg('timersMsg', err.message, true); }
+        finally { card.querySelectorAll('button').forEach((b) => { b.disabled = false; }); }
+      };
+      $('timerList').appendChild(card);
     }
   }
-
-  async function toggleTimer(timer) {
+  async function loadTimers({ quiet = false } = {}) {
+    if (loading) return;
+    loading = true;
     try {
-      const d = await postJson('/timers/toggle', { id: timer.id, enabled: !timer.enabled });
-      if (!d.success) throw new Error(d.error || 'Could not update timer.');
-      await loadTimers();
-    } catch (err) {
-      setListMessage(err.message || 'Could not update timer.', true);
-    }
+      const d = await call('list'); timers = d.timers || []; settings = { ...settings, ...d.settings };
+      if (!quiet) { $('timerGlobalStartDelay').value = settings.globalStartDelaySeconds; $('timerMinimumSpacing').value = settings.minimumSpacingSeconds; }
+      renderList(); if (!quiet) msg('timersMsg', `${timers.length} timer(s).`);
+    } catch (err) { msg('timersMsg', err.message, true); } finally { loading = false; }
   }
-
-  async function deleteTimer(timer) {
-    if (!confirm(`Delete timer "${timer.name}"?`)) return;
-    try {
-      const d = await postJson('/timers/delete', { id: timer.id });
-      if (!d.success) throw new Error(d.error || 'Could not delete timer.');
-      if (editingId === timer.id) closeEditor();
-      await loadTimers();
-    } catch (err) {
-      setListMessage(err.message || 'Could not delete timer.', true);
-    }
-  }
-
-  async function previewTimer(timer) {
-    try {
-      const d = await postJson('/timers/preview', { id: timer.id });
-      if (!d.success) throw new Error(d.error || 'Could not preview timer.');
-      $('timerPreviewBody').innerHTML = `<div><strong>${esc(timer.name)}</strong></div><div class="detail">Rendered action #${Number(d.preview?.responseIndex ?? 0) + 1} · ${d.preview?.actionType === 'twitch_announcement' ? `Announcement (${esc(d.preview?.actionColor || 'primary')})` : 'Chat Message'}</div><div class="timer-preview-text">${esc(d.preview?.rendered || '')}</div>`;
-      $('timerPreviewDialog').showModal();
-    } catch (err) {
-      setListMessage(err.message || 'Could not preview timer.', true);
-    }
-  }
-
-  async function testTimer(timer) {
-    if (!confirm(`Send one TEST message for "${timer.name}"? This will not change its schedule or fire history.`)) return;
-    try {
-      const d = await postJson('/timers/test', { id: timer.id });
-      if (!d.success) throw new Error(d.error || 'Could not test timer.');
-      setListMessage(`Test sent for ${timer.name}. Schedule and history were unchanged.`);
-    } catch (err) {
-      setListMessage(err.message || 'Could not test timer.', true);
-    }
-  }
-
-  async function fireNow(timer) {
-    if (!confirm(`Fire "${timer.name}" now? This counts as a real firing and resets its schedule/activity counter.`)) return;
-    try {
-      const d = await postJson('/timers/fire-now', { id: timer.id });
-      if (!d.success) throw new Error(d.error || 'Could not fire timer.');
-      await loadTimers();
-      setListMessage(`Fired ${timer.name} and reset its schedule.`);
-    } catch (err) {
-      setListMessage(err.message || 'Could not fire timer.', true);
-    }
-  }
-
-  const sortSelect = $('timerSort');
-  if (sortSelect) {
-    try {
-      const savedSort = localStorage.getItem(SORT_STORAGE_KEY);
-      if (VALID_SORTS.has(savedSort)) sortSelect.value = savedSort;
-    } catch {}
-    sortSelect.onchange = () => {
-      try { localStorage.setItem(SORT_STORAGE_KEY, selectedSort()); } catch {}
-      currentPage = 1;
-      renderList();
-    };
-  }
-
-  const searchInput = $('timerSearch');
-  if (searchInput) searchInput.oninput = () => { currentPage = 1; renderList(); };
-
-  const pageSizeSelect = $('timerPageSize');
-  if (pageSizeSelect) {
-    try {
-      const savedPageSize = Number(localStorage.getItem(PAGE_SIZE_STORAGE_KEY));
-      if (VALID_PAGE_SIZES.has(savedPageSize)) pageSizeSelect.value = String(savedPageSize);
-    } catch {}
-    pageSizeSelect.onchange = () => {
-      currentPage = 1;
-      try { localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(selectedPageSize())); } catch {}
-      renderList();
-    };
-  }
-  $('timerPrevPage').onclick = () => { if (currentPage > 1) { currentPage -= 1; renderList(); } };
-  $('timerNextPage').onclick = () => { currentPage += 1; renderList(); };
-
-  $('saveTimerSettingsBtn').onclick = saveSettings;
-  $('addTimerBtn').onclick = () => openEditor();
-  $('refreshTimersBtn').onclick = loadTimers;
-  $('addTimerResponseBtn').onclick = () => {
-    if (responsesEl.querySelectorAll('.timer-response-row').length >= maxResponses) return setResponseMessage(`A timer can have at most ${maxResponses} actions.`, true);
-    setResponseMessage('');
-    makeResponseRow();
+  $('saveTimerSettingsBtn').onclick = async () => {
+    $('saveTimerSettingsBtn').disabled = true;
+    try { await call('settings', { globalStartDelaySeconds: integer('timerGlobalStartDelay', 0, 86400), minimumSpacingSeconds: integer('timerMinimumSpacing', 0, 3600) }); await loadTimers(); msg('timerSettingsMsg', 'Settings saved.'); }
+    catch (err) { msg('timerSettingsMsg', err.message, true); } finally { $('saveTimerSettingsBtn').disabled = false; }
   };
-  $('timerResponseMode').onchange = syncResponseMode;
-  $('timerUseAdvancedFilter').onchange = syncAdvancedFilterUi;
   $('saveTimerBtn').onclick = saveTimer;
-  $('cancelTimerBtn').onclick = closeEditor;
-  $('closeTimerEditorBtn').onclick = closeEditor;
-  editorEl.addEventListener('click', (event) => { if (event.target === editorEl && !$('timerVariablesDialog').open && !$('timerPreviewDialog').open) closeEditor(); });
-  editorEl.addEventListener('cancel', (event) => { event.preventDefault(); if (!$('timerVariablesDialog').open && !$('timerPreviewDialog').open) closeEditor(); });
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && editorEl.classList.contains('open') && !$('timerVariablesDialog').open && !$('timerPreviewDialog').open) closeEditor(); });
-  $('showTimerVariablesBtn').onclick = () => $('timerVariablesDialog').showModal();
-  $('closeTimerVariablesBtn').onclick = () => $('timerVariablesDialog').close();
-  $('timerVariablesDialog').addEventListener('click', (event) => { if (event.target === $('timerVariablesDialog')) $('timerVariablesDialog').close(); });
-  $('closeTimerPreviewBtn').onclick = () => $('timerPreviewDialog').close();
-  $('timerPreviewDialog').addEventListener('click', (event) => { if (event.target === $('timerPreviewDialog')) $('timerPreviewDialog').close(); });
-
-  if (typeof advancedFilters?.subscribe === 'function') {
-    advancedFilters.subscribe(() => {
-      const selected = String($('timerAdvancedFilterId')?.value || '').trim();
-      populateAdvancedFilterSelect(selected);
-      syncAdvancedFilterUi();
-      if (loaded) void loadTimers();
-    });
+  $('addTimerBtn').onclick = () => openEditor(); $('addTimerResponseBtn').onclick = () => addRow();
+  $('closeTimerEditorBtn').onclick = $('cancelTimerBtn').onclick = () => close(editor);
+  $('refreshTimersBtn').onclick = () => loadTimers();
+  $('showTimerVariablesBtn').onclick = () => open($('timerVariablesDialog'));
+  for (const name of ['Preview', 'Variables']) $('closeTimer' + name + 'Btn').onclick = () => close($('timer' + name + 'Dialog'));
+  for (const dialog of root.querySelectorAll('dialog')) {
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(dialog); });
+    dialog.addEventListener('click', (event) => { if (event.target === dialog) close(dialog); });
   }
-
-  clearEditor();
-  editorEl.classList.remove('open');
-
-  return {
-    loadTimers,
-    onVisibilityChange(visible) {
-      if (!visible) {
-        if (editorEl.classList.contains('open')) closeEditor();
-        return;
-      }
-      if (typeof advancedFilters?.ensureLoaded === 'function') void advancedFilters.ensureLoaded().then(() => { if (loaded) renderList(); });
-      void loadTimers();
-    }
-  };
+  $('timerSearch').oninput = () => { page = 1; renderList(); };
+  for (const name of ['timerSort', 'timerPageSize']) {
+    try { const stored = localStorage.getItem(storage + name); if ([...$(name).options].some((o) => o.value === stored)) $(name).value = stored; } catch (_) {}
+    $(name).onchange = () => { page = 1; try { localStorage.setItem(storage + name, $(name).value); } catch (_) {} renderList(); };
+  }
+  $('timerPrevPage').onclick = () => { page = Math.max(1, page - 1); renderList(); }; $('timerNextPage').onclick = () => { page++; renderList(); };
+  advancedFilters?.subscribe?.(() => { for (const select of rowsEl.querySelectorAll('select.timer-response-filter')) fillFilterOptions(select, select.value); updateRows(); if (visible) void loadTimers({ quiet: true }); });
+  return { loadTimers, onVisibilityChange(show) {
+    visible = Boolean(show); if (poll) clearInterval(poll); poll = null;
+    if (!visible) { for (const dialog of root.querySelectorAll('dialog')) close(dialog); return; }
+    void loadTimers(); void advancedFilters?.ensureLoaded?.();
+    poll = setInterval(() => { if (!editor.open) void loadTimers({ quiet: true }); }, 15000);
+  } };
 }

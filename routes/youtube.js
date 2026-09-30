@@ -209,92 +209,14 @@ function registerYouTubeRoutes(app, { requireModSession, getDatabaseConnected, y
     } catch (err) { return res.status(400).json({ success: false, error: 'Could not delete YouTube command.' }); }
   });
 
-  app.post('/youtube/timers/list', requireModSession, async (req, res) => {
-    if (!requireDb(res)) return;
-    try { return res.json({ success: true, timers: await youtubeManager.listTimers() }); }
-    catch (err) { return res.status(500).json({ success: false, error: 'Could not load YouTube timers.' }); }
+  require('./timers').registerTimerRoutes(app, {
+    requireModSession, getDatabaseConnected, getChatTimerManager: () => youtubeManager.getTimerManager(), prefix: '/youtube/timers'
   });
-
-  app.post('/youtube/timers/save', requireModSession, async (req, res) => {
-    if (!requireDb(res)) return;
-    try {
-      const responses = cleanResponses(req.body?.responses);
-      const intervalSeconds = Number(req.body?.intervalSeconds ?? 900);
-      if (!Number.isFinite(intervalSeconds) || intervalSeconds < 30 || intervalSeconds > 86400) throw new Error('Interval must be between 30 and 86400 seconds.');
-
-      const config = await YouTubeConfig.findOne({ channelKey }).lean();
-      const globalStartDelaySeconds = Math.max(0, Math.min(86400, Math.floor(Number(config?.globalTimerStartDelaySeconds || 0))));
-      const rawStartDelay = req.body?.startDelaySeconds;
-      let startDelaySeconds = null;
-      if (rawStartDelay !== null && rawStartDelay !== undefined && String(rawStartDelay).trim() !== '') {
-        startDelaySeconds = Math.floor(Number(rawStartDelay));
-        if (!Number.isInteger(startDelaySeconds) || startDelaySeconds < globalStartDelaySeconds || startDelaySeconds > 86400) {
-          throw new Error(`Start Delay must be blank or a whole number from the global delay (${globalStartDelaySeconds}s) through 86400s.`);
-        }
-      }
-
-      const jitterSeconds = Math.floor(Number(req.body?.jitterSeconds ?? 0));
-      if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > 86400) throw new Error('Jitter must be between 0 and 86400 seconds.');
-      const minimumChatMessages = Math.floor(Number(req.body?.minimumChatMessages ?? 0));
-      if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > 100000) throw new Error('Min Messages must be between 0 and 100000.');
-      const minimumViewers = Math.floor(Number(req.body?.minimumViewers ?? 0));
-      if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > 1000000) throw new Error('Min Viewers must be between 0 and 1000000.');
-      const advancedFilterId = String(req.body?.advancedFilterId || '').trim();
-      if (advancedFilterId) {
-        const manager = typeof getAdvancedFilterManager === 'function' ? getAdvancedFilterManager() : null;
-        if (!manager?.getFilterById?.(advancedFilterId)) throw new Error('Selected Advanced Filter was not found. Refresh the filter list and choose another filter.');
-      }
-      const priority = ['high', 'normal', 'low'].includes(String(req.body?.priority || '').toLowerCase()) ? String(req.body.priority).toLowerCase() : 'normal';
-
-      const responseMode = ['equal', 'weighted'].includes(req.body?.responseMode) ? req.body.responseMode : 'equal';
-      const responseWeights = responseMode === 'weighted'
-        ? responses.map((_, index) => {
-          const value = Number(req.body?.responseWeights?.[index] ?? 1);
-          if (!Number.isFinite(value) || value <= 0) throw new Error('Specified Weight values must be greater than 0.');
-          return value;
-        })
-        : [];
-      const name = String(req.body?.name || '').trim();
-      if (!name) throw new Error('Timer Name is required.');
-      if (name.length > 80) throw new Error('Timer Name can contain at most 80 characters.');
-      const update = {
-        channelKey,
-        name,
-        intervalSeconds,
-        startDelaySeconds,
-        jitterSeconds,
-        priority,
-        minimumChatMessages,
-        minimumViewers,
-        advancedFilterId,
-        responses,
-        responseMode,
-        responseWeights,
-        avoidImmediateRepeat: Boolean(req.body?.avoidImmediateRepeat),
-        enabled: req.body?.enabled !== false
-      };
-      let saved;
-      if (req.body?.id) saved = await YouTubeChatTimer.findOneAndUpdate({ _id: req.body.id, channelKey }, { $set: update }, { new: true, runValidators: true });
-      else saved = await YouTubeChatTimer.create(update);
-      if (!saved) throw new Error('YouTube timer not found.');
-      await youtubeManager.reloadTimers();
-      return res.json({ success: true, timer: saved.toObject() });
-    } catch (err) { return res.status(400).json({ success: false, error: err.message || 'Could not save YouTube timer.' }); }
-  });
-
-  app.post('/youtube/timers/delete', requireModSession, async (req, res) => {
-    if (!requireDb(res)) return;
-    try {
-      await YouTubeChatTimer.deleteOne({ _id: req.body?.id, channelKey });
-      await youtubeManager.reloadTimers();
-      return res.json({ success: true });
-    } catch (err) { return res.status(400).json({ success: false, error: 'Could not delete YouTube timer.' }); }
-  });
-
+  // Existing clients can still call the old Fire Now URL.
   app.post('/youtube/timers/fire', requireModSession, async (req, res) => {
     if (!requireDb(res)) return;
     try { return res.json({ success: true, result: await youtubeManager.fireTimerNow(req.body?.id) }); }
-    catch (err) { return res.status(400).json({ success: false, error: err.message || 'Could not fire YouTube timer.' }); }
+    catch (err) { return res.status(400).json({ success: false, error: err.message }); }
   });
 
   app.post('/youtube/native/get', requireModSession, async (req, res) => {

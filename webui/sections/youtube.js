@@ -1,13 +1,12 @@
+import { initTimersSection } from './timers.js';
 export function initYoutubeSection({ $, esc, postJson, advancedFilters = null }) {
   let adminState = null;
   let commands = [];
-  let timers = [];
+  const timerUi = initTimersSection({ $ , esc, postJson, advancedFilters, platform: 'youtube' });
   let commandSettings = { globalCooldownSeconds: 5 };
   let activeAutomationView = 'commands';
   let commandFilters = { search: '', userLevel: 'all', sort: 'created_asc' };
-  let timerFilters = { search: '', sort: 'created_asc' };
   let commandPage = 1;
-  let timerPage = 1;
   let nativeConfig = { commandsEnabled: true, commandsResponse: '' };
   let nativeDefaults = { commandsEnabled: true, commandsResponse: '' };
 
@@ -44,49 +43,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
     if (!el) return;
     el.textContent = text || '';
     el.classList.toggle('bad', Boolean(isError));
-  }
-
-  function availableAdvancedFilters() {
-    return typeof advancedFilters?.getFilters === 'function' ? advancedFilters.getFilters() : [];
-  }
-
-  function populateYoutubeAdvancedFilterSelect(selectedId = '') {
-    const select = $('youtubeTimerAdvancedFilterId');
-    if (!select) return;
-    const selected = String(selectedId || '').trim();
-    const rows = availableAdvancedFilters();
-    select.innerHTML = '<option value="">Choose filter...</option>';
-    rows.forEach((filter) => {
-      const option = document.createElement('option');
-      option.value = String(filter.id || '');
-      option.textContent = String(filter.name || 'Filter');
-      select.appendChild(option);
-    });
-    if (selected && !rows.some((filter) => String(filter.id || '') === selected)) {
-      const option = document.createElement('option');
-      option.value = selected;
-      option.textContent = 'Missing filter';
-      select.appendChild(option);
-    }
-    select.value = selected;
-  }
-
-  function syncYoutubeAdvancedFilterUi() {
-    const toggle = $('youtubeTimerUseAdvancedFilter');
-    const wrap = $('youtubeTimerAdvancedFilterSelectWrap');
-    if (!toggle || !wrap) return;
-    const useFilter = toggle.checked;
-    wrap.hidden = !useFilter;
-    if (!useFilter) return setMessage('youtubeTimerAdvancedFilterMsg', '');
-    const rows = availableAdvancedFilters();
-    if (!rows.length) setMessage('youtubeTimerAdvancedFilterMsg', 'No Advanced Filters exist yet. Create one under General Settings → Advanced Filters.', true);
-    else setMessage('youtubeTimerAdvancedFilterMsg', '');
-  }
-
-  async function refreshYoutubeAdvancedFilterOptions(selectedId = '') {
-    if (typeof advancedFilters?.ensureLoaded === 'function') await advancedFilters.ensureLoaded();
-    populateYoutubeAdvancedFilterSelect(selectedId);
-    syncYoutubeAdvancedFilterUi();
   }
 
   function openDialog(id) {
@@ -203,7 +159,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
     $('youtubeBotEnabled').checked = cfg.enabled !== false;
     $('youtubeCommandsEnabled').checked = cfg.commandsEnabled !== false;
     $('youtubeTimersEnabled').checked = cfg.timersEnabled !== false;
-    if ($('youtubeGlobalTimerStartDelay')) $('youtubeGlobalTimerStartDelay').value = Number(cfg.globalTimerStartDelaySeconds ?? 0);
     $('youtubeMainQuotaLimit').value = Number(cfg.mainDailyLimitUnits ?? 10000);
     $('youtubeTimerQuotaStop').value = Number(cfg.timerSafetyStopUnits ?? 7500);
     $('youtubeHardQuotaStop').value = Number(cfg.hardSafetyStopUnits ?? 9000);
@@ -289,24 +244,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
       if (sort === 'name_desc') return sortCompare(normalize(a.name || a.normalizedTrigger || a.trigger), normalize(b.name || b.normalizedTrigger || b.trigger), 'desc');
       if (sort === 'counter_desc') return sortCompare(Number(a.counter || 0), Number(b.counter || 0), 'desc');
       if (sort === 'counter_asc') return sortCompare(Number(a.counter || 0), Number(b.counter || 0), 'asc');
-      return sortCompare(new Date(a.createdAt || 0).getTime(), new Date(b.createdAt || 0).getTime(), 'asc');
-    });
-  }
-
-  function filteredTimers() {
-    const search = normalize(timerFilters.search);
-    const list = timers.filter((timer) => {
-      if (!search) return true;
-      const haystack = [timer.name, timer.priority, timer.waitingFor, ...(timer.responses || [])].map(normalize).join(' ');
-      return haystack.includes(search);
-    });
-    return [...list].sort((a, b) => {
-      const sort = timerFilters.sort || 'created_asc';
-      if (sort === 'created_desc') return sortCompare(new Date(a.createdAt || 0).getTime(), new Date(b.createdAt || 0).getTime(), 'desc');
-      if (sort === 'name_asc') return sortCompare(normalize(a.name), normalize(b.name), 'asc');
-      if (sort === 'name_desc') return sortCompare(normalize(a.name), normalize(b.name), 'desc');
-      if (sort === 'interval_asc') return sortCompare(Number(a.intervalSeconds || 0), Number(b.intervalSeconds || 0), 'asc');
-      if (sort === 'interval_desc') return sortCompare(Number(a.intervalSeconds || 0), Number(b.intervalSeconds || 0), 'desc');
       return sortCompare(new Date(a.createdAt || 0).getTime(), new Date(b.createdAt || 0).getTime(), 'asc');
     });
   }
@@ -611,223 +548,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
     setMessage('youtubeCommandsMsg', 'Deleted.');
   }
 
-  async function loadTimers() {
-    const d = await postJson('/youtube/timers/list', {});
-    if (!d.success) throw new Error(d.error || 'Could not load YouTube timers.');
-    timers = d.timers || [];
-    renderTimers();
-  }
-
-  function renderTimers() {
-    const list = $('youtubeTimerList');
-    const filtered = filteredTimers();
-    const { page, pageSize: size } = updatePagination({
-      totalItems: filtered.length,
-      page: timerPage,
-      setPage: (value) => { timerPage = value; },
-      pageSizeId: 'youtubeTimerPageSize',
-      labelId: 'youtubeTimerPageLabel',
-      prevId: 'youtubeTimerPrevPage',
-      nextId: 'youtubeTimerNextPage',
-      paginationId: 'youtubeTimerPagination',
-      sourceCount: timers.length
-    });
-    const items = filtered.slice((page - 1) * size, page * size);
-    if (!timers.length) {
-      list.innerHTML = '<div class="custom-empty-state detail">No timers yet.</div>';
-      return;
-    }
-    if (!items.length) {
-      list.innerHTML = '<div class="custom-empty-state detail">No timers match your search.</div>';
-      return;
-    }
-    list.innerHTML = items.map((item) => {
-      const enabled = item.enabled !== false;
-      const responseCount = Array.isArray(item.responses) ? item.responses.length : 0;
-      const jitter = Number(item.jitterSeconds || 0) > 0 ? ` · ±${formatInterval(item.jitterSeconds)} jitter` : '';
-      const activity = [];
-      if (Number(item.minimumChatMessages || 0) > 0) activity.push(`${Number(item.messagesSinceLastFire || 0)}/${Number(item.minimumChatMessages || 0)} chat messages`);
-      if (Number(item.minimumViewers || 0) > 0) activity.push(`${item.currentViewerCount === null || item.currentViewerCount === undefined ? '—' : Number(item.currentViewerCount)}/${Number(item.minimumViewers || 0)} viewers`);
-      const activityText = activity.length ? activity.join(' · ') : 'No activity minimums';
-      const startDelayText = item.startDelaySeconds === null || item.startDelaySeconds === undefined
-        ? `Global start delay (${formatInterval(item.effectiveStartDelaySeconds || 0)})`
-        : `Start delay ${formatInterval(item.startDelaySeconds)}`;
-      const waiting = item.waitingFor ? ` · Waiting for: ${item.waitingFor}` : '';
-      const filterText = item.advancedFilterId
-        ? ` · Filter: ${item.advancedFilterName || 'Missing filter'}${item.advancedFilterExists === false ? ' (missing)' : (item.advancedFilterMatched === false ? ' (no match)' : ' (match)')}`
-        : '';
-      return `
-        <div class="custom-command-card timer-card" data-youtube-timer-id="${esc(item._id)}">
-          <div class="custom-command-card-main">
-            <div class="custom-command-title-row">
-              <strong class="custom-command-name">${esc(item.name || 'Timer')}</strong>
-              <span class="custom-command-state ${enabled ? 'enabled' : 'disabled'}">${enabled ? 'Enabled' : 'Disabled'}</span>
-            </div>
-            <div class="detail">Every ${esc(formatInterval(item.intervalSeconds))}${esc(jitter)} · ${esc(priorityLabel(item.priority))} priority · ${responseCount} action${responseCount === 1 ? '' : 's'} · ${esc(responseModeLabel(item.responseMode))}</div>
-            <div class="detail">${esc(startDelayText)} · ${esc(activityText)}${esc(filterText)}</div>
-            <div class="detail">Last fired: ${esc(fmtTime(item.lastFiredAt))} · Next eligible time: ${esc(fmtTime(item.nextDueAt))}${esc(waiting)}</div>
-            <div class="detail">Times fired: ${Number(item.timesFired || 0)}${item.lastResponse ? ` · Last action: ${esc(item.lastResponse)}` : ''}</div>
-          </div>
-          <div class="custom-command-actions timer-card-actions">
-            <button class="secondary youtube-timer-fire-btn" type="button">Fire Now</button>
-            <button class="secondary youtube-timer-edit-btn" type="button">Edit</button>
-            <button class="secondary youtube-timer-toggle-btn" type="button">${enabled ? 'Disable' : 'Enable'}</button>
-            <button class="danger youtube-timer-delete-btn" type="button">Delete</button>
-          </div>
-        </div>`;
-    }).join('');
-    list.querySelectorAll('[data-youtube-timer-id]').forEach((card) => {
-      const timer = timers.find((item) => String(item._id) === String(card.dataset.youtubeTimerId));
-      card.querySelector('.youtube-timer-fire-btn').onclick = () => void fireTimer(timer?._id);
-      card.querySelector('.youtube-timer-edit-btn').onclick = () => openTimerDialog(timer?._id);
-      card.querySelector('.youtube-timer-toggle-btn').onclick = () => void toggleTimer(timer);
-      card.querySelector('.youtube-timer-delete-btn').onclick = () => void deleteTimer(timer?._id);
-    });
-  }
-
-  function openTimerDialog(id = '') {
-    const item = timers.find((timer) => String(timer._id) === String(id));
-    $('youtubeTimerId').value = item?._id || '';
-    $('youtubeTimerDialogTitle').textContent = item ? `Edit ${item.name}` : 'Add Timer';
-    $('youtubeTimerName').value = item?.name || '';
-    $('youtubeTimerInterval').value = String(Number(item?.intervalSeconds ?? 900));
-    $('youtubeTimerStartDelay').value = item?.startDelaySeconds === null || item?.startDelaySeconds === undefined ? '' : String(Number(item.startDelaySeconds));
-    $('youtubeTimerStartDelay').min = String(Number(adminState?.config?.globalTimerStartDelaySeconds || 0));
-    $('youtubeTimerJitter').value = String(Number(item?.jitterSeconds || 0));
-    $('youtubeTimerPriority').value = ['high', 'normal', 'low'].includes(item?.priority) ? item.priority : 'normal';
-    $('youtubeTimerMinimumMessages').value = String(Number(item?.minimumChatMessages || 0));
-    $('youtubeTimerMinimumViewers').value = String(Number(item?.minimumViewers || 0));
-    const filterId = String(item?.advancedFilterId || '').trim();
-    $('youtubeTimerUseAdvancedFilter').checked = Boolean(filterId);
-    populateYoutubeAdvancedFilterSelect(filterId);
-    syncYoutubeAdvancedFilterUi();
-    void refreshYoutubeAdvancedFilterOptions(filterId);
-    $('youtubeTimerResponseMode').value = item?.responseMode === 'weighted' ? 'weighted' : 'equal';
-    $('youtubeTimerAvoidRepeat').checked = Boolean(item?.avoidImmediateRepeat);
-    $('youtubeTimerEnabled').checked = item ? item.enabled !== false : true;
-    $('youtubeTimerResponses').innerHTML = '';
-    const values = Array.isArray(item?.responses) && item.responses.length ? item.responses : [''];
-    values.forEach((value, index) => addYoutubeResponse('timer', value, item?.responseWeights?.[index] ?? 1));
-    setMessage('youtubeTimerDialogMsg', '');
-    setMessage('youtubeTimerScheduleMsg', '');
-    setMessage('youtubeTimerActivityMsg', '');
-    setMessage('youtubeTimerAdvancedFilterMsg', '');
-    setMessage('youtubeTimerResponsesMsg', '');
-    updateYoutubeResponseUi('timer');
-    openDialog('youtubeTimerDialog');
-  }
-
-  function closeTimerDialog() { closeDialog('youtubeTimerDialog'); }
-
-  async function saveTimer() {
-    setMessage('youtubeTimerDialogMsg', 'Saving...');
-    setMessage('youtubeTimerScheduleMsg', '');
-    setMessage('youtubeTimerActivityMsg', '');
-    const name = $('youtubeTimerName').value.trim();
-    if (!name) {
-      setMessage('youtubeTimerDialogMsg', 'Name is required.', true);
-      return;
-    }
-    if (name.length > 80) {
-      setMessage('youtubeTimerDialogMsg', 'Name can contain at most 80 characters.', true);
-      return;
-    }
-    const payload = responsePayload('timer');
-    const intervalSeconds = Number($('youtubeTimerInterval').value);
-    const startDelayRaw = $('youtubeTimerStartDelay').value.trim();
-    const startDelaySeconds = startDelayRaw === '' ? null : Number(startDelayRaw);
-    const jitterSeconds = Number($('youtubeTimerJitter').value);
-    const minimumChatMessages = Number($('youtubeTimerMinimumMessages').value);
-    const minimumViewers = Number($('youtubeTimerMinimumViewers').value);
-    const globalDelay = Number(adminState?.config?.globalTimerStartDelaySeconds || 0);
-    if (!Number.isFinite(intervalSeconds) || intervalSeconds < 30 || intervalSeconds > 86400) {
-      setMessage('youtubeTimerDialogMsg', '');
-      return setMessage('youtubeTimerScheduleMsg', 'Interval must be between 30 and 86400 seconds.', true);
-    }
-    if (startDelaySeconds !== null && (!Number.isInteger(startDelaySeconds) || startDelaySeconds < globalDelay || startDelaySeconds > 86400)) {
-      setMessage('youtubeTimerDialogMsg', '');
-      return setMessage('youtubeTimerScheduleMsg', `Start Delay must be blank or a whole number from the global delay (${globalDelay}s) through 86400s.`, true);
-    }
-    if (!Number.isInteger(jitterSeconds) || jitterSeconds < 0 || jitterSeconds > 86400) {
-      setMessage('youtubeTimerDialogMsg', '');
-      return setMessage('youtubeTimerScheduleMsg', 'Jitter must be a whole number between 0 and 86400 seconds.', true);
-    }
-    if (!Number.isInteger(minimumChatMessages) || minimumChatMessages < 0 || minimumChatMessages > 100000) {
-      setMessage('youtubeTimerDialogMsg', '');
-      return setMessage('youtubeTimerActivityMsg', 'Min Messages must be a whole number between 0 and 100000.', true);
-    }
-    if (!Number.isInteger(minimumViewers) || minimumViewers < 0 || minimumViewers > 1000000) {
-      setMessage('youtubeTimerDialogMsg', '');
-      return setMessage('youtubeTimerActivityMsg', 'Min Viewers must be a whole number between 0 and 1000000.', true);
-    }
-    const useAdvancedFilter = $('youtubeTimerUseAdvancedFilter').checked;
-    const advancedFilterId = useAdvancedFilter ? String($('youtubeTimerAdvancedFilterId').value || '').trim() : '';
-    if (useAdvancedFilter && !advancedFilterId) {
-      setMessage('youtubeTimerDialogMsg', '');
-      return setMessage('youtubeTimerAdvancedFilterMsg', 'Choose an Advanced Filter, or turn Use filter off.', true);
-    }
-    const body = {
-      id: $('youtubeTimerId').value || undefined,
-      name,
-      responses: payload.responses,
-      responseWeights: payload.weights,
-      responseMode: $('youtubeTimerResponseMode').value || 'equal',
-      intervalSeconds,
-      startDelaySeconds,
-      jitterSeconds,
-      priority: $('youtubeTimerPriority').value || 'normal',
-      minimumChatMessages,
-      minimumViewers,
-      advancedFilterId,
-      avoidImmediateRepeat: $('youtubeTimerAvoidRepeat').checked,
-      enabled: $('youtubeTimerEnabled').checked
-    };
-    const d = await postJson('/youtube/timers/save', body);
-    if (!d.success) { setMessage('youtubeTimerDialogMsg', d.error, true); return; }
-    closeTimerDialog();
-    await loadTimers();
-    setMessage('youtubeTimersMsg', 'Saved.');
-  }
-
-  async function toggleTimer(timer) {
-    if (!timer) return;
-    const d = await postJson('/youtube/timers/save', {
-      id: timer._id,
-      name: timer.name,
-      responses: timer.responses || [],
-      responseMode: timer.responseMode || 'equal',
-      responseWeights: timer.responseWeights || [],
-      intervalSeconds: Number(timer.intervalSeconds || 900),
-      startDelaySeconds: timer.startDelaySeconds === null || timer.startDelaySeconds === undefined ? null : Number(timer.startDelaySeconds),
-      jitterSeconds: Number(timer.jitterSeconds || 0),
-      priority: timer.priority || 'normal',
-      minimumChatMessages: Number(timer.minimumChatMessages || 0),
-      minimumViewers: Number(timer.minimumViewers || 0),
-      advancedFilterId: String(timer.advancedFilterId || ''),
-      avoidImmediateRepeat: Boolean(timer.avoidImmediateRepeat),
-      enabled: timer.enabled === false
-    });
-    if (!d.success) { setMessage('youtubeTimersMsg', d.error, true); return; }
-    await loadTimers();
-  }
-
-  async function deleteTimer(id) {
-    if (!id || !confirm('Delete this timer?')) return;
-    const d = await postJson('/youtube/timers/delete', { id });
-    if (!d.success) { setMessage('youtubeTimersMsg', d.error, true); return; }
-    await loadTimers();
-    setMessage('youtubeTimersMsg', 'Deleted.');
-  }
-
-  async function fireTimer(id) {
-    if (!id) return;
-    setMessage('youtubeTimersMsg', 'Sending to active YouTube chat(s)...');
-    const d = await postJson('/youtube/timers/fire', { id });
-    if (!d.success) { setMessage('youtubeTimersMsg', d.error, true); return; }
-    setMessage('youtubeTimersMsg', `Sent to ${d.result?.sentCount || 0} active chat(s)${d.result?.failedCount ? `; ${d.result.failedCount} failed` : ''}.`);
-    await Promise.all([loadTimers(), refreshAdminState().catch(() => {})]);
-  }
-
   function renderNativeCard() {
     const enabled = nativeConfig?.commandsEnabled !== false;
     const status = $('youtubeNativeCommandStatus');
@@ -910,30 +630,8 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
       $(panel).classList.toggle('open', key === view);
     }
     if (view === 'commands') void loadCommands().catch((e) => setMessage('youtubeCommandsMsg', e.message, true));
-    if (view === 'timers') void loadTimers().catch((e) => setMessage('youtubeTimersMsg', e.message, true));
+    timerUi.onVisibilityChange(view === 'timers');
     if (view === 'native') void loadNative().catch((e) => setMessage('youtubeNativeListMsg', e.message, true));
-  }
-
-  async function saveGlobalTimerSettings() {
-    const value = Number($('youtubeGlobalTimerStartDelay').value);
-    if (!Number.isInteger(value) || value < 0 || value > 86400) {
-      return setMessage('youtubeTimerSettingsMsg', 'Global Start Delay must be a whole number between 0 and 86400 seconds.', true);
-    }
-    const button = $('saveYoutubeTimerSettingsBtn');
-    const cfg = adminState?.config || {};
-    button.disabled = true;
-    setMessage('youtubeTimerSettingsMsg', 'Saving...');
-    try {
-      const d = await postJson('/youtube/admin/config', { ...cfg, globalTimerStartDelaySeconds: value });
-      if (!d.success) throw new Error(d.error || 'Could not save YouTube timer settings.');
-      if (adminState) adminState.config = { ...(adminState.config || {}), ...(d.config || {}) };
-      setMessage('youtubeTimerSettingsMsg', 'Timer settings saved.');
-      await refreshAdminState().catch(() => {});
-    } catch (err) {
-      setMessage('youtubeTimerSettingsMsg', err.message || 'Could not save YouTube timer settings.', true);
-    } finally {
-      button.disabled = false;
-    }
   }
 
   async function saveControls() {
@@ -1009,14 +707,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
   $('youtubeCommandNextPage').onclick = () => { commandPage += 1; renderCommands(); };
   $('refreshYoutubeCommandsBtn').onclick = () => void loadCommands().then(() => setMessage('youtubeCommandsMsg', 'Refreshed.')).catch((e) => setMessage('youtubeCommandsMsg', e.message, true));
 
-  $('youtubeTimerSearch').addEventListener('input', (e) => { timerFilters.search = e.target.value || ''; timerPage = 1; renderTimers(); });
-  $('youtubeTimerSort').addEventListener('change', (e) => { timerFilters.sort = e.target.value || 'created_asc'; timerPage = 1; renderTimers(); });
-  $('youtubeTimerPageSize').addEventListener('change', () => { timerPage = 1; renderTimers(); });
-  $('youtubeTimerPrevPage').onclick = () => { if (timerPage > 1) { timerPage -= 1; renderTimers(); } };
-  $('youtubeTimerNextPage').onclick = () => { timerPage += 1; renderTimers(); };
-  $('refreshYoutubeTimersBtn').onclick = () => void loadTimers().then(() => setMessage('youtubeTimersMsg', 'Refreshed.')).catch((e) => setMessage('youtubeTimersMsg', e.message, true));
-  $('saveYoutubeTimerSettingsBtn').onclick = () => void saveGlobalTimerSettings();
-
   $('addYoutubeCommandBtn').onclick = () => openCommandDialog();
   $('closeYoutubeCommandDialogBtn').onclick = closeCommandDialog;
   $('cancelYoutubeCommandDialogBtn').onclick = closeCommandDialog;
@@ -1035,26 +725,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
     const d = await postJson('/youtube/custom-commands/settings', { globalCooldownSeconds: Number($('youtubeGlobalCooldown').value || 0) });
     setMessage('youtubeCommandsMsg', d.success ? 'Global cooldown saved.' : d.error, !d.success);
   };
-
-  $('addYoutubeTimerBtn').onclick = () => openTimerDialog();
-  $('closeYoutubeTimerDialogBtn').onclick = closeTimerDialog;
-  $('cancelYoutubeTimerDialogBtn').onclick = closeTimerDialog;
-  $('saveYoutubeTimerBtn').onclick = () => void saveTimer();
-  $('youtubeTimerDialog').addEventListener('click', (e) => { if (e.target === $('youtubeTimerDialog')) closeTimerDialog(); });
-  $('youtubeTimerDialog').addEventListener('close', () => $('youtubeTimerDialog').classList.remove('open'));
-  $('youtubeTimerResponseMode').addEventListener('change', () => updateYoutubeResponseUi('timer'));
-  $('youtubeTimerUseAdvancedFilter').addEventListener('change', syncYoutubeAdvancedFilterUi);
-  $('youtubeTimerAdvancedFilterId').addEventListener('change', () => setMessage('youtubeTimerAdvancedFilterMsg', ''));
-  $('addYoutubeTimerResponseBtn').onclick = () => addYoutubeResponse('timer');
-
-  if (typeof advancedFilters?.subscribe === 'function') {
-    advancedFilters.subscribe(() => {
-      const selected = String($('youtubeTimerAdvancedFilterId')?.value || '').trim();
-      populateYoutubeAdvancedFilterSelect(selected);
-      syncYoutubeAdvancedFilterUi();
-      if (timers.length) renderTimers();
-    });
-  }
 
   $('youtubeNativeResponseEditBtn').onclick = () => void openNativeDialog();
   $('closeYoutubeNativeResponseDialogBtn').onclick = closeNativeDialog;
@@ -1082,7 +752,7 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
 
   return {
     refreshAdminState,
-    onAutomationVisibilityChange(open) { if (open) { void refreshAdminState().catch(() => {}); selectAutomationView(activeAutomationView); } },
+    onAutomationVisibilityChange(open) { if (!open) timerUi.onVisibilityChange(false); if (open) { void refreshAdminState().catch(() => {}); selectAutomationView(activeAutomationView); } },
     onOauthVisibilityChange(open) { if (open) void refreshAdminState({ messageTarget: 'youtubeOauthMsg' }).catch(() => {}); },
     onDiagnosticsVisibilityChange(open) { if (open) void refreshAdminState({ messageTarget: 'youtubeQuotaMsg' }).catch(() => {}); },
     selectAutomationView

@@ -1,4 +1,4 @@
-function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, getChatTimerManager, getPersistentPinManager = null }) {
+function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, getChatTimerManager, getPersistentPinManager = null, prefix = '/timers' }) {
   function unavailable(res) {
     return res.status(503).json({ success: false, error: 'Timers require MongoDB to be connected.' });
   }
@@ -12,7 +12,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     return manager;
   }
 
-  app.post('/timers/list', requireModSession, async (req, res) => {
+  app.post(`${prefix}/list`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -26,7 +26,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/settings', requireModSession, async (req, res) => {
+  app.post(`${prefix}/settings`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -38,7 +38,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/save', requireModSession, async (req, res) => {
+  app.post(`${prefix}/save`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -50,7 +50,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/delete', requireModSession, async (req, res) => {
+  app.post(`${prefix}/delete`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -62,7 +62,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/toggle', requireModSession, async (req, res) => {
+  app.post(`${prefix}/toggle`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -74,7 +74,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/preview', requireModSession, async (req, res) => {
+  app.post(`${prefix}/preview`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -86,7 +86,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/test', requireModSession, async (req, res) => {
+  app.post(`${prefix}/test`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
@@ -99,7 +99,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
   });
 
 
-  app.post('/timers/persistent-pin', requireModSession, async (req, res) => {
+  if (getPersistentPinManager) app.post(`${prefix}/persistent-pin`, requireModSession, async (req, res) => {
     if (!getDatabaseConnected()) return unavailable(res);
     const manager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
     if (!manager?.saveConfig) return res.status(503).json({ success: false, error: 'Rotating Pinned Banners are unavailable.' });
@@ -112,7 +112,7 @@ function registerTimerRoutes(app, { requireModSession, getDatabaseConnected, get
     }
   });
 
-  app.post('/timers/fire-now', requireModSession, async (req, res) => {
+  app.post(`${prefix}/fire-now`, requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
