@@ -572,7 +572,9 @@ async function auditNamedViewerAttributions(summary, chatLogs = [], recapChannel
     mode: 'recap',
     label,
     safeFallback: '',
-    maxPasses: 2,
+    // One additional bounded pass is available only when a repair itself still
+    // needs verification. Healthy recaps still finish after the first pass.
+    maxPasses: 3,
     sourceCoverage: classicRun.getStore()?.sourceCoverage || null,
     requestText: async (prompt, requestOptions) => {
       const send = options.requestText || requestGeminiTextWithRetry;
@@ -997,9 +999,23 @@ function enforceSummaryLimit(summary) {
   return lastSpace > 0 ? withinLimit.substring(0, lastSpace).trim() : withinLimit.trim();
 }
 
+function cleanOrphanedOpeningConnector(summary = '') {
+  let text = String(summary || '').trim();
+  // Audit repairs can delete the sentence that a transition referred back to.
+  // A recap should never begin as though the viewer missed an earlier sentence.
+  text = text.replace(/^(?:Also|Additionally|Furthermore|Moreover|Meanwhile|Similarly|On top of that|In addition),\s+/i, '');
+  text = text.replace(/^(?:And|But)\s+(?=[A-Za-z0-9@])/i, '');
+  if (!text) return text;
+  // Capitalize ordinary generic sentence subjects without changing the casing
+  // of Twitch logins/display names that intentionally begin lowercase.
+  return text.replace(/^(chat|viewers?|one viewer|some viewers?|the chat|the community)\b/i,
+    (match) => match.replace(/^./, (char) => char.toUpperCase()));
+}
+
 function normalizeRecap(summary) {
   let cleaned = cleanRecapPrefixes(summary);
   cleaned = cleanRecapWording(cleaned);
+  cleaned = cleanOrphanedOpeningConnector(cleaned);
   cleaned = removeTrailingEllipsis(cleaned);
   cleaned = enforceSummaryLimit(cleaned);
   return cleaned;
@@ -1625,6 +1641,7 @@ module.exports = {
   getRecapSourceStats,
   getRecapLengthPlan,
   getRecapPublicationQuality,
+  normalizeRecap,
   buildFinalLengthRecoveryPrompt,
   getRecapCompositionIssues,
   buildRecapCompositionRepairPrompt

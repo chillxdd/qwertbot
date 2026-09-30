@@ -242,7 +242,7 @@ ${TAGGED_DIALOGUE_RULES}
     : '- If the sentence has no specific person/entity attribution, use true only when its scope and generality are also supported.';
 
   // V25: recap-only relationship repair. Keep the classic paragraph pipeline
-  // and the existing two-pass verification contract; do not turn a bad link
+  // and the bounded repair-verification contract; do not turn a bad link
   // between facts into a reason to discard both facts or auto-approve a rewrite.
   const recapRelationshipRules = mode === 'recap'
     ? `RECAP FACTS AND CONNECTIONS - SEPARATE, DO NOT DISCARD:
@@ -251,7 +251,9 @@ ${TAGGED_DIALOGUE_RULES}
 - If A and B are independently supported but their connection is not, mark the ORIGINAL sentence supported=false and return a minimal replacement that KEEPS BOTH facts as separate complete sentences. A replacement string may contain multiple sentences. Removing the bad connection is a repair, not a reason to omit either supported fact.
 - Example ONLY, not source evidence: "A gifted subs, prompting jokes about X and Y." becomes "A gifted subs. Chat also joked about X and Y." ONLY if the sources independently support the gift and the group-level jokes. Keep qualifying context such as a promotion only if that context is independently supported too.
 - Apply the same separation to invented shared participation: "A and B debated X and Y" must not imply a mutual debate or that both discussed both topics when the evidence only supports "A discussed X. B discussed Y." Keep each speaker's action/topic bound to their own evidence; do not transfer jokes or reactions to an event's actor.
+- Distinguish STRONG interaction verbs from neutral participation. "debated", "argued", "reacted to", and "responded to" require evidence for that interaction. Neutral "talked about" or "discussed" does NOT require a formal debate: it can be supported when the cited viewers each directly discussed the same topic or exchanged replies about it. Do not reject neutral discussion wording merely because no debate occurred.
 - Use independent sentences, optionally joined by a neutral "also". Do not replace an unsupported causal link with an unverified timeline or interaction such as "after that", "following this", "in reply", or "in reaction". Separate occurrences are not automatically a sequence, response, or coordinated conversation.
+- If a prior repair removes an unsupported connection, NEVER reintroduce that same rejected connection in a later replacement. If the independently supported facts are already stated neutrally, mark the neutral sentence supported=true instead of endlessly rewriting it.
 - If only part of a sentence is supported, preserve just the supported part and remove or narrowly correct the unsupported clause. If no factual content can be supported, an empty replacement is still correct. Never preserve a clause merely because it was present in the draft, and never add filler or raw source quotes to compensate.
 - This is NOT a blanket ban on causal words. Keep a causal/reaction link when direct source evidence explicitly establishes it, with the same actors, scope, and uncertainty. Keep harmless independent clauses connected by "and" or "while" when they do not assert a false causal, temporal, or shared-participation relationship.
 - For a split replacement, evidenceIds must include the exact source IDs needed for EVERY retained fact; evidence for the event alone cannot validate unrelated chat claims. Existing named-identity and multi-author group-evidence requirements still apply. On re-audit, assess each resulting sentence against its own relevant sources; do not require unrelated sentences to share an author, topic, or causal link.
@@ -283,6 +285,7 @@ CURRENT-WINDOW SOURCE COVERAGE (TRUSTED APPLICATION METADATA):
 FOR EACH SENTENCE:
 - supported must be the JSON boolean true ONLY when every named-person/entity attribution, personal descriptor/status, relationship, and broad group generalization in that sentence is directly supported and directionally correct.
 - For recap/memory mode, evidenceIds MUST list the exact M... chat and/or E... event source IDs that directly support the sentence's factual claims. Do not cite merely nearby or keyword-similar lines.
+- Include the direct source ID for EACH named viewer whose own statement/action supports the sentence. Omitting the matching viewer's source ID can make an otherwise correct sentence fail deterministic verification.
 - If the sentence says a named person IS/HAS a status, role, relationship, preference, property, nickname, reaction, decision, or action, at least one cited source must explicitly bind that predicate to that person. A different viewer mentioning similar words is not evidence.
 - Treat coordinated named-subject wording as a high-risk attribution. A sentence like "A, B, and C discussed X, Y, and Z" is supported only if EACH named person's own cited source supports the full shared claim. If different viewers contributed different topics, do not imply that every person discussed every topic: split them into separately bound clauses/sentences, or generalize to "viewers" when the aggregate evidence supports the group-level topic summary.
 - If the sentence uses broad group wording (chat/viewers/everyone/community), cite at least two directly relevant source messages; one isolated remark is insufficient for a group-level claim.
@@ -360,6 +363,71 @@ function identityMatchesEvent(identity, event = {}) {
     if (normalized.login && candidate.login) return normalized.login === candidate.login;
     return normalized.aliases.some((alias) => textMentionsIdentity(candidate.displayName || candidate.login || '', { aliases: [alias] }));
   });
+}
+
+const EVIDENCE_TOKEN_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'because', 'been', 'being', 'but', 'by',
+  'chat', 'did', 'do', 'does', 'for', 'from', 'had', 'has', 'have', 'he', 'her', 'hers',
+  'him', 'his', 'i', 'in', 'is', 'it', 'its', 'me', 'mentioned', 'noted', 'of', 'on',
+  'one', 'or', 'our', 'said', 'says', 'shared', 'she', 'so', 'some', 'talked', 'the',
+  'their', 'them', 'they', 'this', 'to', 'viewer', 'viewers', 'was', 'we', 'were',
+  'while', 'with', 'you', 'your', 'about', 'also', 'discussed', 'joked', 'made'
+]);
+
+function normalizeEvidenceToken(value = '') {
+  let token = String(value || '').normalize('NFKC').toLocaleLowerCase('en-US')
+    .replace(/^['’]+|['’]+$/g, '')
+    .replace(/['’]s$/g, '')
+    .replace(/[^\p{L}\p{N}_-]/gu, '');
+  if (token.length > 6 && token.endsWith('ing')) token = token.slice(0, -3);
+  else if (token.length > 5 && token.endsWith('ied')) token = `${token.slice(0, -3)}y`;
+  else if (token.length > 5 && token.endsWith('ed')) token = token.slice(0, -2);
+  else if (token.length > 5 && token.endsWith('es')) token = token.slice(0, -2);
+  else if (token.length > 4 && token.endsWith('s')) token = token.slice(0, -1);
+  return token;
+}
+
+function evidenceContentTokens(text = '', identities = []) {
+  const stripped = removeIdentityAliases(String(text || ''), identities);
+  const tokens = (stripped.match(/[\p{L}\p{N}_'’-]+/gu) || [])
+    .map(normalizeEvidenceToken)
+    .filter((token) => token.length >= 3 && !EVIDENCE_TOKEN_STOP_WORDS.has(token));
+  return [...new Set(tokens)];
+}
+
+function findDirectIdentityChatEvidence(sentence, identity, chatRecords = []) {
+  const claimTokens = evidenceContentTokens(sentence, [identity]);
+  if (claimTokens.length < 2) return null;
+  const claimSet = new Set(claimTokens);
+  const requiredOverlap = claimTokens.length >= 5 ? 3 : 2;
+  let best = null;
+  normalizeChatRecords(chatRecords).forEach((record, index) => {
+    if (record.kind === 'bot_context') return;
+    if (!identityMatchesRecordAuthor(identity, record)) return;
+    const sourceTokens = evidenceContentTokens(record.text);
+    if (!sourceTokens.length) return;
+    const shared = sourceTokens.filter((token) => claimSet.has(token));
+    const ratio = shared.length / Math.max(1, Math.min(claimTokens.length, 8));
+    if (shared.length < requiredOverlap || ratio < 0.35) return;
+    const candidate = { record, index, shared, score: shared.length + ratio };
+    if (!best || candidate.score > best.score) best = candidate;
+  });
+  if (!best) return null;
+  return { ...best, id: chatSourceId(best.record, best.index).toUpperCase() };
+}
+
+const CAUSAL_RELATIONSHIP_WORDS = /\b(?:prompt(?:ed|ing)?|spark(?:ed|ing)?|lead(?:ing|s)?\s+to|led\s+to|caus(?:e|ed|ing)|trigger(?:ed|ing)?|result(?:ed|ing)?\s+in|in\s+response\s+to|because\s+of|in\s+reaction\s+to)\b/i;
+const STRONG_INTERACTION_WORDS = /\b(?:debated|argued|confronted|responded\s+to|reacted\s+to|in\s+reply\s+to|in\s+response\s+to)\b/i;
+
+function replacementConflictsWithRejection(replacement = '', reason = '') {
+  const next = String(replacement || '').trim();
+  const why = String(reason || '').toLowerCase();
+  if (!next || !why) return false;
+  const rejectedCausality = /causal|causation|cause|prompt|spark|lead(?:ing)?|trigger|resulting|reaction link|direct source evidence for.*link/.test(why);
+  if (rejectedCausality && CAUSAL_RELATIONSHIP_WORDS.test(next)) return true;
+  const rejectedInteraction = /mutual debate|did not debate|didn't debate|shared participation|coordinated|invented interaction|did not interact/.test(why);
+  if (rejectedInteraction && STRONG_INTERACTION_WORDS.test(next)) return true;
+  return false;
 }
 
 const DISCUSSION_PREDICATE_SOURCE = [
@@ -447,7 +515,10 @@ function findCollectiveNamedDiscussionAttribution(sentence, identities = []) {
     if (residual) continue;
 
     const tail = text.slice(predicateStart + String(predicate[0] || '').length);
-    const hasBundledObject = /[,;]/.test(tail) || /\b(?:and|or|plus)\b/i.test(tail);
+    // A simple compound topic ("weather and leaves") is not automatically a
+    // false bundled attribution. Reserve this deterministic warning for list-like
+    // multi-topic objects; the semantic audit still checks ordinary X-and-Y cases.
+    const hasBundledObject = /[,;]/.test(tail) && /\b(?:and|or|plus)\b/i.test(tail);
     return {
       firstStart,
       predicateStart,
@@ -542,14 +613,37 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
     const result = resultMap.get(key);
     if (!result?.supported) continue;
     const sentence = String(sentences[index] || '');
-    const evidenceIds = Array.isArray(result.evidenceIds) ? result.evidenceIds : [];
-    const citedChats = evidenceIds.map((id) => chatById.get(id))
-      .filter((record) => record && (mode !== 'recap' || record.kind !== 'bot_context'));
-    const citedEvents = evidenceIds.map((id) => eventById.get(id)).filter(Boolean);
 
-    if (mode === 'recap' && (!evidenceIds.length ||
-        evidenceIds.some((id) => !chatById.has(id) && !eventById.has(id)) ||
-        (!citedChats.length && !citedEvents.length))) {
+    // Keep only IDs that actually exist in this frozen source window. A single
+    // malformed/hallucinated ID should not invalidate other valid evidence.
+    let evidenceIds = Array.isArray(result.evidenceIds) ? result.evidenceIds : [];
+    evidenceIds = evidenceIds.filter((id) => chatById.has(id) || eventById.has(id));
+    let citedChats = evidenceIds.map((id) => chatById.get(id))
+      .filter((record) => record && (mode !== 'recap' || record.kind !== 'bot_context'));
+    let citedEvents = evidenceIds.map((id) => eventById.get(id)).filter(Boolean);
+
+    const attributedIdentities = identities.filter((identity) =>
+      textMentionsIdentity(sentence, identity) && sentenceHasExplicitIdentityPredicate(sentence, identity)
+    );
+
+    // Gemini sometimes correctly finds a directly supported named-viewer fact
+    // but omits that viewer's exact evidence ID. Before deleting the fact, look
+    // for a high-overlap message authored by that SAME identity in the supplied
+    // source window. This repairs citation omission only; it never transfers
+    // another viewer's words to the named person.
+    for (const identity of attributedIdentities) {
+      const hasOwnChat = citedChats.some((record) => identityMatchesRecordAuthor(identity, record));
+      const hasOwnEvent = citedEvents.some((event) => identityMatchesEvent(identity, event));
+      if (hasOwnChat || hasOwnEvent) continue;
+      const recovered = findDirectIdentityChatEvidence(sentence, identity, chat);
+      if (!recovered || evidenceIds.includes(recovered.id)) continue;
+      evidenceIds.push(recovered.id);
+      citedChats.push(recovered.record);
+      console.log(`[Recap Evidence] Recovered omitted direct citation ${recovered.id} for ${identity.displayName || identity.login || 'named viewer'} (${recovered.shared.join(', ')}).`);
+    }
+    result.evidenceIds = [...new Set(evidenceIds)].slice(0, 20);
+
+    if (mode === 'recap' && (!result.evidenceIds.length || (!citedChats.length && !citedEvents.length))) {
       result.supported = false;
       result.reason = 'deterministic evidence check: recap claim needs valid current-source evidence; bot context alone is not proof';
       result.replacement = '';
@@ -562,9 +656,20 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
         !citedChats.some((record) => identityMatchesRecordAuthor(identity, record))
       );
       if (unsupportedCollectiveIdentity) {
+        const recovered = findDirectIdentityChatEvidence(sentence, unsupportedCollectiveIdentity, chat);
+        if (recovered && !result.evidenceIds.includes(recovered.id)) {
+          result.evidenceIds.push(recovered.id);
+          citedChats.push(recovered.record);
+          console.log(`[Recap Evidence] Recovered omitted collective citation ${recovered.id} for ${unsupportedCollectiveIdentity.displayName || unsupportedCollectiveIdentity.login || 'named viewer'}.`);
+        }
+      }
+      const stillUnsupportedCollectiveIdentity = collective.identities.find((identity) =>
+        !citedChats.some((record) => identityMatchesRecordAuthor(identity, record))
+      );
+      if (stillUnsupportedCollectiveIdentity) {
         const safeGeneralization = buildDiscussionGeneralization(sentence, identities, citedChats);
         result.supported = false;
-        result.reason = `deterministic evidence check: coordinated discussion claim names ${unsupportedCollectiveIdentity.displayName || unsupportedCollectiveIdentity.login || 'a viewer'} without a cited chat message from that viewer`;
+        result.reason = `deterministic evidence check: coordinated discussion claim names ${stillUnsupportedCollectiveIdentity.displayName || stillUnsupportedCollectiveIdentity.login || 'a viewer'} without a cited chat message from that viewer`;
         result.replacement = safeGeneralization;
         continue;
       }
@@ -577,9 +682,6 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
       }
     }
 
-    const attributedIdentities = identities.filter((identity) =>
-      textMentionsIdentity(sentence, identity) && sentenceHasExplicitIdentityPredicate(sentence, identity)
-    );
     const unsupportedIdentity = attributedIdentities.find((identity) => {
       const hasOwnChat = citedChats.some((record) => identityMatchesRecordAuthor(identity, record));
       const hasOwnEvent = citedEvents.some((event) => identityMatchesEvent(identity, event));
@@ -589,9 +691,6 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
       const safeGeneralization = buildDiscussionGeneralization(sentence, identities, citedChats, unsupportedIdentity);
       result.supported = false;
       result.reason = `deterministic evidence check: explicit claim about ${unsupportedIdentity.displayName || unsupportedIdentity.login || 'named identity'} lacks a cited source bound to that identity`;
-      // Prefer preserving the supported topic without the unsafe name when the
-      // cited chat can support a narrower anonymous/group attribution. The next
-      // audit pass must validate this rewrite before it can escape.
       result.replacement = safeGeneralization;
       continue;
     }
@@ -731,15 +830,17 @@ async function requestAudit(prompt, { label, priority, timeoutMs, retryOnTimeout
   });
 }
 
-// This is still the classic paragraph auditor, with the same two-pass limit.
-// Cache only EXACT sentences already verified in this call. Replacements still
-// require the next pass; a timeout must never approve an unaudited rewrite.
+// This is still the classic paragraph auditor. Healthy paragraphs finish in one
+// pass; repaired wording gets up to two additional bounded verification passes.
+// Cache only EXACT sentences already verified in this call. A timeout must never
+// approve an unaudited rewrite.
 async function auditRecapParagraph({ text, chat, events, identities, trustedFacts,
   label, priority, timeoutMs, maxPasses, requestText, sourceCoverage }) {
   const evidence = prepareRecapEvidence(chat);
   const coverage = sourceCoverage || evidence;
   const selectedChat = evidence.records;
   const verified = new Map();
+  const repairFeedback = new Map();
   const allUnsupported = [];
   let current = text;
   let changed = false;
@@ -759,9 +860,21 @@ async function auditRecapParagraph({ text, chat, events, identities, trustedFact
     const pending = sentences.filter((sentence) => !previouslyVerified.has(sentence));
     if (!pending.length) return result();
     console.log(`[Recap Evidence] ${label} pass ${pass + 1}: ${coverage.selectedRecords}/${coverage.totalRecords} source messages; ${coverage.complete ? 'complete window' : 'shared bounded sample'}; checking ${pending.length}, reusing ${sentences.length - pending.length} verified sentence(s).`);
-    const prompt = buildAuditPrompt({ text: pending.join(' '), chatRecords: selectedChat,
+    let prompt = buildAuditPrompt({ text: pending.join(' '), chatRecords: selectedChat,
       eventRecords: events, identities, trustedFacts, mode: 'recap', label,
       sharedChatRules, sourceCoverage: coverage });
+
+    const feedbackRows = pending.map((sentence, index) => {
+      const feedback = repairFeedback.get(sentence);
+      if (!feedback) return '';
+      return `- S${index + 1} is a REPAIR awaiting verification. Previous issue: ${feedback.reason}. ` +
+        `Verify the current neutral wording on its own evidence. Do not reintroduce the rejected relationship. ` +
+        `If it is now accurate, mark supported=true; if not, provide a genuinely different minimal correction.`;
+    }).filter(Boolean);
+    if (feedbackRows.length) {
+      prompt += `\n\nREPAIR VERIFICATION CONTEXT (TRUSTED APPLICATION GUIDANCE):\n${feedbackRows.join('\n')}`;
+    }
+
     let parsed = null;
     let lastError = null;
     for (let schemaAttempt = 0; schemaAttempt < 2; schemaAttempt += 1) {
@@ -784,25 +897,68 @@ async function auditRecapParagraph({ text, chat, events, identities, trustedFact
     }
     validateRecapEvidence(pending, parsed.results, selectedChat, events, identities, 'recap');
     audited += pending.length;
+
     const fullResults = new Map();
     let pendingIndex = 0;
     for (let index = 0; index < sentences.length; index += 1) {
       const sentence = sentences[index];
       const row = previouslyVerified.has(sentence) ? previouslyVerified.get(sentence) : parsed.results.get(`S${++pendingIndex}`);
       fullResults.set(`S${index + 1}`, row);
-      if (row?.supported === true) verified.set(sentence, row);
+      if (row?.supported === true) {
+        verified.set(sentence, row);
+        repairFeedback.delete(sentence);
+      }
     }
-    const applied = applyAuditResults(sentences, fullResults);
-    allUnsupported.push(...applied.unsupported);
-    changed = changed || applied.changed;
-    current = applied.text;
-    // Deletion-only repairs need no second audit: every remaining sentence
-    // already passed. Splits/rewrites are checked separately on the next pass.
+
+    const output = [];
+    let passChanged = false;
+    const isLastPass = pass >= passes - 1;
+    for (let index = 0; index < sentences.length; index += 1) {
+      const sentence = sentences[index];
+      const row = fullResults.get(`S${index + 1}`);
+      if (row?.supported === true) {
+        output.push(sentence);
+        continue;
+      }
+
+      const rawReplacement = row && replacementIsConservative(sentence, row.replacement)
+        ? String(row.replacement || '').trim() : '';
+      const unusableRelationshipRepair = replacementConflictsWithRejection(rawReplacement, row?.reason || '');
+      const selfIdenticalRepair = rawReplacement && rawReplacement === sentence;
+
+      // If the verifier proposes a repair that repeats the exact rejected text,
+      // or reintroduces the relationship it just rejected, keep the current
+      // sentence PENDING for one remaining verification pass rather than
+      // deleting supported facts immediately. Nothing pending can publish.
+      if (!isLastPass && (selfIdenticalRepair || unusableRelationshipRepair)) {
+        output.push(sentence);
+        repairFeedback.set(sentence, {
+          reason: `${row?.reason || 'unsupported'}${unusableRelationshipRepair ? '; proposed replacement reintroduced the rejected relationship' : '; proposed replacement was unchanged'}`
+        });
+        continue;
+      }
+
+      passChanged = true;
+      const replacement = (unusableRelationshipRepair || selfIdenticalRepair) ? '' : rawReplacement;
+      if (replacement) {
+        output.push(replacement);
+        for (const repairedSentence of splitSentences(replacement)) {
+          repairFeedback.set(repairedSentence, { reason: row?.reason || 'unsupported attribution' });
+        }
+      }
+      allUnsupported.push({ sentence, replacement, reason: row?.reason || 'missing or malformed support result' });
+    }
+
+    const next = output.join(' ').replace(/\s+/g, ' ').trim();
+    changed = changed || passChanged || next !== current;
+    current = next;
+    if (!current) break;
     if (splitSentences(current).every((sentence) => verified.has(sentence))) return result();
   }
+
   const kept = knownOnly(current);
   for (const sentence of splitSentences(current).filter((item) => !verified.has(item))) {
-    allUnsupported.push({ sentence, replacement: '', reason: 'rewrite not verified within the existing audit pass limit' });
+    allUnsupported.push({ sentence, replacement: '', reason: 'rewrite not verified within the bounded repair-verification pass limit' });
   }
   return result({ text: kept, changed: kept !== text, exhaustedPasses: true, verifiedPartial: Boolean(kept) });
 }
@@ -1057,6 +1213,8 @@ module.exports = {
   findCollectiveNamedDiscussionAttribution,
   buildDiscussionGeneralization,
   validateRecapEvidence,
+  findDirectIdentityChatEvidence,
+  replacementConflictsWithRejection,
   hasAttributionRisk,
   hasTaggedSpecificAttributionRisk,
   replacementIsConservative,

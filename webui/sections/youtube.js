@@ -749,7 +749,6 @@ export function initYoutubeSection({ $, esc, postJson, advancedFilters = null })
   $('runYoutubePreflightBtn').onclick = () => void runPreflight();
   $('saveYoutubeQuotaBtn').onclick = () => void saveQuotaSafety();
   $('refreshYoutubeDiagnosticsBtn').onclick = () => void refreshAdminState({ messageTarget: 'youtubeQuotaMsg' });
-  if ($('openStreamListLabBtn')) $('openStreamListLabBtn').onclick = () => { location.href = `${location.pathname.replace(/\/+$/, '')}/streamlist-lab`; };
 
   return {
     refreshAdminState,

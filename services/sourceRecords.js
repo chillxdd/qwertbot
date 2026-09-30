@@ -516,8 +516,9 @@ function textMentionsIdentity(text, identity = {}) {
   return identityAliases(identity).some((alias) => textMentionsAlias(text, alias));
 }
 
-const SENTENCE_CONTINUATION_ABBREVIATION = /(?:^|\s)(?:Mr|Mrs|Ms|Dr|Prof|St|Mt|No|vs)\.$/i;
+const SENTENCE_CONTINUATION_ABBREVIATION = /(?:^|\s)(?:Mr|Mrs|Ms|Dr|Prof|St|Mt|No|vs|e\.g|i\.e)\.$/i;
 const SENTENCE_CONTINUATION_INITIAL = /(?:^|\s)[A-Z]\.$/;
+const SENTENCE_CONTINUATION_INITIALISM = /(?:^|\s)(?:[A-Z]\.){2,}$/;
 
 function joinSentenceSegments(parts = []) {
   const sentences = [];
@@ -543,6 +544,35 @@ function joinSentenceSegments(parts = []) {
   return sentences;
 }
 
+// Intl.Segmenter intentionally uses natural-language casing heuristics. Twitch
+// logins frequently start with lowercase characters, so a model repair such as
+// "coosgoose said X. prettyboyblixky said Y." can be returned as ONE segment.
+// That made unrelated repaired facts share one audit result and could cause a
+// later correction to delete both. Split clear punctuation boundaries again,
+// while retaining the small abbreviation/initial exceptions above.
+function splitEmbeddedSentenceBoundaries(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return [];
+  const output = [];
+  let start = 0;
+  const boundary = /([.!?]+)\s+(?=[@A-Za-z0-9])/g;
+  for (const match of text.matchAll(boundary)) {
+    const end = match.index + String(match[1] || '').length;
+    const candidate = text.slice(start, end).trim();
+    if (!candidate) continue;
+    if (SENTENCE_CONTINUATION_ABBREVIATION.test(candidate) ||
+        SENTENCE_CONTINUATION_INITIAL.test(candidate) ||
+        SENTENCE_CONTINUATION_INITIALISM.test(candidate)) {
+      continue;
+    }
+    output.push(candidate);
+    start = match.index + String(match[0] || '').length;
+  }
+  const tail = text.slice(start).trim();
+  if (tail) output.push(tail);
+  return output.length ? output : [text];
+}
+
 function splitSentences(text) {
   const value = String(text ?? '').trim();
   if (!value) return [];
@@ -551,12 +581,13 @@ function splitSentences(text) {
       const parts = [...new Intl.Segmenter('en', { granularity: 'sentence' }).segment(value)]
         .map((entry) => String(entry.segment || '').trim())
         .filter(Boolean);
-      return joinSentenceSegments(parts);
+      return joinSentenceSegments(parts).flatMap((part) => splitEmbeddedSentenceBoundaries(part));
     } catch (_) {
       // Fall through to the conservative fallback below.
     }
   }
-  return joinSentenceSegments(value.match(/[^.!?]+(?:[.!?]+|$)/g) || [value]);
+  return joinSentenceSegments(value.match(/[^.!?]+(?:[.!?]+|$)/g) || [value])
+    .flatMap((part) => splitEmbeddedSentenceBoundaries(part));
 }
 
 function buildBroadcasterIdentity(channelName = '') {

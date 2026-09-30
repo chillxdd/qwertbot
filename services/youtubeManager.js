@@ -10,7 +10,6 @@ const { createYouTubeChatStreamFactory, STREAMLIST_DAILY_SAFETY_CAP } = require(
 const { createYouTubeCommandManager } = require('./youtubeCommands');
 const { createYouTubeTimerManager } = require('./youtubeTimers');
 const { createYouTubeDeliveryQueue } = require('./youtubeDeliveryQueue');
-const { createStreamListLab } = require('./streamListLab');
 const {
   YOUTUBE_CLIENT_ID,
   YOUTUBE_CLIENT_SECRET,
@@ -91,13 +90,6 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     getViewerCount: () => getCurrentViewerCount()
   });
 
-  const streamListLab = createStreamListLab({
-    authManager,
-    quotaManager,
-    getTargets: () => discoveredChats,
-    getProductionStates: () => [...workerStates.values()]
-  });
-
   function discoveredChatIds() {
     return new Set((discoveredChats || []).map((chat) => String(chat?.liveChatId || '')).filter(Boolean));
   }
@@ -161,9 +153,6 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
       timerManager.noteChatMessage();
       if (!config.commandsEnabled) return;
       await commandManager.handleTextMessage(event);
-    },
-    onConnectionAttempt: (attempt) => {
-      void streamListLab.recordProductionAttempt(attempt).catch((err) => console.warn(`[StreamList Lab] Production attempt recording failed: ${err?.message || err}`));
     },
     onWorkerState: (state) => {
       workerStates.set(state.liveChatId, state);
@@ -245,7 +234,6 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     const nextIds = new Set(next.map((chat) => String(chat?.liveChatId || '')).filter(Boolean));
     for (const oldId of oldIds) if (!nextIds.has(oldId)) deliveryQueue.clearChat(oldId);
     discoveredChats = next;
-    void streamListLab.reconcileTargets().catch((err) => console.warn(`[StreamList Lab] Target reconciliation failed: ${err?.message || err}`));
   }
 
   async function reconcileChats(chats) {
@@ -606,7 +594,6 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
 
   async function quiesce() {
     quiesced = true;
-    await streamListLab.stop('runtime-quiesce');
     await stopWorkers('runtime-quiesce');
   }
 
@@ -621,7 +608,6 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
 
   async function shutdown() {
     quiesced = true;
-    await streamListLab.shutdown();
     await stopWorkers('shutdown');
     await timerManager.shutdown();
     chatFactory.shutdown();
@@ -641,7 +627,6 @@ function createYouTubeManager({ channelKey = 'generalqwert', getStreamStatus = n
     reloadTimers,
     fireTimerNow,
     getTimerManager: () => timerManager,
-    getStreamListLab: () => streamListLab,
     listTimers,
     quiesce,
     resume,
