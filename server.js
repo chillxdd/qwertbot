@@ -23,6 +23,7 @@ const { createCustomCommandManager } = require('./services/customCommands');
 const { createChatTimerManager } = require('./services/chatTimers');
 const { createEventSubReactionManager } = require('./services/eventSubReactions');
 const { createDiscordBotService } = require('./services/discordBot');
+const { createDiscordPresenceManager } = require('./services/discordPresence');
 const { createAutomationSpacingManager } = require('./services/automationSpacing');
 const { createPersistentPinManager } = require('./services/persistentStreamPin');
 const { createAdvancedFilterManager } = require('./services/advancedFilters');
@@ -52,6 +53,7 @@ const { registerDashboardRoutes } = require('./routes/dashboard');
 const { registerEventSubRoutes } = require('./routes/eventSub');
 const { registerEventSubReactionRoutes } = require('./routes/eventSubReactions');
 const { registerAutomationRoutes } = require('./routes/automation');
+const { registerDiscordPresenceRoutes } = require('./routes/discordPresence');
 const { registerAdvancedFilterRoutes } = require('./routes/advancedFilters');
 const { registerMemoryRoutes } = require('./routes/memory');
 const { registerRecapRoutes } = require('./routes/recap');
@@ -114,6 +116,7 @@ let customCommandManager = null;
 let chatTimerManager = null;
 let eventSubReactionManager = null;
 let discordBotService = null;
+let discordPresenceManager = null;
 let automationSpacingManager = null;
 let advancedFilterManager = null;
 let persistentPinManager = null;
@@ -251,6 +254,7 @@ chatTimerManager = createChatTimerManager({
 });
 
 discordBotService = createDiscordBotService();
+discordPresenceManager = createDiscordPresenceManager({ channelName, discordBot: discordBotService });
 
 eventSubReactionManager = createEventSubReactionManager({
   channelName,
@@ -395,6 +399,13 @@ registerAutomationRoutes(app, {
   getAutomationSpacingManager: () => automationSpacingManager
 });
 
+registerDiscordPresenceRoutes(app, {
+  requireModSession,
+  getDatabaseConnected: () => isDatabaseConnected(),
+  getDiscordPresenceManager: () => discordPresenceManager,
+  getDiscordBotService: () => discordBotService
+});
+
 registerAdvancedFilterRoutes(app, {
   requireModSession,
   getDatabaseConnected: () => isDatabaseConnected(),
@@ -484,7 +495,9 @@ async function activateBot() {
   await persistentPinManager.initialize();
   await customCommandManager.initialize();
   await eventSubReactionManager.initialize();
-  discordBotService?.startPresence?.({ activity: 'GeneralQwert' });
+  try { await discordPresenceManager?.initialize?.(); }
+  catch (err) { console.warn('[Discord Bot] Could not load saved presence settings; using defaults:', err?.message || err); }
+  discordBotService?.startPresence?.();
   await botPersonalityManager.initialize();
   await initializeYouTubeFailOpen('initialization');
   recapManager = createRecapManager({

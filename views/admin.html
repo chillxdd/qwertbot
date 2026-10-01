@@ -1332,6 +1332,46 @@
         <div class="detail">Shared settings that can be reused across QwertBot features.</div>
       </div>
 
+      <div class="custom-command-section discord-presence-section">
+        <div class="custom-command-header">
+          <div>
+            <h3>Discord Bot Presence</h3>
+            <div class="detail">Controls how SqwertArmyBot appears in Discord while QwertBot is active. This does not change Discord notification delivery or channel IDs.</div>
+          </div>
+          <div class="custom-command-header-actions">
+            <button id="refreshDiscordPresenceBtn" class="secondary" type="button">Refresh</button>
+          </div>
+        </div>
+        <div id="discordPresenceConnectionStatus" class="detail"></div>
+        <div class="custom-command-form-grid">
+          <label>Online State
+            <select id="discordPresenceStatus">
+              <option value="online">Online</option>
+              <option value="idle">Idle</option>
+              <option value="dnd">Do Not Disturb</option>
+              <option value="invisible">Invisible</option>
+            </select>
+          </label>
+          <label>Activity
+            <select id="discordPresenceActivityType">
+              <option value="watching">Watching</option>
+              <option value="playing">Playing</option>
+              <option value="listening">Listening to</option>
+              <option value="competing">Competing in</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+          <label>Activity Text
+            <input id="discordPresenceActivityText" type="text" maxlength="128" value="GeneralQwert" placeholder="GeneralQwert">
+          </label>
+        </div>
+        <div class="detail">Invisible keeps the Gateway session connected but makes the bot appear offline. Activity changes apply immediately after saving and persist across redeploys.</div>
+        <div class="custom-editor-actions">
+          <button id="saveDiscordPresenceBtn" type="button">Save Discord Presence</button>
+          <div id="discordPresenceMsg" class="detail"></div>
+        </div>
+      </div>
+
       <div class="custom-command-section advanced-filters-section">
         <div class="custom-command-header">
           <div>

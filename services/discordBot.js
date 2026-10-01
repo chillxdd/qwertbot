@@ -130,7 +130,25 @@ function createDiscordBotService({
   let lastDisconnectAt = null;
   let lastCloseCode = null;
   let lastRestDelivery = null;
-  let activityName = 'GeneralQwert';
+  let presenceConfig = { status: 'online', activityType: 'watching', activityText: 'GeneralQwert' };
+
+  const activityTypeCodes = { playing: 0, listening: 2, watching: 3, competing: 5 };
+  function normalizePresenceConfig(input = {}) {
+    const allowedStatuses = new Set(['online', 'idle', 'dnd', 'invisible']);
+    const allowedActivityTypes = new Set(['playing', 'watching', 'listening', 'competing', 'none']);
+    const status = String(input.status ?? presenceConfig.status ?? 'online').trim().toLowerCase();
+    const activityType = String(input.activityType ?? presenceConfig.activityType ?? 'watching').trim().toLowerCase();
+    let activityText = String(input.activityText ?? presenceConfig.activityText ?? 'GeneralQwert').trim().slice(0, 128);
+    if (!allowedStatuses.has(status)) throw new Error('Unsupported Discord presence status.');
+    if (!allowedActivityTypes.has(activityType)) throw new Error('Unsupported Discord activity type.');
+    if (activityType === 'none') activityText = '';
+    if (activityType !== 'none' && !activityText) throw new Error('Discord activity text is required unless activity is None.');
+    return { status, activityType, activityText };
+  }
+  function gatewayPresencePayload() {
+    const activities = presenceConfig.activityType === 'none' ? [] : [{ name: presenceConfig.activityText, type: activityTypeCodes[presenceConfig.activityType] }];
+    return { since: presenceConfig.status === 'idle' ? now() : null, activities, status: presenceConfig.status, afk: false };
+  }
 
   function enqueue(channelId, fn) {
     const previous = channelQueues.get(channelId) || Promise.resolve();
@@ -270,7 +288,7 @@ function createDiscordBotService({
       token: botToken,
       intents: 0,
       properties: { os: process.platform || 'linux', browser: 'SqwertArmyBot', device: 'SqwertArmyBot' },
-      presence: { since: null, activities: [{ name: activityName, type: 3 }], status: 'online', afk: false }
+      presence: gatewayPresencePayload()
     } });
   }
   function resume() {
@@ -334,12 +352,14 @@ function createDiscordBotService({
         resumeGatewayUrl = String(packet.d?.resume_gateway_url || '');
         botUser = packet.d?.user ? { id: String(packet.d.user.id || ''), username: String(packet.d.user.username || ''), discriminator: String(packet.d.user.discriminator || '') } : botUser;
         gatewayState = 'ONLINE'; reconnectAttempt = 0; lastReadyAt = new Date(now()).toISOString(); lastGatewayError = '';
-        console.log(`[Discord Bot] Gateway READY${botUser?.username ? ` as ${botUser.username}` : ''}; presence online.`);
+        sendGateway({ op: 3, d: gatewayPresencePayload() });
+        console.log(`[Discord Bot] Gateway READY${botUser?.username ? ` as ${botUser.username}` : ''}; presence ${presenceConfig.status}.`);
         return;
       }
       if (packet.op === 0 && packet.t === 'RESUMED') {
         gatewayState = 'ONLINE'; reconnectAttempt = 0; lastReadyAt = new Date(now()).toISOString(); lastGatewayError = '';
-        console.log('[Discord Bot] Gateway session resumed; presence online.');
+        sendGateway({ op: 3, d: gatewayPresencePayload() });
+        console.log(`[Discord Bot] Gateway session resumed; presence ${presenceConfig.status}.`);
       }
     });
     socket.addEventListener('error', (event) => {
@@ -363,9 +383,22 @@ function createDiscordBotService({
     });
   }
 
-  function startPresence({ activity = 'GeneralQwert' } = {}) {
+  function setPresenceConfig(input = {}) {
+    presenceConfig = normalizePresenceConfig(input);
+    if (desiredPresence && ws?.readyState === 1 && gatewayState === 'ONLINE') {
+      sendGateway({ op: 3, d: gatewayPresencePayload() });
+    }
+    return { ...presenceConfig };
+  }
+  function startPresence(input = null) {
     if (!botToken) { gatewayState = 'DISABLED'; return false; }
-    activityName = String(activity || 'GeneralQwert').trim().slice(0, 128) || 'GeneralQwert';
+    if (input && typeof input === 'object') {
+      if (Object.prototype.hasOwnProperty.call(input, 'activity') && !Object.prototype.hasOwnProperty.call(input, 'activityText')) {
+        setPresenceConfig({ ...presenceConfig, activityType: 'watching', activityText: input.activity });
+      } else {
+        setPresenceConfig(input);
+      }
+    }
     desiredPresence = true;
     try { connectGateway(); }
     catch (err) {
@@ -391,6 +424,7 @@ function createDiscordBotService({
       online: gatewayState === 'ONLINE',
       botUser,
       lastReadyAt, lastDisconnectAt, lastCloseCode, lastError: lastGatewayError,
+      presenceConfig: { ...presenceConfig },
       lastRestDelivery
     };
   }
@@ -398,7 +432,7 @@ function createDiscordBotService({
     channelQueues.clear(); channelBlockedUntil.clear(); bucketBlockedUntil.clear(); globalBlockedUntil = 0; globalBlockKind = '';
   }
 
-  return { postMessage, startPresence, stopPresence, status, cleanChannelId, resetRateLimitStateForTests };
+  return { postMessage, startPresence, stopPresence, setPresenceConfig, status, cleanChannelId, resetRateLimitStateForTests };
 }
 
 module.exports = { createDiscordBotService, cleanChannelId, publicDiagnostics, readDiagnostics, DEFAULT_MAX_429_RETRIES, DEFAULT_MAX_TOTAL_WAIT_MS };

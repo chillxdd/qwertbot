@@ -12,6 +12,7 @@ import { initOauthSection } from './sections/oauth.js';
 import { initRenderLogsSection } from './sections/renderLogs.js';
 import { initYoutubeSection } from './sections/youtube.js';
 import { initAdvancedFiltersSection } from './sections/advancedFilters.js';
+import { initDiscordPresenceSection } from './sections/discordPresence.js';
 
 let loggedIn = false;
 let config = { channelName: 'generalqwert', maxStreamLoreLength: 12000 };
@@ -50,6 +51,7 @@ const messaging = initMessagingSection({ $, postJson });
 const viewerProfiles = initViewerProfilesSection({ $, esc, postJson });
 const lore = initLoreSection({ $, postJson, maxBotPersonalityNameLength: config.maxBotPersonalityNameLength, maxBotPersonalityLength: config.maxBotPersonalityLength, maxBotPersonalityCooldownSeconds: config.maxBotPersonalityCooldownSeconds, botUsername: config.botUsername, viewerProfiles });
 const customCommands = initCustomCommandsSection({ $, esc, postJson, config: config.customCommands || {} });
+const discordPresence = initDiscordPresenceSection({ $, postJson });
 const advancedFilters = initAdvancedFiltersSection({ $, esc, postJson });
 const timers = initTimersSection({ $, esc, postJson, config: config.timers || {}, advancedFilters });
 const eventSubReactions = initEventSubReactionsSection({ $, esc, postJson, config: config.timers || {}, advancedFilters });
@@ -487,6 +489,7 @@ function closeAllDashboardSections() {
   eventSubReactions.onVisibilityChange(false);
   viewerProfiles.onVisibilityChange(false);
   renderLogs.onVisibilityChange(false);
+  discordPresence.onVisibilityChange(false);
   advancedFilters.onVisibilityChange(false);
   youtube.onAutomationVisibilityChange(false);
   youtube.onOauthVisibilityChange(false);
@@ -516,6 +519,7 @@ function showPlatform(platform, preferredTab = null) {
   else if (platform === 'youtube') openSubsection(preferredTab && youtubeSections[preferredTab] ? preferredTab : 'youtubeAutomationTab', 'youtube');
   else if (platform === 'general') {
     $('generalSettingsPanel').classList.add('open');
+    discordPresence.onVisibilityChange(true);
     advancedFilters.onVisibilityChange(true);
   } else if (platform === 'diagnostics') {
     $('renderLogsPanel').classList.add('open');
