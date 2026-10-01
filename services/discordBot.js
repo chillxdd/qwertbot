@@ -132,10 +132,10 @@ function createDiscordBotService({
   let lastRestDelivery = null;
   let presenceConfig = { status: 'online', activityType: 'watching', activityText: 'GeneralQwert' };
 
-  const activityTypeCodes = { playing: 0, listening: 2, watching: 3, competing: 5 };
+  const activityTypeCodes = { playing: 0, listening: 2, watching: 3, custom: 4, competing: 5 };
   function normalizePresenceConfig(input = {}) {
     const allowedStatuses = new Set(['online', 'idle', 'dnd', 'invisible']);
-    const allowedActivityTypes = new Set(['playing', 'watching', 'listening', 'competing', 'none']);
+    const allowedActivityTypes = new Set(['playing', 'watching', 'listening', 'competing', 'custom', 'none']);
     const status = String(input.status ?? presenceConfig.status ?? 'online').trim().toLowerCase();
     const activityType = String(input.activityType ?? presenceConfig.activityType ?? 'watching').trim().toLowerCase();
     let activityText = String(input.activityText ?? presenceConfig.activityText ?? 'GeneralQwert').trim().slice(0, 128);
@@ -146,7 +146,12 @@ function createDiscordBotService({
     return { status, activityType, activityText };
   }
   function gatewayPresencePayload() {
-    const activities = presenceConfig.activityType === 'none' ? [] : [{ name: presenceConfig.activityText, type: activityTypeCodes[presenceConfig.activityType] }];
+    let activities = [];
+    if (presenceConfig.activityType !== 'none') {
+      activities = presenceConfig.activityType === 'custom'
+        ? [{ name: 'Custom Status', state: presenceConfig.activityText, type: activityTypeCodes.custom }]
+        : [{ name: presenceConfig.activityText, type: activityTypeCodes[presenceConfig.activityType] }];
+    }
     return { since: presenceConfig.status === 'idle' ? now() : null, activities, status: presenceConfig.status, afk: false };
   }
 

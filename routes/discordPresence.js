@@ -1,4 +1,4 @@
-const { MAX_ACTIVITY_TEXT_LENGTH } = require('../services/discordPresence');
+const { MAX_ACTIVITY_TEXT_LENGTH, TEMPLATE_VARIABLES } = require('../services/discordPresence');
 
 function registerDiscordPresenceRoutes(app, { requireModSession, getDatabaseConnected, getDiscordPresenceManager, getDiscordBotService }) {
   function managerOrUnavailable(res) {
@@ -10,17 +10,22 @@ function registerDiscordPresenceRoutes(app, { requireModSession, getDatabaseConn
     return manager;
   }
 
+  function payload(manager) {
+    return {
+      settings: manager.getSettings(),
+      resolvedPresence: manager.getResolvedPresence?.() || null,
+      botStatus: getDiscordBotService()?.status?.() || {},
+      limits: { maxActivityTextLength: MAX_ACTIVITY_TEXT_LENGTH },
+      templateVariables: TEMPLATE_VARIABLES
+    };
+  }
+
   app.post('/discord/presence/settings', requireModSession, async (req, res) => {
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
       if (!manager.isInitialized?.()) await manager.initialize();
-      return res.json({
-        success: true,
-        settings: manager.getSettings(),
-        botStatus: getDiscordBotService()?.status?.() || {},
-        limits: { maxActivityTextLength: MAX_ACTIVITY_TEXT_LENGTH }
-      });
+      return res.json({ success: true, ...payload(manager) });
     } catch (err) {
       return res.status(500).json({ success: false, error: err.message || 'Could not load Discord presence settings.' });
     }
@@ -30,13 +35,8 @@ function registerDiscordPresenceRoutes(app, { requireModSession, getDatabaseConn
     const manager = managerOrUnavailable(res);
     if (!manager) return;
     try {
-      const settings = await manager.saveSettings(req.body || {});
-      return res.json({
-        success: true,
-        settings,
-        botStatus: getDiscordBotService()?.status?.() || {},
-        limits: { maxActivityTextLength: MAX_ACTIVITY_TEXT_LENGTH }
-      });
+      await manager.saveSettings(req.body || {});
+      return res.json({ success: true, ...payload(manager) });
     } catch (err) {
       return res.status(400).json({ success: false, error: err.message || 'Could not save Discord presence settings.' });
     }

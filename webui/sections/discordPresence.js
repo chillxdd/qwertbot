@@ -9,6 +9,14 @@ export function initDiscordPresenceSection({ $, postJson }) {
     el.classList.toggle('bad', Boolean(bad));
   }
 
+  function activityLabel(type, text) {
+    const value = String(text || '').trim();
+    const labels = { playing: 'Playing', watching: 'Watching', listening: 'Listening to', competing: 'Competing in' };
+    if (type === 'none') return 'No activity';
+    if (type === 'custom') return value || 'Custom status';
+    return `${labels[type] || type} ${value || ''}`.trim();
+  }
+
   function renderStatus(botStatus = {}) {
     const el = $('discordPresenceConnectionStatus');
     if (!el) return;
@@ -21,20 +29,37 @@ export function initDiscordPresenceSection({ $, postJson }) {
     el.classList.toggle('good', botStatus.tokenConfigured && gateway === 'ONLINE');
   }
 
+  function renderResolved(resolved = {}) {
+    const el = $('discordPresenceResolvedPreview');
+    if (!el) return;
+    const twitchState = resolved.twitchState === 'live' ? 'LIVE' : resolved.twitchState === 'offline' ? 'OFFLINE' : 'UNKNOWN';
+    el.textContent = `Current resolved presence: Twitch ${twitchState} · ${activityLabel(resolved.activityType, resolved.activityText)}`;
+  }
+
   function syncActivityState() {
-    const none = $('discordPresenceActivityType').value === 'none';
-    $('discordPresenceActivityText').disabled = none;
-    if (none) $('discordPresenceActivityText').placeholder = 'No activity shown';
-    else $('discordPresenceActivityText').placeholder = 'GeneralQwert';
+    for (const prefix of ['Live', 'Offline']) {
+      const type = $(`discordPresence${prefix}ActivityType`).value;
+      const input = $(`discordPresence${prefix}ActivityText`);
+      const none = type === 'none';
+      input.disabled = none;
+      if (none) input.placeholder = 'No activity shown';
+      else if (type === 'custom') input.placeholder = 'Text-only custom status';
+      else input.placeholder = prefix === 'Live' ? '{category}' : 'GeneralQwert is offline';
+    }
   }
 
   function render(data = {}) {
     const settings = data.settings || {};
     $('discordPresenceStatus').value = settings.status || 'online';
-    $('discordPresenceActivityType').value = settings.activityType || 'watching';
-    $('discordPresenceActivityText').value = settings.activityText || '';
-    if (data.limits?.maxActivityTextLength) $('discordPresenceActivityText').maxLength = Number(data.limits.maxActivityTextLength);
+    $('discordPresenceLiveActivityType').value = settings.liveActivityType || 'watching';
+    $('discordPresenceLiveActivityText').value = settings.liveActivityText || '';
+    $('discordPresenceOfflineActivityType').value = settings.offlineActivityType || 'custom';
+    $('discordPresenceOfflineActivityText').value = settings.offlineActivityText || '';
+    const max = Number(data.limits?.maxActivityTextLength || 128);
+    $('discordPresenceLiveActivityText').maxLength = max;
+    $('discordPresenceOfflineActivityText').maxLength = max;
     renderStatus(data.botStatus || {});
+    renderResolved(data.resolvedPresence || {});
     syncActivityState();
   }
 
@@ -65,8 +90,10 @@ export function initDiscordPresenceSection({ $, postJson }) {
     try {
       const data = await postJson('/discord/presence/settings/save', {
         status: $('discordPresenceStatus').value,
-        activityType: $('discordPresenceActivityType').value,
-        activityText: $('discordPresenceActivityText').value
+        liveActivityType: $('discordPresenceLiveActivityType').value,
+        liveActivityText: $('discordPresenceLiveActivityText').value,
+        offlineActivityType: $('discordPresenceOfflineActivityType').value,
+        offlineActivityText: $('discordPresenceOfflineActivityText').value
       });
       if (!data.success) throw new Error(data.error || 'Could not save Discord presence settings.');
       render(data);
@@ -79,7 +106,8 @@ export function initDiscordPresenceSection({ $, postJson }) {
     }
   }
 
-  $('discordPresenceActivityType').onchange = syncActivityState;
+  $('discordPresenceLiveActivityType').onchange = syncActivityState;
+  $('discordPresenceOfflineActivityType').onchange = syncActivityState;
   $('saveDiscordPresenceBtn').onclick = save;
   $('refreshDiscordPresenceBtn').onclick = () => void load({ force: true });
   syncActivityState();

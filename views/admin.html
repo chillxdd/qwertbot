@@ -1343,8 +1343,9 @@
           </div>
         </div>
         <div id="discordPresenceConnectionStatus" class="detail"></div>
+        <div id="discordPresenceResolvedPreview" class="detail"></div>
         <div class="custom-command-form-grid">
-          <label>Online State
+          <label>Discord Online State
             <select id="discordPresenceStatus">
               <option value="online">Online</option>
               <option value="idle">Idle</option>
@@ -1352,20 +1353,42 @@
               <option value="invisible">Invisible</option>
             </select>
           </label>
+        </div>
+
+        <div class="detail"><b>When Twitch is LIVE</b></div>
+        <div class="custom-command-form-grid">
           <label>Activity
-            <select id="discordPresenceActivityType">
+            <select id="discordPresenceLiveActivityType">
               <option value="watching">Watching</option>
               <option value="playing">Playing</option>
               <option value="listening">Listening to</option>
               <option value="competing">Competing in</option>
+              <option value="custom">Custom status (text only)</option>
               <option value="none">None</option>
             </select>
           </label>
-          <label>Activity Text
-            <input id="discordPresenceActivityText" type="text" maxlength="128" value="GeneralQwert" placeholder="GeneralQwert">
+          <label>Text / Template
+            <input id="discordPresenceLiveActivityText" type="text" maxlength="128" value="{category}" placeholder="{category}">
           </label>
         </div>
-        <div class="detail">Invisible keeps the Gateway session connected but makes the bot appear offline. Activity changes apply immediately after saving and persist across redeploys.</div>
+
+        <div class="detail"><b>When Twitch is OFFLINE</b></div>
+        <div class="custom-command-form-grid">
+          <label>Activity
+            <select id="discordPresenceOfflineActivityType">
+              <option value="watching">Watching</option>
+              <option value="playing">Playing</option>
+              <option value="listening">Listening to</option>
+              <option value="competing">Competing in</option>
+              <option value="custom">Custom status (text only)</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+          <label>Text / Template
+            <input id="discordPresenceOfflineActivityText" type="text" maxlength="128" value="GeneralQwert is offline" placeholder="GeneralQwert is offline">
+          </label>
+        </div>
+        <div class="detail">Templates support <code>{category}</code>, <code>{title}</code>, and <code>{streamer}</code> from QwertBot's existing Twitch stream state; no extra Twitch polling is added. <b>Custom status</b> shows text without Playing/Watching/etc. <b>None</b> shows no activity text at all. Invisible keeps the Gateway session connected but makes the bot appear offline.</div>
         <div class="custom-editor-actions">
           <button id="saveDiscordPresenceBtn" type="button">Save Discord Presence</button>
           <div id="discordPresenceMsg" class="detail"></div>

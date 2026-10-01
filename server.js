@@ -254,7 +254,11 @@ chatTimerManager = createChatTimerManager({
 });
 
 discordBotService = createDiscordBotService();
-discordPresenceManager = createDiscordPresenceManager({ channelName, discordBot: discordBotService });
+discordPresenceManager = createDiscordPresenceManager({
+  channelName,
+  discordBot: discordBotService,
+  getStreamStatus: () => recapManager?.getStatus?.() || {}
+});
 
 eventSubReactionManager = createEventSubReactionManager({
   channelName,
@@ -516,6 +520,7 @@ async function activateBot() {
   await recapManager.start();
   {
     const streamStatus = recapManager.getStatus();
+    discordPresenceManager?.syncStreamStatus?.(streamStatus);
     await syncYouTubeFailOpen(streamStatus, 'startup live-state sync');
   }
   const accessToken = await twitchConnection.resolveStartupToken();
@@ -567,6 +572,7 @@ async function maintainBot() {
   await twitchConnection.maintainConnection();
   {
     const streamStatus = recapManager?.getStatus?.() || {};
+    discordPresenceManager?.syncStreamStatus?.(streamStatus);
     await syncYouTubeFailOpen(streamStatus, 'maintenance live-state sync');
   }
 
