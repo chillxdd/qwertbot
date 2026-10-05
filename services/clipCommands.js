@@ -38,6 +38,10 @@ const OFFICIAL_POKEMON_CATEGORY_NAMES = Object.freeze([
   'Pokémon Black and White',
   'Pokémon Black 2/White 2',
   'Pokémon Black 2 and White 2',
+  // Twitch/IGDB currently exposes the sequel category using this title.
+  // Keep the older/common aliases above because existing configs/tests may
+  // still reference them.
+  'Pokémon Black/White Version 2',
   'Pokémon X/Y',
   'Pokémon X and Y',
   'Pokémon Omega Ruby/Alpha Sapphire',
@@ -343,7 +347,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     const info = await getLiveStreamInfo(channel);
     if (!info.live) throw new Error('The channel is not live.');
     if (!isOfficialPokemonCategory(info.gameName)) {
-      throw new Error(`Current category "${info.gameName || 'Unknown'}" is not an approved official Pokémon title.`);
+      throw new Error(`Current category "${info.gameName || 'Unknown'}" is not an approved official Pokémon title (normalized: "${normalizeCategory(info.gameName) || 'unknown'}").`);
     }
     return info;
   }
