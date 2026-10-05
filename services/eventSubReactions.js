@@ -418,9 +418,11 @@ function renderEventTemplate(template, type, event = {}, extra = {}) {
     streamgame: explicitStreamCategory,
     url: String(extra.streamUrl || '').trim(),
     thumbnail: String(extra.thumbnail || '').trim(),
+    gameimage: String(extra.gameImage || '').trim(),
+    categoryimage: String(extra.gameImage || '').trim(),
     started: String(extra.startedAt || event.started_at || '').trim()
   };
-  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|streamtitle|streamcategory|streamgame|url|thumbnail|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
+  return String(template || '').replace(/\$\((user|username|raider|viewers|bits|gifts|level|months|event|title|choices|votes|points|winner|reward|input|current|target|duration|status|automatic|channel|game|streamtitle|streamcategory|streamgame|url|thumbnail|gameimage|categoryimage|started)\)/gi, (_, key) => String(map[key.toLowerCase()] ?? ''));
 }
 
 function renderDiscordEmbed(raw = {}, type, event = {}, extra = {}) {
@@ -501,6 +503,7 @@ function createEventSubReactionManager({ channelName, sendMessage, sendAnnouncem
       streamCategoryVariable: streamLive ? (currentStreamCategory || STREAM_LIVE_CATEGORY_FALLBACK) : STREAM_OFFLINE_CATEGORY,
       streamUrl: `https://twitch.tv/${normalizedChannel}`,
       thumbnail: thumbnailUrl,
+      gameImage: String(status.currentStreamGameImageUrl || status.gameImageUrl || '').trim(),
       startedAt: startedMs > 0 ? new Date(startedMs).toISOString() : String(event.started_at || '')
     };
   }

@@ -10,6 +10,13 @@ function createTwitchStreamStatusClient({
   clientId = process.env.TWITCH_CLIENT_ID || ''
 }) {
   let twitchClientId = String(clientId || '').trim();
+  const gameArtCache = new Map();
+  const GAME_ART_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+  function resolveBoxArtUrl(template, width = 285, height = 380) {
+    return String(template || '').replace('{width}', String(width)).replace('{height}', String(height)).trim();
+  }
+
 
   async function getAccessTokenOrThrow() {
     const token = await getTwitchAccessToken();
@@ -19,6 +26,36 @@ function createTwitchStreamStatusClient({
       throw error;
     }
     return token;
+  }
+
+  async function fetchGameImageUrl(gameId, accessToken, allowRefresh = true) {
+    const normalizedGameId = String(gameId || '').trim();
+    if (!normalizedGameId) return '';
+
+    const cached = gameArtCache.get(normalizedGameId);
+    if (cached && cached.expiresAt > Date.now()) return cached.url;
+
+    const url = 'https://api.twitch.tv/helix/games?' + new URLSearchParams({ id: normalizedGameId }).toString();
+    let response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': twitchClientId }
+    });
+
+    if (response.status === 401 && allowRefresh) {
+      console.warn('[OAuth Bot] Recap game-art request returned 401. Refreshing bot OAuth token.');
+      const refreshed = await refreshTwitchAccessToken();
+      accessToken = refreshed?.accessToken || await getAccessTokenOrThrow();
+      twitchClientId = (process.env.TWITCH_CLIENT_ID || twitchClientId).trim();
+      response = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, 'Client-Id': twitchClientId }
+      });
+    }
+
+    if (!response.ok) throw new Error(`Twitch game-art request failed with HTTP ${response.status}.`);
+    const data = await response.json();
+    const game = Array.isArray(data?.data) ? data.data[0] : null;
+    const resolved = resolveBoxArtUrl(game?.box_art_url || '');
+    gameArtCache.set(normalizedGameId, { url: resolved, expiresAt: Date.now() + GAME_ART_CACHE_TTL_MS });
+    return resolved;
   }
 
   async function fetchStreamStatus(allowRefresh = true) {
@@ -44,6 +81,14 @@ function createTwitchStreamStatusClient({
     const data = await response.json();
     if (!Array.isArray(data?.data)) throw new Error('Twitch returned malformed stream-status data; not treating it as offline.');
     const stream = data.data.length > 0 ? data.data[0] : null;
+    let gameImageUrl = '';
+    if (stream?.game_id) {
+      try {
+        gameImageUrl = await fetchGameImageUrl(stream.game_id, accessToken);
+      } catch (err) {
+        console.warn('[Recap] Twitch game-art lookup failed:', err?.message || err);
+      }
+    }
     return {
       live: Boolean(stream),
       streamId: stream?.id || '',
@@ -51,6 +96,7 @@ function createTwitchStreamStatusClient({
       title: stream?.title || '',
       category: stream?.game_name || '',
       gameId: stream?.game_id || '',
+      gameImageUrl,
       viewerCount: Number(stream?.viewer_count || 0) || 0,
       thumbnailUrl: String(stream?.thumbnail_url || '').replace('{width}', '1280').replace('{height}', '720').trim()
     };

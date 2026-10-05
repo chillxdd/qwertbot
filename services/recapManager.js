@@ -125,6 +125,7 @@ function createRecapManager({
   let currentStreamTitle = '';
   let currentStreamCategory = '';
   let currentStreamGameId = '';
+  let currentStreamGameImageUrl = '';
   let currentViewerCount = 0;
   let currentStreamThumbnailUrl = '';
   let currentStreamId = '';
@@ -358,6 +359,7 @@ function createRecapManager({
     const newTitle = String(status?.title || '').trim();
     const newCategory = String(status?.category || '').trim();
     const newGameId = String(status?.gameId || '').trim();
+    const newGameImageUrl = String(status?.gameImageUrl || '').trim();
     currentViewerCount = Math.max(0, Number(status?.viewerCount || 0) || 0);
     currentStreamThumbnailUrl = String(status?.thumbnailUrl || '').trim();
 
@@ -369,6 +371,7 @@ function createRecapManager({
     currentStreamTitle = newTitle;
     currentStreamCategory = newCategory;
     currentStreamGameId = newGameId;
+    currentStreamGameImageUrl = newGameImageUrl;
 
     if (changed && streamLive && !collectionPaused) {
       addStreamContext({ title: newTitle, category: newCategory, gameId: newGameId });
@@ -896,6 +899,7 @@ function createRecapManager({
     currentStreamTitle = String(status?.title || '').trim();
     currentStreamCategory = String(status?.category || '').trim();
     currentStreamGameId = String(status?.gameId || '').trim();
+    currentStreamGameImageUrl = String(status?.gameImageUrl || '').trim();
     currentViewerCount = Math.max(0, Number(status?.viewerCount || 0) || 0);
     currentStreamThumbnailUrl = String(status?.thumbnailUrl || '').trim();
 
@@ -1111,7 +1115,7 @@ function createRecapManager({
       streamId: ending.streamId, channelName, writerFence: operationContext.fence()
     });
     if (pendingEnd !== ending) return;
-    currentStreamId = ''; currentStreamTitle = ''; currentStreamCategory = ''; currentStreamGameId = '';
+    currentStreamId = ''; currentStreamTitle = ''; currentStreamCategory = ''; currentStreamGameId = ''; currentStreamGameImageUrl = '';
     currentViewerCount = 0; currentStreamThumbnailUrl = ''; recapMessages = []; streamContexts = []; twitchEvents = [];
     messageSequence = 0; contextSequence = 0; eventSequence = 0;
     pendingLearning = null; clearLearningTimer();
@@ -2195,6 +2199,7 @@ function createRecapManager({
       currentStreamTitle: currentStreamTitle || null,
       currentStreamCategory: currentStreamCategory || null,
       currentStreamGameId: currentStreamGameId || null,
+      currentStreamGameImageUrl: currentStreamGameImageUrl || null,
       currentStreamThumbnailUrl: currentStreamThumbnailUrl || null,
       currentViewerCount,
       recapPaused,

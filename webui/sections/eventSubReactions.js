@@ -479,7 +479,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
               <input class="event-action-discord-embed-color" type="color" value="${esc(/^#[0-9a-f]{6}$/i.test(String(embed.color || '')) ? String(embed.color) : '#9146FF')}">
             </label>
             <label>Thumbnail URL
-              <input class="event-action-discord-embed-thumbnail" maxlength="2048" value="${esc(embed.thumbnailUrl || '')}" placeholder="Optional small image URL">
+              <input class="event-action-discord-embed-thumbnail" maxlength="2048" value="${esc(embed.thumbnailUrl || '')}" placeholder="$(categoryimage) for current category art">
             </label>
             <label class="event-action-discord-embed-wide">Large Image URL
               <input class="event-action-discord-embed-image" maxlength="2048" value="${esc(embed.imageUrl || '')}" placeholder="$(thumbnail) for the live Twitch preview">
@@ -575,6 +575,7 @@ export function initEventSubReactionsSection({ $, esc, postJson, config = {}, ad
       row.querySelector('.event-action-discord-embed-title-input').value = '$(channel) is now live on Twitch!';
       row.querySelector('.event-action-discord-embed-description').value = '$(streamtitle)';
       row.querySelector('.event-action-discord-embed-url').value = '$(url)';
+      row.querySelector('.event-action-discord-embed-thumbnail').value = '$(categoryimage)';
       row.querySelector('.event-action-discord-embed-image').value = '$(thumbnail)';
       row.querySelector('.event-action-discord-embed-footer').value = 'QwertBot';
       row.querySelector('.event-action-discord-embed-timestamp').checked = true;
