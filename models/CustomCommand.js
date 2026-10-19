@@ -106,7 +106,7 @@ const customCommandSchema = new mongoose.Schema({
   },
   sendAs: {
     type: String,
-    enum: ['chat', 'reply', 'announcement'],
+    enum: ['chat', 'reply', 'announcement', 'custom_command'],
     default: 'chat'
   },
   announcementColor: {

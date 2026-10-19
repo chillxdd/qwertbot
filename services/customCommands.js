@@ -18,7 +18,8 @@ const DEFAULT_GLOBAL_COOLDOWN_SECONDS = 5;
 const RESERVED_COMMANDS = new Set(['!commands', '!recap', '!startrecap', '!stoprecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
 const USER_LEVELS = ['everyone', 'subscriber', 'twitch_vip', 'moderator', 'owner'];
 const RESPONSE_MODES = ['equal', 'weighted', 'ifelse'];
-const SEND_AS_MODES = ['chat', 'reply', 'announcement'];
+const SEND_AS_MODES = ['chat', 'reply', 'announcement', 'custom_command'];
+const MAX_CUSTOM_COMMAND_CHAIN_DEPTH = 10;
 const ANNOUNCEMENT_COLORS = ['primary', 'blue', 'green', 'orange', 'purple'];
 
 function normalizeTrigger(triggerType, value) {
@@ -620,13 +621,34 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
     };
   }
 
-  async function handleMessage({ rawMessage, displayName, tags = {}, systemInvocation = false }) {
+  async function handleMessage({ rawMessage, displayName, tags = {}, systemInvocation = false, invocationChain = [] }) {
     const match = findMatch(rawMessage);
     if (!match) return { matched: false };
 
     const command = match.command;
     const matchedTrigger = match.trigger;
     const commandId = String(command._id);
+    const chain = Array.isArray(invocationChain) ? invocationChain.map((value) => String(value)) : [];
+
+    if (chain.includes(commandId)) {
+      return {
+        matched: true,
+        triggerType: matchedTrigger.triggerType,
+        trigger: matchedTrigger.trigger,
+        responded: false,
+        reason: 'command_loop'
+      };
+    }
+
+    if (chain.length >= MAX_CUSTOM_COMMAND_CHAIN_DEPTH) {
+      return {
+        matched: true,
+        triggerType: matchedTrigger.triggerType,
+        trigger: matchedTrigger.trigger,
+        responded: false,
+        reason: 'command_chain_too_deep'
+      };
+    }
 
     if (!systemInvocation && !meetsUserLevel(tags, command.userLevel || 'everyone')) {
       return {
@@ -822,8 +844,10 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
       }
     }
 
+    const plannedSendAs = SEND_AS_MODES.includes(command.sendAs) ? command.sendAs : 'chat';
+    const delegatesToCustomCommand = plannedSendAs === 'custom_command';
     let globalSlotAcquired = false;
-    if (!systemInvocation) {
+    if (!systemInvocation && !delegatesToCustomCommand) {
       if (!acquireGlobalResponseSlot()) {
         return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'global_cooldown' };
       }
@@ -863,27 +887,53 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
       return { matched: true, triggerType: matchedTrigger.triggerType, trigger: matchedTrigger.trigger, responded: false, reason: 'empty_response' };
     }
 
-    noteOwnResponse(rendered);
     let result;
     let sent = false;
+    const sendAs = SEND_AS_MODES.includes(updated.sendAs) ? updated.sendAs : 'chat';
     try {
-      const sendAs = SEND_AS_MODES.includes(updated.sendAs) ? updated.sendAs : 'chat';
-      if (sendAs === 'announcement') {
-        if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
-        result = await sendAnnouncement(rendered, { color: updated.announcementColor || 'primary' });
-      } else if (sendAs === 'reply') {
-        const replyParentMessageId = String(tags?.id || tags?.['message-id'] || '').trim();
-        // EventSub/system invocations have no originating chat message, so a
-        // reply-mode command gracefully falls back to a normal chat message.
-        result = await sendMessage(
-          normalizedChannel,
-          rendered,
-          replyParentMessageId ? { replyParentMessageId } : {}
-        );
+      if (sendAs === 'custom_command') {
+        result = await handleMessage({
+          rawMessage: rendered,
+          displayName,
+          tags,
+          systemInvocation,
+          invocationChain: [...chain, commandId]
+        });
+
+        if (!result?.matched || !result?.responded) {
+          await CustomCommand.updateOne(
+            { _id: command._id, channelName: normalizedChannel, counter: { $gt: 0 } },
+            { $inc: { counter: -1 } }
+          ).catch(() => {});
+          return {
+            matched: true,
+            triggerType: matchedTrigger.triggerType,
+            trigger: matchedTrigger.trigger,
+            responded: false,
+            reason: result?.matched ? (result.reason || 'custom_command_no_response') : 'custom_command_no_match',
+            delegatedCommand: rendered
+          };
+        }
+        sent = true;
       } else {
-        result = await sendMessage(normalizedChannel, rendered);
+        noteOwnResponse(rendered);
+        if (sendAs === 'announcement') {
+          if (typeof sendAnnouncement !== 'function') throw new Error('Twitch announcements are not available.');
+          result = await sendAnnouncement(rendered, { color: updated.announcementColor || 'primary' });
+        } else if (sendAs === 'reply') {
+          const replyParentMessageId = String(tags?.id || tags?.['message-id'] || '').trim();
+          // EventSub/system invocations have no originating chat message, so a
+          // reply-mode command gracefully falls back to a normal chat message.
+          result = await sendMessage(
+            normalizedChannel,
+            rendered,
+            replyParentMessageId ? { replyParentMessageId } : {}
+          );
+        } else {
+          result = await sendMessage(normalizedChannel, rendered);
+        }
+        sent = true;
       }
-      sent = true;
     } catch (err) {
       await CustomCommand.updateOne(
         { _id: command._id, channelName: normalizedChannel, counter: { $gt: 0 } },
@@ -910,7 +960,11 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
       cached.lastResponseIndex = selection.index;
     }
 
-    console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> response ${selection.index + 1}/${responses.length} (${selection.mode}).`);
+    if (sendAs === 'custom_command') {
+      console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> custom command ${rendered} -> response ${selection.index + 1}/${responses.length} (${selection.mode}).`);
+    } else {
+      console.log(`[Custom Commands] Triggered ${matchedTrigger.triggerType} ${matchedTrigger.trigger} -> response ${selection.index + 1}/${responses.length} (${selection.mode}).`);
+    }
 
     return {
       matched: true,
@@ -918,8 +972,9 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
       trigger: matchedTrigger.trigger,
       responded: true,
       counter: updated.counter,
-      message: rendered,
-      sendMethod: result?.method || 'unknown'
+      message: sendAs === 'custom_command' ? (result?.message || '') : rendered,
+      delegatedCommand: sendAs === 'custom_command' ? rendered : undefined,
+      sendMethod: result?.sendMethod || result?.method || (sendAs === 'custom_command' ? 'custom_command' : 'unknown')
     };
   }
 
@@ -953,6 +1008,7 @@ module.exports = {
   USER_LEVELS,
   RESPONSE_MODES,
   SEND_AS_MODES,
+  MAX_CUSTOM_COMMAND_CHAIN_DEPTH,
   ANNOUNCEMENT_COLORS,
   createCustomCommandManager,
   normalizeTrigger,

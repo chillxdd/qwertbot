@@ -73,7 +73,11 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customAnnouncementColorWrap').hidden = sendAs !== 'announcement';
     $('customSendAsHelp').textContent = sendAs === 'announcement'
       ? 'Requires the bot to be a moderator with announcement permission.'
-      : '';
+      : sendAs === 'custom_command'
+        ? 'Runs the selected response as another Custom Command instead of posting it. The original viewer context is preserved, so target-command permissions and cooldowns still apply. Example: !so $(query)'
+        : sendAs === 'reply'
+          ? 'Replies to the chat message that triggered this command.'
+          : 'Chat Message sends a normal bot message.';
   }
 
   function updateResponseModeUi() {
@@ -418,7 +422,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
             </div>
             ${command.publicDescription ? `<div class="readonly-command-description">${esc(command.publicDescription)}</div>` : ''}
             <div class="custom-trigger-chip-list">${triggerChips}</div>
-            <div class="detail">${triggers.length} ${triggerWord} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : command.sendAs === 'reply' ? 'Reply to Trigger' : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
+            <div class="detail">${triggers.length} ${triggerWord} · ${esc(command.probability)}% chance · ${esc(command.cooldownSeconds)}s cooldown · ${esc(command.responseDelaySeconds || 0)}s delay · ${command.responses.length} ${responseWord} · ${esc(responseModeLabel(command.responseMode))} · ${command.sendAs === 'announcement' ? `Announcement (${esc(command.announcementColor || 'primary')})` : command.sendAs === 'reply' ? 'Reply to Trigger' : command.sendAs === 'custom_command' ? 'Run Custom Command' : 'Chat Message'} · Counter: ${esc(command.counter)}</div>
           </div>
           <div class="custom-command-actions">
             <button class="secondary custom-edit-btn" type="button">Edit</button>
