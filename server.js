@@ -237,7 +237,19 @@ customCommandManager = createCustomCommandManager({
   channelName,
   sendMessage: (channel, message, options = {}) => chatClientProxy.say(channel, message, options),
   sendAnnouncement: (message, options) => sendChatAnnouncement(message, options),
-  getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] })
+  getRandomChatters: (count) => getRandomChatters({ count, excludeLogins: [botUsername] }),
+  runNativeCommand: ({ rawMessage, displayName, tags = {} }) => {
+    if (!twitchMessageHandler?.handleNativeCommand) return Promise.resolve({ matched: false });
+    return twitchMessageHandler.handleNativeCommand({
+      channel: channelName,
+      rawMessage,
+      displayName,
+      tags,
+      username: String(tags.username || '').toLowerCase().trim(),
+      streamLive: Boolean(recapManager?.getStatus?.().streamLive),
+      trackBehavior: false
+    });
+  }
 });
 
 chatTimerManager = createChatTimerManager({

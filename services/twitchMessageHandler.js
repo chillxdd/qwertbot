@@ -162,13 +162,171 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     console.log(`[Recap] Nightbot responded to ${candidate.rawMessage}; command excluded from recap logs.`);
   }
 
+  async function handleNativeCommand({
+    channel,
+    rawMessage,
+    displayName,
+    tags = {},
+    username = String(tags.username || '').toLowerCase().trim(),
+    streamLive = false,
+    trackBehavior = false
+  }) {
+    const message = String(rawMessage || '').trim();
+    const lowerMsg = message.toLowerCase();
+    const commandName = getCommandName(message);
+    const normalizedDisplayName = String(displayName || tags['display-name'] || tags.username || 'viewer');
+
+    if (['!last', '!setlast', '!cliplast', '!clip'].includes(commandName)) {
+      const clipCommandManager = typeof getClipCommandManager === 'function' ? getClipCommandManager() : null;
+      if (!clipCommandManager) {
+        return { matched: true, responded: false, executed: false, reason: 'native_command_unavailable' };
+      }
+
+      try {
+        const result = await clipCommandManager.handleMessage({
+          channel,
+          rawMessage: message,
+          displayName: normalizedDisplayName,
+          tags,
+          isModOrBroadcaster: isModOrBroadcaster(tags)
+        });
+        return {
+          ...result,
+          matched: true,
+          executed: Boolean(result?.responded)
+        };
+      } catch (err) {
+        console.error(`[Clips] Native clip command failed for ${normalizedDisplayName}:`, err?.message || err);
+        return { matched: true, responded: false, executed: false, reason: 'native_command_error' };
+      }
+    }
+
+    if (!isKnownBotCommand(message)) return { matched: false };
+
+    if (lowerMsg === '!commands' || lowerMsg.startsWith('!commands ')) {
+      if (typeof sendMessage !== 'function') {
+        return { matched: true, responded: false, executed: false, reason: 'native_command_unavailable' };
+      }
+      const text = typeof getNativeCommandResponse === 'function'
+        ? await getNativeCommandResponse('commands', 'response', { user: normalizedDisplayName })
+        : `All SqwertArmyBot commands: ${COMMANDS_URL}`;
+      if (text) {
+        const result = await sendMessage(channel, text);
+        return { matched: true, responded: true, executed: true, reason: 'success', message: text, sendMethod: result?.method || 'native' };
+      }
+      return { matched: true, responded: false, executed: true, reason: 'empty_response' };
+    }
+
+    if (lowerMsg === '!repin' || lowerMsg === '!unpin') {
+      if (!isModOrBroadcaster(tags)) {
+        return { matched: true, responded: false, executed: false, reason: 'unauthorized' };
+      }
+      const persistentPinManager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
+      if (!persistentPinManager) {
+        return { matched: true, responded: false, executed: false, reason: 'native_command_unavailable' };
+      }
+      try {
+        if (lowerMsg === '!repin') await persistentPinManager.repin?.();
+        else await persistentPinManager.unpin?.();
+        // Built-in pin controls are intentionally silent in chat.
+        return { matched: true, responded: false, executed: true, reason: 'success', sendMethod: 'native' };
+      } catch (err) {
+        console.error(`[Persistent Pin] ${lowerMsg} command failed:`, err?.message || err);
+        return { matched: true, responded: false, executed: false, reason: 'native_command_error' };
+      }
+    }
+
+    if (lowerMsg === '!optout' || lowerMsg === '!optin') {
+      const optingOut = lowerMsg === '!optout';
+      try {
+        const result = await setViewerProfileOptOut(channel, {
+          username,
+          displayName: normalizedDisplayName,
+          twitchUserId: tags['user-id'] || '',
+          optedOut: optingOut
+        });
+        let text = '';
+        let sendResult = null;
+        if (typeof sendMessage === 'function') {
+          const command = optingOut ? 'optout' : 'optin';
+          const variant = optingOut ? 'success' : (result?.reactivated ? 'reactivated' : 'fresh');
+          text = typeof getNativeCommandResponse === 'function'
+            ? await getNativeCommandResponse(command, variant, { user: normalizedDisplayName, retentionDays: 30 })
+            : (optingOut
+              ? `@${normalizedDisplayName}, you've opted out of Viewer Profiles. Learning and profile use stop immediately. Your existing profile will be deleted after 30 days unless you opt back in.`
+              : result?.reactivated
+                ? `@${normalizedDisplayName}, you've opted back into Viewer Profiles. Your existing profile has been reactivated.`
+                : `@${normalizedDisplayName}, you've opted back into Viewer Profiles. A new profile can now be learned over time.`);
+          if (text) sendResult = await sendMessage(channel, text);
+        }
+        return {
+          matched: true,
+          responded: Boolean(text),
+          executed: true,
+          reason: 'success',
+          message: text,
+          sendMethod: sendResult?.method || 'native'
+        };
+      } catch (err) {
+        console.error(`[Viewer Profiles] Failed to process ${lowerMsg} for ${normalizedDisplayName}:`, err?.message || err);
+        let text = '';
+        let sendResult = null;
+        if (typeof sendMessage === 'function') {
+          const command = optingOut ? 'optout' : 'optin';
+          text = typeof getNativeCommandResponse === 'function'
+            ? await getNativeCommandResponse(command, 'error', { user: normalizedDisplayName, retentionDays: 30 })
+            : `@${normalizedDisplayName}, I couldn't update your Viewer Profile preference right now. Please try again later.`;
+          if (text) sendResult = await sendMessage(channel, text);
+        }
+        return {
+          matched: true,
+          responded: Boolean(text),
+          executed: false,
+          reason: 'native_command_error',
+          message: text,
+          sendMethod: sendResult?.method || 'native'
+        };
+      }
+    }
+
+    const recapManager = typeof getRecapManager === 'function' ? getRecapManager() : null;
+    if (!recapManager) {
+      return { matched: true, responded: false, executed: false, reason: 'native_command_unavailable' };
+    }
+
+    if (lowerMsg === '!stoprecap') {
+      if (!isModOrBroadcaster(tags)) {
+        return { matched: true, responded: false, executed: false, reason: 'unauthorized' };
+      }
+      await recapManager.stopRecap({ channel, displayName: normalizedDisplayName });
+      return { matched: true, responded: false, executed: true, reason: 'success', sendMethod: 'native' };
+    }
+
+    if (lowerMsg === '!startrecap') {
+      if (!isModOrBroadcaster(tags)) {
+        return { matched: true, responded: false, executed: false, reason: 'unauthorized' };
+      }
+      await recapManager.startRecap({ channel, displayName: normalizedDisplayName });
+      return { matched: true, responded: false, executed: true, reason: 'success', sendMethod: 'native' };
+    }
+
+    if (lowerMsg === '!recap' || lowerMsg.startsWith('!recap ')) {
+      if (trackBehavior) {
+        recordCommandBehavior({ channel, username, displayName: normalizedDisplayName, tags, rawMessage: message, streamLive });
+      }
+      await recapManager.handleRecapCommand({ channel, displayName: normalizedDisplayName });
+      return { matched: true, responded: false, executed: true, reason: 'success', sendMethod: 'native' };
+    }
+
+    return { matched: true, responded: false, executed: false, reason: 'native_command_unhandled' };
+  }
+
   async function handleMessage(channel, tags = {}, message) {
     const recapManager = getRecapManager();
     if (!recapManager) return;
 
     const streamLive = Boolean(recapManager.getStatus?.().streamLive);
     const rawMessage = String(message || '').trim();
-    const lowerMsg = rawMessage.toLowerCase();
     const username = String(tags.username || '').toLowerCase().trim();
     const displayName = tags['display-name'] || tags.username || 'viewer';
     const replyContext = extractReplyContext(tags);
@@ -222,7 +380,6 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const chatTimerManager = typeof getChatTimerManager === 'function' ? getChatTimerManager() : null;
     const botPersonalityManager = typeof getBotPersonalityManager === 'function' ? getBotPersonalityManager() : null;
     const persistentPinManager = typeof getPersistentPinManager === 'function' ? getPersistentPinManager() : null;
-    const clipCommandManager = typeof getClipCommandManager === 'function' ? getClipCommandManager() : null;
 
     if (username === botUsername) {
       if (customCommandManager?.consumeOwnResponse(rawMessage)) return;
@@ -339,97 +496,16 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
       }
     }
 
-    if (clipCommandManager && ['!last', '!setlast', '!cliplast', '!clip'].includes(getCommandName(rawMessage))) {
-      try {
-        await clipCommandManager.handleMessage({
-          channel,
-          rawMessage,
-          displayName,
-          tags,
-          isModOrBroadcaster: isModOrBroadcaster(tags)
-        });
-      } catch (err) {
-        console.error(`[Clips] Native clip command failed for ${displayName}:`, err?.message || err);
-      }
-      return;
-    }
-
-    if (isKnownBotCommand(rawMessage)) {
-      if (lowerMsg === '!commands' || lowerMsg.startsWith('!commands ')) {
-        if (typeof sendMessage === 'function') {
-          const text = typeof getNativeCommandResponse === 'function'
-            ? await getNativeCommandResponse('commands', 'response', { user: displayName })
-            : `All SqwertArmyBot commands: ${COMMANDS_URL}`;
-          if (text) await sendMessage(channel, text);
-        }
-        return;
-      }
-
-      if (lowerMsg === '!repin' || lowerMsg === '!unpin') {
-        if (!isModOrBroadcaster(tags) || !persistentPinManager) return;
-        try {
-          if (lowerMsg === '!repin') await persistentPinManager.repin?.();
-          else await persistentPinManager.unpin?.();
-        } catch (err) {
-          // Built-in pin controls are intentionally silent in chat. Operational
-          // failures belong in diagnostics/logs rather than creating chat noise.
-          console.error(`[Persistent Pin] ${lowerMsg} command failed:`, err?.message || err);
-        }
-        return;
-      }
-
-      if (lowerMsg === '!optout' || lowerMsg === '!optin') {
-        const optingOut = lowerMsg === '!optout';
-        try {
-          const result = await setViewerProfileOptOut(channel, {
-            username,
-            displayName,
-            twitchUserId: tags['user-id'] || '',
-            optedOut: optingOut
-          });
-          if (typeof sendMessage === 'function') {
-            const command = optingOut ? 'optout' : 'optin';
-            const variant = optingOut ? 'success' : (result?.reactivated ? 'reactivated' : 'fresh');
-            const text = typeof getNativeCommandResponse === 'function'
-              ? await getNativeCommandResponse(command, variant, { user: displayName, retentionDays: 30 })
-              : (optingOut
-                ? `@${displayName}, you've opted out of Viewer Profiles. Learning and profile use stop immediately. Your existing profile will be deleted after 30 days unless you opt back in.`
-                : result?.reactivated
-                  ? `@${displayName}, you've opted back into Viewer Profiles. Your existing profile has been reactivated.`
-                  : `@${displayName}, you've opted back into Viewer Profiles. A new profile can now be learned over time.`);
-            await sendMessage(channel, text);
-          }
-        } catch (err) {
-          console.error(`[Viewer Profiles] Failed to process ${lowerMsg} for ${displayName}:`, err?.message || err);
-          if (typeof sendMessage === 'function') {
-            const command = optingOut ? 'optout' : 'optin';
-            const text = typeof getNativeCommandResponse === 'function'
-              ? await getNativeCommandResponse(command, 'error', { user: displayName, retentionDays: 30 })
-              : `@${displayName}, I couldn't update your Viewer Profile preference right now. Please try again later.`;
-            await sendMessage(channel, text);
-          }
-        }
-        return;
-      }
-
-      if (lowerMsg === '!stoprecap') {
-        if (!isModOrBroadcaster(tags)) return;
-        await recapManager.stopRecap({ channel, displayName });
-        return;
-      }
-
-      if (lowerMsg === '!startrecap') {
-        if (!isModOrBroadcaster(tags)) return;
-        await recapManager.startRecap({ channel, displayName });
-        return;
-      }
-
-      if (lowerMsg === '!recap' || lowerMsg.startsWith('!recap ')) {
-        recordCommandBehavior({ channel, username, displayName, tags, rawMessage, streamLive });
-        await recapManager.handleRecapCommand({ channel, displayName });
-      }
-      return;
-    }
+    const nativeResult = await handleNativeCommand({
+      channel,
+      rawMessage,
+      displayName,
+      tags,
+      username,
+      streamLive,
+      trackBehavior: true
+    });
+    if (nativeResult?.matched) return nativeResult;
 
     if (customCommandManager) {
       try {
@@ -459,7 +535,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     recordViewerSource();
   }
 
-  return { handleMessage };
+  return { handleMessage, handleNativeCommand };
 }
 
 module.exports = {

@@ -74,7 +74,7 @@ export function initCustomCommandsSection({ $, esc, postJson, config = {} }) {
     $('customSendAsHelp').textContent = sendAs === 'announcement'
       ? 'Requires the bot to be a moderator with announcement permission.'
       : sendAs === 'custom_command'
-        ? 'Runs the selected response as another Custom Command instead of posting it. The original viewer context is preserved, so target-command permissions and cooldowns still apply. Example: !so $(query)'
+        ? 'Runs the selected response as another command (custom or built-in) instead of posting it. The original viewer context is preserved, so target-command permissions and cooldowns still apply. Example: !last or !so $(query)'
         : sendAs === 'reply'
           ? 'Replies to the chat message that triggered this command.'
           : 'Chat Message sends a normal bot message.';

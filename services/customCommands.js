@@ -442,7 +442,7 @@ function meetsUserLevel(tags = {}, required = 'everyone') {
   return hierarchy[actual] >= hierarchy[requiredLevel];
 }
 
-function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement = null, getRandomChatters = null, getFollowInfo = getTwitchFollowInfo, getGameInfo = getTwitchGameInfo }) {
+function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement = null, getRandomChatters = null, getFollowInfo = getTwitchFollowInfo, getGameInfo = getTwitchGameInfo, runNativeCommand = null }) {
   const normalizedChannel = String(channelName || '').toLowerCase().trim();
   let cache = [];
   let globalCooldownSeconds = DEFAULT_GLOBAL_COOLDOWN_SECONDS;
@@ -892,15 +892,32 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
     const sendAs = SEND_AS_MODES.includes(updated.sendAs) ? updated.sendAs : 'chat';
     try {
       if (sendAs === 'custom_command') {
+        const nextInvocationChain = [...chain, commandId];
         result = await handleMessage({
           rawMessage: rendered,
           displayName,
           tags,
           systemInvocation,
-          invocationChain: [...chain, commandId]
+          invocationChain: nextInvocationChain
         });
 
-        if (!result?.matched || !result?.responded) {
+        // Built-in commands are intentionally reserved from the custom-command
+        // trigger table, so an unmatched delegated response gets one chance to
+        // flow through the native command dispatcher. The original viewer tags
+        // are preserved so moderator/broadcaster restrictions cannot be bypassed
+        // by putting a privileged built-in command behind a public alias.
+        if (!result?.matched && typeof runNativeCommand === 'function') {
+          result = await runNativeCommand({
+            rawMessage: rendered,
+            displayName,
+            tags,
+            systemInvocation,
+            invocationChain: nextInvocationChain
+          });
+        }
+
+        const delegatedSucceeded = Boolean(result?.matched && (result?.responded || result?.executed));
+        if (!delegatedSucceeded) {
           await CustomCommand.updateOne(
             { _id: command._id, channelName: normalizedChannel, counter: { $gt: 0 } },
             { $inc: { counter: -1 } }
@@ -910,7 +927,7 @@ function createCustomCommandManager({ channelName, sendMessage, sendAnnouncement
             triggerType: matchedTrigger.triggerType,
             trigger: matchedTrigger.trigger,
             responded: false,
-            reason: result?.matched ? (result.reason || 'custom_command_no_response') : 'custom_command_no_match',
+            reason: result?.matched ? (result.reason || 'delegated_command_no_response') : 'delegated_command_no_match',
             delegatedCommand: rendered
           };
         }
