@@ -4,10 +4,10 @@ const { detectPromptInjection } = require('./promptSecurity');
 const { identityFromTwitchTags, sharedChatOriginFromTwitchTags, isSharedChatGuest } = require('./sourceRecords');
 
 const { COMMANDS_URL } = require('../config/app');
-const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
+const KNOWN_BOT_COMMANDS = new Set(['!commands', '!recap', '!stoprecap', '!startrecap', '!optout', '!optin', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!textlast', '!clip']);
 const POKEMON_COMMUNITY_GAME_USERNAMES = new Set(['pokemoncommunitygame']);
 const NIGHTBOT_RESPONSE_WINDOW = 5000;
-const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!clip']);
+const PROFILE_COMMAND_EXCLUSIONS = new Set(['!commands', '!optout', '!optin', '!startrecap', '!stoprecap', '!repin', '!unpin', '!last', '!setlast', '!cliplast', '!textlast', '!clip']);
 const TAGGED_RECAP_CONTEXT_EXCLUDED_REASONS = new Set(['cooldown', 'prompt_injection_blocked', 'ai_failure']);
 
 function getCommandName(message) {
@@ -176,7 +176,7 @@ function createTwitchMessageHandler({ getRecapManager, getCustomCommandManager, 
     const commandName = getCommandName(message);
     const normalizedDisplayName = String(displayName || tags['display-name'] || tags.username || 'viewer');
 
-    if (['!last', '!setlast', '!cliplast', '!clip'].includes(commandName)) {
+    if (['!last', '!setlast', '!cliplast', '!textlast', '!clip'].includes(commandName)) {
       const clipCommandManager = typeof getClipCommandManager === 'function' ? getClipCommandManager() : null;
       if (!clipCommandManager) {
         return { matched: true, responded: false, executed: false, reason: 'native_command_unavailable' };

@@ -13,6 +13,17 @@ const lastClipSchema = new mongoose.Schema({
   setAt: { type: Date, default: null }
 }, { _id: false });
 
+const lastTextSchema = new mongoose.Schema({
+  message: { type: String, default: '' },
+  date: { type: String, default: '' },
+  timestamp: { type: String, default: '' },
+  source: { type: String, enum: ['', 'textlast', 'webui'], default: '' },
+  setByUserId: { type: String, default: '' },
+  setByLogin: { type: String, default: '' },
+  setByDisplayName: { type: String, default: '' },
+  setAt: { type: Date, default: null }
+}, { _id: false });
+
 const clipCommandConfigSchema = new mongoose.Schema({
   channelName: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
   clip: {
@@ -21,7 +32,8 @@ const clipCommandConfigSchema = new mongoose.Schema({
   cliplast: {
     defaultDuration: { type: Number, default: 45 }
   },
-  lastClip: { type: lastClipSchema, default: () => ({}) }
+  lastClip: { type: lastClipSchema, default: () => ({}) },
+  lastText: { type: lastTextSchema, default: () => ({}) }
 }, { timestamps: true });
 
 module.exports = mongoose.models.ClipCommandConfig || mongoose.model('ClipCommandConfig', clipCommandConfigSchema);

@@ -185,25 +185,80 @@ async function validateClipForChannel(channelName, clipUrl) {
   };
 }
 
+function makeClipCreationError(code, message, cause = null) {
+  const error = new Error(String(message || 'Clip creation failed.'));
+  error.clipCode = String(code || 'api_error');
+  if (cause) {
+    error.cause = cause;
+    if (cause.status != null) error.status = cause.status;
+    if (cause.code != null) error.twitchCode = cause.code;
+    if (cause.twitchBody != null) error.twitchBody = cause.twitchBody;
+  }
+  return error;
+}
+
+function classifyCreateClipRequestError(err) {
+  if (err?.clipCode) return err;
+  const status = Number(err?.status || 0);
+  const message = String(err?.message || '').trim();
+  const lower = message.toLowerCase();
+
+  if (status === 401 || /oauth|access token|clips:edit|authorization/.test(lower)) {
+    return makeClipCreationError('auth_error', message || 'Twitch authorization failed.', err);
+  }
+  if (status === 404) {
+    return makeClipCreationError('offline', message || 'The broadcaster is not live.', err);
+  }
+  if (status === 403) {
+    if (/not enabled|disabled/.test(lower)) {
+      return makeClipCreationError('clips_disabled', message || 'Clips are disabled on the channel.', err);
+    }
+    return makeClipCreationError('clips_restricted', message || 'Clip creation is restricted for this account or channel.', err);
+  }
+  if (status === 400) {
+    if (/category/.test(lower) && /not clippable|clippable/.test(lower)) {
+      return makeClipCreationError('twitch_category_not_clippable', message || 'The current Twitch category is not clippable.', err);
+    }
+    if (/automod|title/.test(lower)) {
+      return makeClipCreationError('title_rejected', message || 'Twitch rejected the clip title.', err);
+    }
+  }
+  if (status === 429) {
+    return makeClipCreationError('rate_limited', message || 'Twitch rate-limited clip creation.', err);
+  }
+  return makeClipCreationError('api_error', message || 'Twitch API request failed.', err);
+}
+
 async function createClip(channelName, { title = '', duration = 30 } = {}) {
-  const broadcaster = await getBroadcasterIdentity(channelName);
+  let broadcaster;
+  try {
+    broadcaster = await getBroadcasterIdentity(channelName);
+  } catch (err) {
+    throw classifyCreateClipRequestError(err);
+  }
+
   const safeDuration = Number(duration);
   if (!Number.isFinite(safeDuration) || safeDuration < 5 || safeDuration > 60) {
-    throw new Error('Clip duration must be between 5 and 60 seconds.');
+    throw makeClipCreationError('invalid_arguments', 'Clip duration must be between 5 and 60 seconds.');
   }
   const safeTitle = String(title || '').trim();
 
-  const created = await withBotAccessToken(async (token) => {
-    const params = new URLSearchParams({
-      broadcaster_id: broadcaster.id,
-      duration: String(safeDuration)
+  let created;
+  try {
+    created = await withBotAccessToken(async (token) => {
+      const params = new URLSearchParams({
+        broadcaster_id: broadcaster.id,
+        duration: String(safeDuration)
+      });
+      if (safeTitle) params.set('title', safeTitle);
+      const body = await fetchTwitchJson(`${TWITCH_API_BASE}/clips?${params.toString()}`, token, { method: 'POST' });
+      const item = Array.isArray(body?.data) ? body.data[0] || null : null;
+      if (!item?.id) throw makeClipCreationError('api_error', 'Twitch accepted the request but did not return a clip ID.');
+      return { id: String(item.id), editUrl: String(item.edit_url || '') };
     });
-    if (safeTitle) params.set('title', safeTitle);
-    const body = await fetchTwitchJson(`${TWITCH_API_BASE}/clips?${params.toString()}`, token, { method: 'POST' });
-    const item = Array.isArray(body?.data) ? body.data[0] || null : null;
-    if (!item?.id) throw new Error('Twitch did not return a clip ID.');
-    return { id: String(item.id), editUrl: String(item.edit_url || '') };
-  });
+  } catch (err) {
+    throw classifyCreateClipRequestError(err);
+  }
 
   const startedAt = Date.now();
   let lastError = null;
@@ -226,8 +281,22 @@ async function createClip(channelName, { title = '', duration = 30 } = {}) {
     }
   }
 
-  if (lastError) console.warn('[Clips] Last Get Clips poll failed:', lastError?.message || lastError);
-  throw new Error('Twitch did not finish creating the clip within 60 seconds.');
+  if (lastError) {
+    console.warn('[Clips] Last Get Clips poll failed:', lastError?.message || lastError);
+    throw makeClipCreationError(
+      'api_error',
+      `Twitch accepted clip ${created.id}, but an API error occurred while checking whether it published: ${lastError?.message || lastError}`,
+      lastError
+    );
+  }
+
+  const unpublished = makeClipCreationError(
+    'unpublished',
+    `Twitch accepted clip ${created.id}, but it never appeared in Get Clips within 60 seconds.`
+  );
+  unpublished.clipId = created.id;
+  unpublished.editUrl = created.editUrl;
+  throw unpublished;
 }
 
 module.exports = {
@@ -238,5 +307,7 @@ module.exports = {
   getClipById,
   getGameById,
   validateClipForChannel,
-  createClip
+  createClip,
+  makeClipCreationError,
+  classifyCreateClipRequestError
 };

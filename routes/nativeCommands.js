@@ -20,6 +20,7 @@ function registerNativeCommandRoutes(app, { requireModSession, getDatabaseConnec
         maxLength: MAX_RESPONSE_LENGTH,
         clipSettings: clipState?.settings || null,
         lastClip: clipState?.lastClip || null,
+        lastText: clipState?.lastText || null,
         clipCooldowns: clipState?.cooldowns || null,
         approvedPokemonCategories: clipState?.approvedPokemonCategories || []
       });
@@ -41,6 +42,26 @@ function registerNativeCommandRoutes(app, { requireModSession, getDatabaseConnec
     } catch (err) {
       console.error('[Native Commands] Could not save response settings:', err.message || err);
       return res.status(400).json({ success: false, error: err.message || 'Could not save native command responses.' });
+    }
+  });
+
+  app.post('/native-commands/last/manual', requireModSession, async (req, res) => {
+    if (!getDatabaseConnected()) return res.status(503).json({ success: false, error: 'MongoDB is not connected.' });
+    try {
+      const manager = typeof getClipCommandManager === 'function' ? getClipCommandManager() : null;
+      if (!manager?.saveManualLastText) {
+        return res.status(503).json({ success: false, error: 'The !last manager is unavailable.' });
+      }
+      await manager.saveManualLastText(req.body?.message);
+      const state = await manager.getAdminState();
+      return res.json({
+        success: true,
+        lastClip: state?.lastClip || null,
+        lastText: state?.lastText || null
+      });
+    } catch (err) {
+      console.error('[Native Commands] Could not manually update !last:', err.message || err);
+      return res.status(400).json({ success: false, error: err.message || 'Could not manually update !last.' });
     }
   });
 }

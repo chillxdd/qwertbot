@@ -12,6 +12,7 @@ const LAST_COMMAND_COOLDOWN_MS = 30 * 1000;
 const CLIP_COMMAND_COOLDOWN_MS = 60 * 1000;
 const LAST_UPDATE_COOLDOWN_MS = 60 * 1000;
 const AUTO_TITLE_TIMEOUT_MS = 10000;
+const MAX_MANUAL_LAST_LENGTH = 450;
 const DEFAULT_CLIP_SETTINGS = Object.freeze({
   clip: { defaultDuration: 45 },
   cliplast: { defaultDuration: 45 }
@@ -217,6 +218,30 @@ function formatElapsedStreamTime(startedAt, nowMs = Date.now()) {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function formatCanadaDate(ms = Date.now()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Vancouver',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date(ms));
+    const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    if (byType.month && byType.day) return `${byType.month}/${byType.day}`;
+  } catch (_) {}
+  return '';
+}
+
+function formatElapsedStreamTimeMinus(startedAt, offsetSeconds = 60, nowMs = Date.now()) {
+  const startMs = Date.parse(String(startedAt || ''));
+  const currentMs = Number(nowMs);
+  if (!Number.isFinite(startMs) || startMs <= 0 || !Number.isFinite(currentMs) || currentMs < startMs) return '';
+  const elapsedSeconds = Math.max(0, Math.floor((currentMs - startMs) / 1000) - Math.max(0, Math.floor(Number(offsetSeconds) || 0)));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 function buildFallbackClipTitle(kind, liveInfo, nowMs = Date.now()) {
   const date = formatPacificDate(nowMs);
   const elapsed = formatElapsedStreamTime(liveInfo?.startedAt, nowMs);
@@ -279,6 +304,45 @@ function userIdentityFromTags(tags = {}, displayName = '') {
   };
 }
 
+function classifyClipLastFailure(err) {
+  const explicit = String(err?.clipCode || '').trim();
+  if (explicit) {
+    const map = {
+      offline: 'offline',
+      wrong_category: 'wrongCategory',
+      invalid_arguments: 'invalidArguments',
+      clips_disabled: 'clipsDisabled',
+      clips_restricted: 'clipsRestricted',
+      twitch_category_not_clippable: 'twitchCategoryNotClippable',
+      title_rejected: 'titleRejected',
+      auth_error: 'authError',
+      rate_limited: 'rateLimited',
+      api_error: 'apiError',
+      unpublished: 'unpublished',
+      save_error: 'saveError'
+    };
+    if (map[explicit]) return map[explicit];
+  }
+
+  const status = Number(err?.status || 0);
+  const lower = String(err?.message || '').toLowerCase();
+  if (status === 401 || /oauth|access token|clips:edit|authorization/.test(lower)) return 'authError';
+  if (status === 429) return 'rateLimited';
+  if (status === 404 && /live|broadcast/.test(lower)) return 'offline';
+  return 'fail';
+}
+
+function clipFailureVariables(err, { user = '', category = '', clip = null } = {}) {
+  return {
+    user,
+    category: String(category || 'Unknown'),
+    error: String(err?.message || 'Unknown error.'),
+    status: err?.status != null ? String(err.status) : '',
+    clipurl: String(clip?.url || ''),
+    cliptitle: String(clip?.title || '')
+  };
+}
+
 function createClipCommandManager({ channelName, sendMessage, getNativeCommandResponse }) {
   const channel = normalizeChannelName(channelName);
   let lastCommandUse = 0;
@@ -289,7 +353,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
   async function readConfig() {
     const doc = await ClipCommandConfig.findOne({ channelName: channel }).lean();
     const settings = normalizeClipSettings(doc || {});
-    return { settings, lastClip: doc?.lastClip || null };
+    return { settings, lastClip: doc?.lastClip || null, lastText: doc?.lastText || null };
   }
 
   async function saveSettings(input = {}) {
@@ -317,16 +381,60 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     };
     await ClipCommandConfig.findOneAndUpdate(
       { channelName: channel },
-      { $set: { lastClip } },
+      { $set: { lastClip, lastText: {} } },
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     );
     return lastClip;
   }
 
+  async function saveLastText(message, date, timestamp, identity) {
+    const lastText = {
+      message: String(message || '').trim(),
+      date: String(date || ''),
+      timestamp: String(timestamp || ''),
+      source: 'textlast',
+      setByUserId: identity.userId,
+      setByLogin: identity.login,
+      setByDisplayName: identity.displayName,
+      setAt: new Date()
+    };
+    await ClipCommandConfig.findOneAndUpdate(
+      { channelName: channel },
+      { $set: { lastText, lastClip: {} } },
+      { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+    );
+    return lastText;
+  }
+
+  async function saveManualLastText(message) {
+    const clean = String(message || '').trim();
+    if (!clean) throw new Error('Manual !last response cannot be blank.');
+    if (clean.length > MAX_MANUAL_LAST_LENGTH) {
+      throw new Error(`Manual !last response must be ${MAX_MANUAL_LAST_LENGTH} characters or fewer.`);
+    }
+    const lastText = {
+      message: clean,
+      date: '',
+      timestamp: '',
+      source: 'webui',
+      setByUserId: '',
+      setByLogin: 'webui',
+      setByDisplayName: 'WebUI',
+      setAt: new Date()
+    };
+    await ClipCommandConfig.findOneAndUpdate(
+      { channelName: channel },
+      { $set: { lastText, lastClip: {} } },
+      { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+    );
+    console.log('[Clips] WebUI manually updated !last text.');
+    return lastText;
+  }
+
   async function clearLastClip() {
     await ClipCommandConfig.findOneAndUpdate(
       { channelName: channel },
-      { $set: { lastClip: {} } },
+      { $set: { lastClip: {}, lastText: {} } },
       { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
     );
   }
@@ -344,10 +452,30 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
   }
 
   async function requireOfficialPokemonLive() {
-    const info = await getLiveStreamInfo(channel);
-    if (!info.live) throw new Error('The channel is not live.');
+    let info;
+    try {
+      info = await getLiveStreamInfo(channel);
+    } catch (err) {
+      const wrapped = new Error(err?.message || 'Could not check Twitch live status.');
+      const status = Number(err?.status || 0);
+      const lower = String(err?.message || '').toLowerCase();
+      if (status === 401 || /oauth|access token|clips:edit|authorization/.test(lower)) wrapped.clipCode = 'auth_error';
+      else if (status === 429) wrapped.clipCode = 'rate_limited';
+      else wrapped.clipCode = 'api_error';
+      wrapped.status = err?.status;
+      wrapped.cause = err;
+      throw wrapped;
+    }
+    if (!info.live) {
+      const err = new Error('The channel is not live.');
+      err.clipCode = 'offline';
+      throw err;
+    }
     if (!isOfficialPokemonCategory(info.gameName)) {
-      throw new Error(`Current category "${info.gameName || 'Unknown'}" is not an approved official Pokémon title (normalized: "${normalizeCategory(info.gameName) || 'unknown'}").`);
+      const err = new Error(`Current category "${info.gameName || 'Unknown'}" is not an approved official Pokémon title (normalized: "${normalizeCategory(info.gameName) || 'unknown'}").`);
+      err.clipCode = 'wrong_category';
+      err.category = info.gameName || 'Unknown';
+      throw err;
     }
     return info;
   }
@@ -363,7 +491,11 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     }
     lastCommandUse = now;
     try {
-      const { lastClip } = await readConfig();
+      const { lastClip, lastText } = await readConfig();
+      if (lastText?.message) {
+        await say(channelArg, lastText.message);
+        return { matched: true, responded: true, reason: 'success', text: lastText };
+      }
       if (!lastClip?.url) {
         await say(channelArg, await response('last', 'empty', { user: displayName }));
         return { matched: true, responded: true, reason: 'empty' };
@@ -420,6 +552,68 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     }
   }
 
+  async function handleTextLast({ channel: channelArg, displayName, tags }) {
+    const identity = userIdentityFromTags(tags, displayName);
+    const now = Date.now();
+    if (lastUpdateCommandUse && now - lastUpdateCommandUse < LAST_UPDATE_COOLDOWN_MS) {
+      await say(channelArg, await response('textlast', 'cooldown', {
+        user: displayName,
+        remaining: formatRemaining(LAST_UPDATE_COOLDOWN_MS - (now - lastUpdateCommandUse))
+      }));
+      return { matched: true, responded: true, reason: 'cooldown' };
+    }
+    if (lastUpdateBusy) {
+      await say(channelArg, await response('textlast', 'busy', { user: displayName }));
+      return { matched: true, responded: true, reason: 'busy' };
+    }
+
+    lastUpdateBusy = true;
+    try {
+      let liveInfo;
+      try {
+        liveInfo = await requireOfficialPokemonLive();
+      } catch (err) {
+        const variant = classifyClipLastFailure(err);
+        const textVariant = variant === 'offline' ? 'offline' : variant === 'wrongCategory' ? 'wrongCategory' : 'apiError';
+        await say(channelArg, await response('textlast', textVariant, {
+          user: displayName,
+          category: String(err?.category || 'Unknown'),
+          error: String(err?.message || 'Unknown error.'),
+          status: err?.status != null ? String(err.status) : ''
+        }));
+        return { matched: true, responded: true, reason: textVariant };
+      }
+
+      const date = formatCanadaDate(now);
+      const timestamp = formatElapsedStreamTimeMinus(liveInfo.startedAt, 60, now);
+      if (!date || !timestamp) {
+        await say(channelArg, await response('textlast', 'timingError', { user: displayName }));
+        return { matched: true, responded: true, reason: 'timingError' };
+      }
+
+      const message = await response('textlast', 'success', {
+        user: displayName,
+        date,
+        timestamp,
+        category: liveInfo.gameName || ''
+      });
+      const saved = await saveLastText(message, date, timestamp, identity);
+      lastUpdateCommandUse = Date.now();
+      await say(channelArg, saved.message);
+      console.log(`[Clips] !textlast saved text fallback ${date} @ ${timestamp} by ${identity.displayName || identity.login || 'moderator'}.`);
+      return { matched: true, responded: true, reason: 'success', text: saved };
+    } catch (err) {
+      console.error('[Clips] !textlast failed:', err?.message || err);
+      await say(channelArg, await response('textlast', 'apiError', {
+        user: displayName,
+        error: String(err?.message || 'Unknown error.')
+      }));
+      return { matched: true, responded: true, reason: 'apiError' };
+    } finally {
+      lastUpdateBusy = false;
+    }
+  }
+
   async function handleClipLast({ channel: channelArg, rawMessage, displayName, tags }) {
     const identity = userIdentityFromTags(tags, displayName);
     const now = Date.now();
@@ -431,26 +625,47 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
       return { matched: true, responded: true, reason: 'cooldown' };
     }
     if (lastUpdateBusy) {
-      await say(channelArg, await response('cliplast', 'fail', { user: displayName }));
+      await say(channelArg, await response('cliplast', 'busy', { user: displayName }));
       return { matched: true, responded: true, reason: 'busy' };
     }
+
     lastUpdateBusy = true;
+    let liveInfo = null;
+    let createdClip = null;
     try {
-      const liveInfo = await requireOfficialPokemonLive();
+      liveInfo = await requireOfficialPokemonLive();
       const { settings } = await readConfig();
       const parsed = parseClipArguments(rawMessage, '!cliplast', settings.cliplast);
-      if (parsed?.error) throw new Error(parsed.error);
+      if (parsed?.error) {
+        const err = new Error(parsed.error);
+        err.clipCode = 'invalid_arguments';
+        throw err;
+      }
+
       const resolvedTitle = await resolveClipTitle('cliplast', parsed, liveInfo);
-      const clip = await createClip(channel, { ...parsed, title: resolvedTitle.title });
-      const saved = await saveLastClip(clip, 'cliplast', identity);
+      createdClip = await createClip(channel, { ...parsed, title: resolvedTitle.title });
+
+      let saved;
+      try {
+        saved = await saveLastClip(createdClip, 'cliplast', identity);
+      } catch (saveErr) {
+        const err = new Error(saveErr?.message || 'Could not save the created clip as !last.');
+        err.clipCode = 'save_error';
+        err.cause = saveErr;
+        throw err;
+      }
+
       lastUpdateCommandUse = Date.now();
       await say(channelArg, await response('cliplast', 'success', { user: displayName, clipurl: saved.url, cliptitle: saved.title || '' }));
       console.log(`[Clips] !cliplast created and saved ${saved.url} by ${identity.displayName || identity.login || 'moderator'}.`);
       return { matched: true, responded: true, reason: 'success', clip: saved };
     } catch (err) {
-      console.error('[Clips] !cliplast failed:', err?.message || err);
-      await say(channelArg, await response('cliplast', 'fail', { user: displayName }));
-      return { matched: true, responded: true, reason: 'error' };
+      const variant = classifyClipLastFailure(err);
+      const category = err?.category || liveInfo?.gameName || '';
+      const vars = clipFailureVariables(err, { user: displayName, category, clip: createdClip });
+      console.error(`[Clips] !cliplast failed (${variant}):`, err?.message || err);
+      await say(channelArg, await response('cliplast', variant, vars));
+      return { matched: true, responded: true, reason: variant, errorCode: err?.clipCode || '' };
     } finally {
       lastUpdateBusy = false;
     }
@@ -486,25 +701,28 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
 
   async function handleMessage({ channel: channelArg, rawMessage, displayName, tags = {}, isModOrBroadcaster = false }) {
     const command = String(rawMessage || '').trim().split(/\s+/)[0].toLowerCase();
-    if (!['!last', '!setlast', '!cliplast', '!clip'].includes(command)) return { matched: false };
+    if (!['!last', '!setlast', '!cliplast', '!textlast', '!clip'].includes(command)) return { matched: false };
 
     if (command === '!last') return handleLast({ channel: channelArg, displayName });
     if (!isModOrBroadcaster) return { matched: true, responded: false, reason: 'unauthorized' };
     if (command === '!setlast') return handleSetLast({ channel: channelArg, rawMessage, displayName, tags });
     if (command === '!cliplast') return handleClipLast({ channel: channelArg, rawMessage, displayName, tags });
+    if (command === '!textlast') return handleTextLast({ channel: channelArg, displayName, tags });
     return handleClip({ channel: channelArg, rawMessage, displayName, tags });
   }
 
   async function getAdminState() {
-    const { settings, lastClip } = await readConfig();
+    const { settings, lastClip, lastText } = await readConfig();
     return {
       settings,
       lastClip: lastClip?.url ? lastClip : null,
+      lastText: lastText?.message ? lastText : null,
       cooldowns: {
         lastSeconds: LAST_COMMAND_COOLDOWN_MS / 1000,
         clipSeconds: CLIP_COMMAND_COOLDOWN_MS / 1000,
         setlastSeconds: LAST_UPDATE_COOLDOWN_MS / 1000,
         cliplastSeconds: LAST_UPDATE_COOLDOWN_MS / 1000,
+        textlastSeconds: LAST_UPDATE_COOLDOWN_MS / 1000,
         lastUpdateShared: true
       },
       approvedPokemonCategories: [...OFFICIAL_POKEMON_CATEGORY_NAMES]
@@ -515,6 +733,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     handleMessage,
     getAdminState,
     saveSettings,
+    saveManualLastText,
     clearLastClip
   };
 }
@@ -526,6 +745,7 @@ module.exports = {
   CLIP_COMMAND_COOLDOWN_MS,
   LAST_UPDATE_COOLDOWN_MS,
   AUTO_TITLE_TIMEOUT_MS,
+  MAX_MANUAL_LAST_LENGTH,
   DEFAULT_CLIP_SETTINGS,
   OFFICIAL_POKEMON_CATEGORY_NAMES,
   normalizeCategory,
@@ -534,6 +754,8 @@ module.exports = {
   parseClipArguments,
   sanitizeGeneratedClipTitle,
   formatElapsedStreamTime,
+  formatCanadaDate,
+  formatElapsedStreamTimeMinus,
   buildFallbackClipTitle,
   generateAutomaticClipTitle,
   createClipCommandManager

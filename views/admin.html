@@ -560,9 +560,9 @@
           <div class="native-command-card" data-native-command="last" data-user-level="everyone">
             <div class="native-command-main">
               <div class="native-command-title"><code>!last</code><span class="user-level-badge user-level-everyone">Everyone</span></div>
-              <div class="detail">Shows the last notable Pokémon run clip.</div>
+              <div class="detail">Shows the current stored !last value. Manual emergency override is available in WebUI.</div>
             </div>
-            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Manage</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="clip" data-user-level="moderator">
@@ -579,6 +579,14 @@
               <div class="detail">Creates a clip and saves it as !last.</div>
             </div>
             <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Settings</button></div>
+          </div>
+
+          <div class="native-command-card" data-native-command="textlast" data-user-level="moderator">
+            <div class="native-command-main">
+              <div class="native-command-title"><code>!textlast</code><span class="user-level-badge user-level-moderator">Moderator</span></div>
+              <div class="detail">Saves a timestamp text fallback as the current !last when Twitch cannot publish a clip.</div>
+            </div>
+            <div class="custom-command-actions"><button class="secondary native-response-edit-btn" type="button">Responses</button></div>
           </div>
 
           <div class="native-command-card" data-native-command="setlast" data-user-level="moderator">
@@ -646,7 +654,7 @@
             <button id="closeNativeResponseDialogBtn" class="secondary" type="button">Close</button>
           </div>
           <div id="nativeResponseFields" class="native-response-fields"></div>
-          <div class="detail">Variables: <code>$(user)</code>; clips: <code>$(clipurl)</code>, <code>$(cliptitle)</code>; cooldowns: <code>$(remaining)</code>.</div>
+          <div class="detail">Variables: <code>$(user)</code>; clips: <code>$(clipurl)</code>, <code>$(cliptitle)</code>; cooldowns: <code>$(remaining)</code>; clip failures: <code>$(category)</code>, <code>$(error)</code>, <code>$(status)</code>.</div>
           <div class="custom-editor-actions">
             <button id="saveNativeResponseBtn" type="button">Save Responses</button>
             <button id="resetNativeResponseBtn" class="secondary" type="button">Reset Command to Defaults</button>

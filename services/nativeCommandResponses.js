@@ -18,10 +18,32 @@ const DEFAULT_NATIVE_RESPONSES = Object.freeze({
     fail: 'Couldn\'t set !last. Make sure the URL is a valid Qwert Twitch clip from an approved Pokémon category.',
     cooldown: '@$(user), !setlast is on cooldown. Try again in $(remaining).'
   },
+  textlast: {
+    success: 'Last Good Run: $(date) at stream timestamp $(timestamp). No twitch clip due to copyrighted music.',
+    cooldown: '@$(user), !textlast is on cooldown. Try again in $(remaining).',
+    busy: 'Couldn\'t set text !last: another !setlast, !cliplast, or !textlast request is already in progress.',
+    offline: 'Couldn\'t set text !last: Qwert is not live.',
+    wrongCategory: 'Couldn\'t set text !last: $(category) is not an approved official Pokémon category.',
+    timingError: 'Couldn\'t set text !last: Twitch did not return a usable stream start time.',
+    apiError: 'Couldn\'t set text !last: Twitch stream timing could not be loaded.'
+  },
   cliplast: {
     success: 'Last notable run saved: $(clipurl)',
-    fail: 'Couldn\'t create or save the notable run clip. Make sure Qwert is live in an approved Pokémon category and clipping is available.',
-    cooldown: '@$(user), !cliplast is on cooldown. Try again in $(remaining).'
+    cooldown: '@$(user), !cliplast is on cooldown. Try again in $(remaining).',
+    busy: 'Clip failed: another !setlast, !cliplast, or !textlast request is already in progress.',
+    offline: 'Clip failed: Qwert is not live.',
+    wrongCategory: 'Clip failed: $(category) is not an approved official Pokémon category.',
+    invalidArguments: 'Clip failed: $(error)',
+    clipsDisabled: 'Clip failed: clipping is disabled on the Twitch channel.',
+    clipsRestricted: 'Clip failed: Twitch is restricting clip creation for this account or channel.',
+    twitchCategoryNotClippable: 'Clip failed: Twitch does not allow clips in the current category.',
+    titleRejected: 'Clip failed: Twitch rejected the clip title.',
+    authError: 'Clip failed: Twitch authorization is invalid or missing the clips:edit permission.',
+    rateLimited: 'Clip failed: Twitch is rate-limiting clip creation. Try again shortly.',
+    apiError: 'Clip failed: Twitch API error. Try again shortly.',
+    unpublished: 'Twitch accepted the clip but never published it. Likely due to copyrighted music playing on stream.',
+    saveError: 'Clip was created, but QwertBot could not save it as !last: $(clipurl)',
+    fail: 'Clip failed for an unknown reason.'
   },
   clip: {
     success: 'Clip created: $(clipurl)',

@@ -147,7 +147,7 @@ const NATIVE_RESPONSE_FIELDS = {
     ['response', 'Response', 'Variable: $(user)']
   ],
   last: [
-    ['response', 'Response', 'Variables: $(user), $(clipurl), $(cliptitle)'],
+    ['response', 'Clip Response Format', 'Used when !last points to a stored Twitch clip. Variables: $(user), $(clipurl), $(cliptitle)'],
     ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
     ['empty', 'No Saved Clip', 'Variable: $(user)'],
     ['error', 'Error', 'Variable: $(user)']
@@ -157,10 +157,32 @@ const NATIVE_RESPONSE_FIELDS = {
     ['fail', 'Fail Response', 'Variable: $(user)'],
     ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)']
   ],
+  textlast: [
+    ['success', 'Text Fallback', 'Variables: $(user), $(date), $(timestamp), $(category)'],
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
+    ['busy', 'Already Processing', 'Variable: $(user)'],
+    ['offline', 'Stream Offline', 'Variable: $(user)'],
+    ['wrongCategory', 'Wrong Pokémon Category', 'Variables: $(user), $(category)'],
+    ['timingError', 'Missing Stream Start Time', 'Variable: $(user)'],
+    ['apiError', 'Twitch API / Timing Error', 'Variables: $(user), $(error), $(status)']
+  ],
   cliplast: [
     ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
-    ['fail', 'Fail Response', 'Variable: $(user)'],
-    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)']
+    ['cooldown', 'Cooldown', 'Variables: $(user), $(remaining)'],
+    ['busy', 'Already Processing', 'Variable: $(user)'],
+    ['offline', 'Stream Offline', 'Variable: $(user)'],
+    ['wrongCategory', 'Wrong Pokémon Category', 'Variables: $(user), $(category)'],
+    ['invalidArguments', 'Invalid Duration / Arguments', 'Variables: $(user), $(error)'],
+    ['clipsDisabled', 'Clipping Disabled', 'Variables: $(user), $(error), $(status)'],
+    ['clipsRestricted', 'Clipping Restricted', 'Variables: $(user), $(error), $(status)'],
+    ['twitchCategoryNotClippable', 'Twitch Category Not Clippable', 'Variables: $(user), $(category), $(error), $(status)'],
+    ['titleRejected', 'Clip Title Rejected', 'Variables: $(user), $(error), $(status)'],
+    ['authError', 'Twitch Auth / Scope Error', 'Variables: $(user), $(error), $(status)'],
+    ['rateLimited', 'Twitch Rate Limit', 'Variables: $(user), $(error), $(status)'],
+    ['apiError', 'Twitch API / Network Error', 'Variables: $(user), $(error), $(status)'],
+    ['unpublished', 'Accepted But Not Published', 'Variables: $(user), $(error)'],
+    ['saveError', 'Clip Created But !last Save Failed', 'Variables: $(user), $(clipurl), $(cliptitle), $(error)'],
+    ['fail', 'Unknown Failure', 'Variables: $(user), $(error), $(status)']
   ],
   clip: [
     ['success', 'Success (blank = silent)', 'Variables: $(user), $(clipurl), $(cliptitle)'],
@@ -211,6 +233,7 @@ let nativeResponses = null;
 let nativeResponseDefaults = null;
 let nativeClipSettings = null;
 let nativeLastClip = null;
+let nativeLastText = null;
 let nativeClipCooldowns = null;
 let editingNativeCommand = null;
 let nativeResponseMaxLength = 450;
@@ -222,6 +245,7 @@ async function loadNativeResponses() {
   nativeResponseDefaults = d.defaults || {};
   nativeClipSettings = d.clipSettings || nativeClipSettings || {};
   nativeLastClip = d.lastClip || null;
+  nativeLastText = d.lastText || null;
   nativeClipCooldowns = d.clipCooldowns || nativeClipCooldowns || {};
   nativeResponseMaxLength = Number(d.maxLength || 450);
 }
@@ -239,11 +263,22 @@ function renderNativeResponseFields(command) {
   });
 
   const info = [];
-  if (command === 'last' || command === 'setlast' || command === 'cliplast') {
-    const current = nativeLastClip?.url
-      ? `<a href="${esc(nativeLastClip.url)}" target="_blank" rel="noopener noreferrer">${esc(nativeLastClip.url)}</a>`
-      : 'None saved yet.';
-    info.push(`<div class="native-response-field native-current-clip"><label class="prompt-label">Current !last Clip</label><div class="detail">${current}</div></div>`);
+  if (command === 'last' || command === 'setlast' || command === 'cliplast' || command === 'textlast') {
+    const current = nativeLastText?.message
+      ? esc(nativeLastText.message)
+      : nativeLastClip?.url
+        ? `<a href="${esc(nativeLastClip.url)}" target="_blank" rel="noopener noreferrer">${esc(nativeLastClip.url)}</a>`
+        : 'None saved yet.';
+    const currentRecord = nativeLastText?.message ? nativeLastText : nativeLastClip?.url ? nativeLastClip : null;
+    const sourceLabels = { cliplast: '!cliplast', setlast: '!setlast', textlast: '!textlast', webui: 'WebUI manual override' };
+    const source = currentRecord?.source ? (sourceLabels[currentRecord.source] || currentRecord.source) : '';
+    const when = currentRecord?.setAt ? new Date(currentRecord.setAt).toLocaleString() : '';
+    const meta = source || when ? `<div class="detail">Source: ${esc(source || 'Unknown')}${when ? ` | Set: ${esc(when)}` : ''}</div>` : '';
+    info.push(`<div class="native-response-field native-current-clip"><label class="prompt-label">Current Stored !last</label><div class="detail">${current}</div>${meta}</div>`);
+  }
+  if (command === 'last') {
+    const editable = nativeLastText?.message ? nativeLastText.message : '';
+    info.push(`<div class="native-response-field native-manual-last"><label class="prompt-label" for="nativeManualLastValue">Manual !last Override (WebUI only)</label><textarea id="nativeManualLastValue" data-native-manual-last maxlength="${nativeResponseMaxLength}" placeholder="Type the exact text !last should return.">${esc(editable)}</textarea><div class="detail">This directly replaces the stored !last value with text and clears the currently stored clip. It can only be changed here in the authenticated WebUI; no chat command accepts arbitrary manual text.</div><div class="custom-editor-actions"><button type="button" data-save-manual-last>Set Current !last</button></div></div>`);
   }
   if (command === 'last' && nativeClipCooldowns?.lastSeconds != null) {
     info.push(`<div class="detail">Cooldown: ${esc(nativeClipCooldowns.lastSeconds)}s global.</div>`);
@@ -253,17 +288,45 @@ function renderNativeResponseFields(command) {
   }
   if (command === 'setlast') {
     const seconds = nativeClipCooldowns?.setlastSeconds ?? 60;
-    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !cliplast. Clip must be from an approved official Pokémon category.</div>`);
+    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !cliplast and !textlast. Clip must be from an approved official Pokémon category.</div>`);
+  }
+  if (command === 'textlast') {
+    const seconds = nativeClipCooldowns?.textlastSeconds ?? 60;
+    info.push(`<div class="detail">Moderator-only. Saves a text fallback as the current !last. Cooldown: ${esc(seconds)}s shared with !setlast and !cliplast.</div>`);
+    info.push(`<div class="detail">Date uses Canadian Pacific time (America/Vancouver). Stream timestamp is current live uptime minus 60 seconds, clamped at 00:00:00.</div>`);
   }
   if (command === 'cliplast') {
     const seconds = nativeClipCooldowns?.cliplastSeconds ?? 60;
-    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !setlast. Current live category must be an approved official Pokémon title.</div>`);
+    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !setlast and !textlast. Current live category must be an approved official Pokémon title.</div>`);
+    info.push(`<div class="detail">Failure responses are selected by the exact failure stage. <b>Accepted But Not Published</b> is only used after Twitch accepts the create request and the follow-up API checks succeed but the clip never appears.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
     info.push(`<div class="detail native-command-syntax"><code>!${esc(command)} [title]</code><br><code>!${esc(command)} [5–60s]</code><br><code>!${esc(command)} [5–60s] | [title]</code><br>A duration by itself uses automatic naming.</div>`);
   }
 
   $('nativeResponseFields').innerHTML = [...settingFields, ...responseFields, ...info].join('');
+  const manualSaveButton = $('nativeResponseFields').querySelector('[data-save-manual-last]');
+  if (manualSaveButton) manualSaveButton.onclick = saveManualLastOverride;
+}
+
+async function saveManualLastOverride() {
+  if (editingNativeCommand !== 'last') return;
+  const field = $('nativeResponseFields').querySelector('[data-native-manual-last]');
+  const message = String(field?.value || '').trim();
+  if (!message) {
+    $('nativeResponseMsg').textContent = 'Enter a manual !last response first.';
+    return;
+  }
+  $('nativeResponseMsg').textContent = 'Updating stored !last...';
+  const d = await postJson('/native-commands/last/manual', { message });
+  if (!d.success) {
+    $('nativeResponseMsg').textContent = d.error || 'Could not manually update !last.';
+    return;
+  }
+  nativeLastClip = d.lastClip || null;
+  nativeLastText = d.lastText || null;
+  renderNativeResponseFields('last');
+  $('nativeResponseMsg').textContent = 'Stored !last updated from WebUI.';
 }
 
 async function openNativeResponseDialog(command) {
@@ -271,7 +334,7 @@ async function openNativeResponseDialog(command) {
   $('nativeResponseMsg').textContent = 'Loading...';
   try { await loadNativeResponses(); }
   catch (err) { $('nativeResponseMsg').textContent = err.message; return; }
-  $('nativeResponseDialogTitle').textContent = NATIVE_SETTING_FIELDS[command]?.length ? `!${command} Settings & Responses` : `!${command} Responses`;
+  $('nativeResponseDialogTitle').textContent = command === 'last' ? '!last Settings & Stored Value' : NATIVE_SETTING_FIELDS[command]?.length ? `!${command} Settings & Responses` : `!${command} Responses`;
   renderNativeResponseFields(command);
   $('nativeResponseMsg').textContent = '';
   const dialog = $('nativeResponseDialog');
