@@ -5,6 +5,7 @@ const { collection } = require('../services/reliability/store');
 const { ONE_SHOT_EVENT_TYPES, claimOneShotEvent } = require('../services/eventSubEntityDedupe');
 const { noteEventReceived, verifyEventSubRequest } = require('../services/twitchEventSub');
 const { normalizeIdentity, numberOrNull } = require('../services/sourceRecords');
+const { buildPredictionEventMetadata } = require('../services/predictionRecapContext');
 
 function cleanInline(value, max = 240) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -342,6 +343,10 @@ function formatEventSubForRecap(type, event) {
       const status = cleanInline(event?.status || 'resolved', 40);
       const winner = predictionWinner(event);
       const outcomes = predictionOutcomes(event, true);
+      const interpretation = buildPredictionEventMetadata(event).gymResult;
+      if (interpretation && winner) {
+        return `Gym prediction "${title}" resolved as a gym ${interpretation} (winning outcome: ${winner})${outcomes ? `. Final points: ${outcomes}.` : '.'}`;
+      }
       return `Twitch prediction "${title}" ended (${status})${winner ? `. Winning outcome: ${winner}.` : ''}${outcomes ? ` Final points: ${outcomes}.` : ''}`;
     }
 
@@ -434,8 +439,12 @@ function registerEventSubRoutes(app, { getRecapManager, getEventSubReactionManag
           amount: type === 'channel.cheer' ? Number(event?.bits || 0) : null,
           quantity: type === 'channel.raid' ? Number(event?.viewers || 0) : null,
           anonymous: event?.is_anonymous === true,
-          metadata: { isAchieved: type === 'channel.goal.end' ? event?.is_achieved === true : undefined,
-            title: cleanInline(event?.title || event?.description || '', 180), status: cleanInline(event?.status || '', 40) }
+          metadata: {
+            isAchieved: type === 'channel.goal.end' ? event?.is_achieved === true : undefined,
+            title: cleanInline(event?.title || event?.description || '', 180),
+            status: cleanInline(event?.status || '', 40),
+            ...(type === 'channel.prediction.end' ? buildPredictionEventMetadata(event) : {})
+          }
         });
         return { recapEvent, redemptions: redemptionRecapFilter.snapshot(), subscriptions: subscriptionRecapFilter.snapshot(),
           reactions: reactionManager?.planEvent?.(type, event) || [] };

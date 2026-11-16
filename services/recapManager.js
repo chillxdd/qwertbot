@@ -21,6 +21,7 @@ const {
 } = require('./streamRecapHistory');
 const { getStreamLore, applyStreamLoreObservations, buildEffectiveLore } = require('./streamLore');
 const { generateRecap, SUMMARY_PREFIX, sanitizeChatForGemini } = require('./recapGenerator');
+const { extractPredictionResults } = require('./predictionRecapContext');
 const { generateSessionMemoryBlock, generateViewerLearningUpdates, generateStreamLoreObservations, buildSessionMemoryContext, normalizeSessionMemoryConfig } = require('./sessionMemory');
 const { getViewerProfileSettings, getViewerLearningContext, applyViewerProfileUpdates } = require('./viewerProfiles');
 const { cancelGeminiRequestsByLabelPrefix } = require('./geminiClient');
@@ -702,7 +703,8 @@ function createRecapManager({
     // Save the immutable, already-delivered recap before advancing its window.
     // A crash here leaves the old identity recoverable through the send receipt.
     await saveStreamRecap({ streamId: payload.streamId, channelName,
-      startedAt: payload.startedAt, text: payload.summary, windowId: payload.windowId });
+      startedAt: payload.startedAt, text: payload.summary, windowId: payload.windowId,
+      predictionResults: payload.predictionResults || [] });
     if (payload.streamId !== currentStreamId) return;
     if (pendingLearning?.streamId === payload.streamId && pendingLearning?.windowId === payload.windowId) {
       if (collectionPaused) {
@@ -1956,7 +1958,7 @@ function createRecapManager({
 
       if (currentStreamId) {
         try {
-          previousRecaps = await getRecentStreamRecaps({ streamId: generationStreamId, limit: 5 });
+          previousRecaps = await getRecentStreamRecaps({ streamId: generationStreamId, limit: 96 });
           console.log(`[Recap] Loaded ${previousRecaps.length} previous hourly recap(s) from this stream for continuity context.`);
         } catch (historyErr) {
           console.error('[Recap] Could not load previous stream recap context. Continuing without it:', historyErr.message || historyErr);
@@ -2082,7 +2084,7 @@ function createRecapManager({
         key: `recap:${channelName}:${generationStreamId}:${generationWindowId}`, kind: 'recap',
         payload: { streamId: generationStreamId, windowId: generationWindowId,
           startedAt: generationStartedAt, windowThroughAt, snapshotMaxId, snapshotMaxContextId, snapshotMaxEventId,
-          message: twitchMessage, summary: recapSummaryBody },
+          message: twitchMessage, summary: recapSummaryBody, predictionResults: extractPredictionResults(eventSnapshot) },
         send: (payload) => client.say(channelName, payload.message, { temporaryPin: true })
       });
       recapSent = true;

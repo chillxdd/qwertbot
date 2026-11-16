@@ -50,6 +50,16 @@ OVERALL PICTURE:
 - Keep each sentence centered on one coherent topic; do not comma-chain unrelated facts into a laundry list.
 - Do not force unrelated topics into one story.
 
+PREDICTIONS AND GAME RESULTS:
+- Treat a resolved prediction as evidence of its outcome only. It does not prove that chat placed bets, reacted, celebrated, or discussed it unless viewer messages explicitly support that claim.
+- For gym predictions, interpret the result as a gym win or gym loss from the question and winning outcome instead of mechanically repeating that the outcome was “Yes” or “No.”
+- When a verified prediction-trend event gives an exact gym win/loss streak, report that useful interpretation or that the latest result snapped the streak. Never invent or extend a streak from recap prose alone.
+- Do not connect a prediction result to a Pokémon, evolution, moveset, ability, or other nearby gameplay topic merely because they appeared in the same recap window.
+
+SEQUENCE AND RELATIONSHIPS:
+- Words such as “while,” “after,” “following,” “alongside,” “amid,” “meanwhile,” and “then” assert a relationship or sequence. Use them only when a source explicitly establishes that relationship.
+- When two facts are independently supported but not explicitly connected, keep them in separate sentences or omit the weaker fact. For example, a Heatmor moveset discussion, a gym prediction, and a Beldum evolution must not be fused into one implied sequence without direct evidence.
+
 SEXUAL / SUGGESTIVE CHAT:
 - Sexual jokes, innuendo, suggestive humor, horny jokes, or mildly NSFW fake commands may be included when recap-worthy.
 - Do not erase them merely to make the recap family-friendly.
@@ -82,6 +92,8 @@ const DEFAULT_EXPANSION_INSTRUCTIONS = `Revise the recap to use more of the avai
 - Keep the recap selective: 2-3 strong moments are better than a longer inventory of weak topics.
 - Treat EventSub activity as supporting context rather than a checklist; do not add routine support telemetry or enumerate supporters merely to increase length.
 - Do not add vague "viewers discussed/reacted to" clauses simply to grow the recap, and do not comma-chain unrelated facts.
+- A prediction result proves only the resolved outcome. Do not turn it into viewer betting/reaction activity without viewer-chat evidence, and use a verified gym-streak event for exact win/loss streak wording instead of repeating a bare Yes/No result.
+- Do not use “while,” “after,” “following,” “alongside,” “amid,” “meanwhile,” or “then” to connect independently supported events unless the cited source explicitly establishes that relationship. Separate unrelated Pokémon, evolution, moveset, and prediction facts.
 - Actively scan for specific notable conversations, jokes, flirty/suggestive exchanges, reactions, gameplay details, predictions, or recurring themes omitted from the current recap.
 - Prefer adding a genuinely different useful detail over merely rewording an existing one.
 - Every added detail should introduce a distinct topic, event, joke, reaction, conclusion, or fact not already represented.

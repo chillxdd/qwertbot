@@ -30,7 +30,8 @@ const clipCommandConfigSchema = new mongoose.Schema({
     defaultDuration: { type: Number, default: 45 }
   },
   cliplast: {
-    defaultDuration: { type: Number, default: 45 }
+    defaultDuration: { type: Number, default: 45 },
+    allowedUsernames: { type: [String], default: [] }
   },
   lastClip: { type: lastClipSchema, default: () => ({}) },
   lastText: { type: lastTextSchema, default: () => ({}) }

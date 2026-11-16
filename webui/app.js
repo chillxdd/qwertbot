@@ -219,14 +219,15 @@ const NATIVE_RESPONSE_FIELDS = {
 };
 const NATIVE_SETTING_DEFAULTS = {
   clip: { defaultDuration: 45 },
-  cliplast: { defaultDuration: 45 }
+  cliplast: { defaultDuration: 45, allowedUsernames: [] }
 };
 const NATIVE_SETTING_FIELDS = {
   clip: [
     ['defaultDuration', 'Default Duration', 'Used when duration is omitted.', 'number']
   ],
   cliplast: [
-    ['defaultDuration', 'Default Duration', 'Used when duration is omitted.', 'number']
+    ['defaultDuration', 'Default Duration', 'Used when duration is omitted.', 'number'],
+    ['allowedUsernames', 'Allowed Usernames', 'Up to 100 Twitch usernames, one per line. @ is optional; names are matched case-insensitively. These users may run only !cliplast and still share its normal cooldown.', 'textarea']
   ]
 };
 let nativeResponses = null;
@@ -257,9 +258,13 @@ function renderNativeResponseFields(command) {
   });
 
   const settingFields = (NATIVE_SETTING_FIELDS[command] || []).map(([key, label, help, type]) => {
-    const value = nativeClipSettings?.[command]?.[key] ?? '';
+    const rawValue = nativeClipSettings?.[command]?.[key] ?? '';
+    if (type === 'textarea') {
+      const value = Array.isArray(rawValue) ? rawValue.join('\n') : String(rawValue || '');
+      return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><textarea data-native-setting-key="${esc(key)}" data-native-setting-type="textarea" rows="6" placeholder="username_one\nusername_two">${esc(value)}</textarea><div class="detail">${esc(help)}</div></div>`;
+    }
     const attrs = type === 'number' ? ' min="5" max="60" step="1"' : '';
-    return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><input data-native-setting-key="${esc(key)}" type="${type}" value="${esc(value)}"${attrs}><div class="detail">${esc(help)}</div></div>`;
+    return `<div class="native-response-field"><label class="prompt-label">${esc(label)}</label><input data-native-setting-key="${esc(key)}" data-native-setting-type="${esc(type)}" type="${type}" value="${esc(rawValue)}"${attrs}><div class="detail">${esc(help)}</div></div>`;
   });
 
   const info = [];
@@ -297,7 +302,8 @@ function renderNativeResponseFields(command) {
   }
   if (command === 'cliplast') {
     const seconds = nativeClipCooldowns?.cliplastSeconds ?? 60;
-    info.push(`<div class="detail">Cooldown: ${esc(seconds)}s shared with !setlast and !textlast. Current live category must be an approved official Pokémon title.</div>`);
+    info.push(`<div class="detail">Broadcaster and moderators are always allowed. Configured usernames may also use !cliplast, but they still share the same ${esc(seconds)}s cooldown and busy lock with !setlast and !textlast. Shared Chat guest-origin users cannot use the allowlist.</div>`);
+    info.push(`<div class="detail">Current live category must be an approved official Pokémon title.</div>`);
     info.push(`<div class="detail">Failure responses are selected by the exact failure stage. <b>Accepted But Not Published</b> is only used after Twitch accepts the create request and the follow-up API checks succeed but the clip never appears.</div>`);
   }
   if (command === 'clip' || command === 'cliplast') {
@@ -355,7 +361,8 @@ async function saveNativeResponseDialog() {
   nativeResponses = { ...(nativeResponses || {}), [editingNativeCommand]: commandResponses };
   const commandSettings = { ...(nativeClipSettings?.[editingNativeCommand] || {}) };
   $('nativeResponseFields').querySelectorAll('[data-native-setting-key]').forEach((field) => {
-    commandSettings[field.dataset.nativeSettingKey] = field.type === 'number' ? Number(field.value) : field.value.trim();
+    const settingType = field.dataset.nativeSettingType || field.type;
+    commandSettings[field.dataset.nativeSettingKey] = settingType === 'number' ? Number(field.value) : field.value.trim();
   });
   if (Object.keys(commandSettings).length) {
     nativeClipSettings = { ...(nativeClipSettings || {}), [editingNativeCommand]: commandSettings };

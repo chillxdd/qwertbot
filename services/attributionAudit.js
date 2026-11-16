@@ -234,8 +234,9 @@ ${TAGGED_DIALOGUE_RULES}
 - Personal identity/status/property claims require explicit subject binding. Shared words are not enough. A source must actually say that the named person has/is the claimed status, role, relationship, preference, nickname, condition, or personal property.
 - Never convert a metaphorical/channel label, greeting, or elliptical joke into a personal fact. Example: "welcome to the middle child chat" does NOT support "Qwert is a middle child", "Qwert's status as a middle child", "Qwert is ignored", or any similar personal claim.
 - Broad group wording such as "chat/viewers joked, discussed, debated, believed, focused on..." requires repeated direct support from multiple source messages. One isolated viewer remark may only support narrow wording such as "one viewer joked..." when recap-worthy.
-- A verified event supports only the platform action it records; it does not prove motives, emotions, jokes, or reactions.
-- Do not infer chronology or causality from source order.`;
+- A verified event supports only the platform action it records; it does not prove motives, emotions, jokes, reactions, viewer betting activity, or a relationship to another topic.
+- A derived.prediction.gym_streak event is deterministic application evidence for only the exact gym win/loss streak or streak transition stated in that row. It does not prove chat reactions or links to Pokémon/evolution/moveset topics.
+- Do not infer chronology, accompaniment, sequence, shared participation, or causality from source order.`;
 
   const sentenceScopeRule = mode === 'tagged'
     ? '- If a sentence contains only public/general-world knowledge and makes no factual claim about a viewer, broadcaster, bot, channel, chat/community, current stream, or private channel history, mark supported=true for attribution purposes. evidenceIds may be empty. Do not fact-check public knowledge against channel context.'
@@ -247,15 +248,17 @@ ${TAGGED_DIALOGUE_RULES}
   const recapRelationshipRules = mode === 'recap'
     ? `RECAP FACTS AND CONNECTIONS - SEPARATE, DO NOT DISCARD:
 - Evaluate each factual clause independently, and evaluate any claimed connection between clauses as an additional claim. Supported A and supported B do not by themselves support A causing B.
-- Words such as "prompting", "sparking", "leading to", "inspiring", "causing", "triggering", "resulting in", "in response to", or "because of" require direct current-source evidence for that exact causal/reaction link. Nearby messages, source order, shared keywords, and a verified gifting/raid/poll event alone do not establish the link.
+- Words such as "prompting", "sparking", "leading to", "inspiring", "causing", "triggering", "resulting in", "in response to", or "because of" require direct current-source evidence for that exact causal/reaction link. Nearby messages, source order, shared keywords, and a verified gifting/raid/poll/prediction event alone do not establish the link.
+- Temporal/associative connectors such as "while", "after", "following", "alongside", "amid", "meanwhile", "then", and "as" also claim a relationship when they join different facts. Require one current source to explicitly support that relationship; otherwise split the facts into independent sentences or keep only the supported clause.
 - If A and B are independently supported but their connection is not, mark the ORIGINAL sentence supported=false and return a minimal replacement that KEEPS BOTH facts as separate complete sentences. A replacement string may contain multiple sentences. Removing the bad connection is a repair, not a reason to omit either supported fact.
 - Example ONLY, not source evidence: "A gifted subs, prompting jokes about X and Y." becomes "A gifted subs. Chat also joked about X and Y." ONLY if the sources independently support the gift and the group-level jokes. Keep qualifying context such as a promotion only if that context is independently supported too.
 - Apply the same separation to invented shared participation: "A and B debated X and Y" must not imply a mutual debate or that both discussed both topics when the evidence only supports "A discussed X. B discussed Y." Keep each speaker's action/topic bound to their own evidence; do not transfer jokes or reactions to an event's actor.
 - Distinguish STRONG interaction verbs from neutral participation. "debated", "argued", "reacted to", and "responded to" require evidence for that interaction. Neutral "talked about" or "discussed" does NOT require a formal debate: it can be supported when the cited viewers each directly discussed the same topic or exchanged replies about it. Do not reject neutral discussion wording merely because no debate occurred.
-- Use independent sentences, optionally joined by a neutral "also". Do not replace an unsupported causal link with an unverified timeline or interaction such as "after that", "following this", "in reply", or "in reaction". Separate occurrences are not automatically a sequence, response, or coordinated conversation.
+- Use independent sentences, optionally joined by a neutral sentence-opening "also". Do not replace an unsupported link with an unverified timeline, accompaniment, or interaction such as "while", "after that", "following this", "alongside", "meanwhile", "in reply", or "in reaction". Separate occurrences are not automatically a sequence, response, shared scene, or coordinated conversation.
+- Example only, never source evidence: Heatmor's moveset, a Beldum evolution, and a gym prediction are independent facts unless one current source explicitly connects them. Never imply Beldum evolved into Heatmor or attach the prediction to that evolution/run from proximity.
 - If a prior repair removes an unsupported connection, NEVER reintroduce that same rejected connection in a later replacement. If the independently supported facts are already stated neutrally, mark the neutral sentence supported=true instead of endlessly rewriting it.
 - If only part of a sentence is supported, preserve just the supported part and remove or narrowly correct the unsupported clause. If no factual content can be supported, an empty replacement is still correct. Never preserve a clause merely because it was present in the draft, and never add filler or raw source quotes to compensate.
-- This is NOT a blanket ban on causal words. Keep a causal/reaction link when direct source evidence explicitly establishes it, with the same actors, scope, and uncertainty. Keep harmless independent clauses connected by "and" or "while" when they do not assert a false causal, temporal, or shared-participation relationship.
+- This is NOT a blanket ban on relationship words. Keep a causal, temporal, or reaction link when direct source evidence explicitly establishes it, with the same actors, scope, and uncertainty. A neutral "and" may join truly related clauses, but do not use "while" as a shortcut for placing unrelated facts in one scene.
 - For a split replacement, evidenceIds must include the exact source IDs needed for EVERY retained fact; evidence for the event alone cannot validate unrelated chat claims. Existing named-identity and multi-author group-evidence requirements still apply. On re-audit, assess each resulting sentence against its own relevant sources; do not require unrelated sentences to share an author, topic, or causal link.
 - Return ONE result row per ORIGINAL S-id, not one row per sentence inside a replacement. Use the replacement string for the full corrected passage; the existing next audit pass will verify its separate sentences. Do not mark the original causal sentence supported=true just because its independently supported facts can be salvaged.`
     : '';
@@ -417,6 +420,7 @@ function findDirectIdentityChatEvidence(sentence, identity, chatRecords = []) {
 }
 
 const CAUSAL_RELATIONSHIP_WORDS = /\b(?:prompt(?:ed|ing)?|spark(?:ed|ing)?|lead(?:ing|s)?\s+to|led\s+to|caus(?:e|ed|ing)|trigger(?:ed|ing)?|result(?:ed|ing)?\s+in|in\s+response\s+to|because\s+of|in\s+reaction\s+to)\b/i;
+const ASSOCIATIVE_RELATIONSHIP_WORDS = /\b(?:while|after|following|alongside|amid|meanwhile|then)\b/i;
 const STRONG_INTERACTION_WORDS = /\b(?:debated|argued|confronted|responded\s+to|reacted\s+to|in\s+reply\s+to|in\s+response\s+to)\b/i;
 
 function replacementConflictsWithRejection(replacement = '', reason = '') {
@@ -425,6 +429,8 @@ function replacementConflictsWithRejection(replacement = '', reason = '') {
   if (!next || !why) return false;
   const rejectedCausality = /causal|causation|cause|prompt|spark|lead(?:ing)?|trigger|resulting|reaction link|direct source evidence for.*link/.test(why);
   if (rejectedCausality && CAUSAL_RELATIONSHIP_WORDS.test(next)) return true;
+  const rejectedAssociation = /temporal|sequence|accompaniment|associative|relationship|source order|shared scene|while|after|following|alongside|meanwhile/.test(why);
+  if (rejectedAssociation && ASSOCIATIVE_RELATIONSHIP_WORDS.test(next)) return true;
   const rejectedInteraction = /mutual debate|did not debate|didn't debate|shared participation|coordinated|invented interaction|did not interact/.test(why);
   if (rejectedInteraction && STRONG_INTERACTION_WORDS.test(next)) return true;
   return false;
@@ -601,6 +607,58 @@ function sentenceHasBroadGroupGeneralization(sentence = '') {
   return /\b(?:chat|the chat|viewers|everyone|the community|community members|people)\b[^.!?;]{0,80}\b(?:joked|joking|discussed|debated|argued|believed|focused|talked|reacted|suggested|questioned|celebrated|mocked|teased|speculated|agreed|complained|weighed\s+in|compared|shared|cheered)\b/i.test(String(sentence || ''));
 }
 
+function relationshipSourceText(record = {}) {
+  return String(record?.text || record?.body || record?.message || '').toLowerCase();
+}
+
+function connectorRelationshipIsExplicit(sentence = '', citedChats = [], citedEvents = []) {
+  const claim = String(sentence || '');
+  if (!ASSOCIATIVE_RELATIONSHIP_WORDS.test(claim)) return true;
+  const split = claim.match(/^(.+?)\b(?:while|after|following|alongside|amid|meanwhile|then)\b(.+)$/i);
+  if (!split) return false;
+
+  const leftTokens = evidenceContentTokens(split[1]);
+  const rightTokens = evidenceContentTokens(split[2]);
+  if (!leftTokens.length || !rightTokens.length) return false;
+
+  const explicitRelation = /\b(?:while|after|before|following|alongside|amid|meanwhile|then|when|during|as a result|in response|because)\b/i;
+  return [...citedChats, ...citedEvents].some((record) => {
+    const sourceText = relationshipSourceText(record);
+    if (!explicitRelation.test(sourceText)) return false;
+    const sourceTokens = new Set(evidenceContentTokens(sourceText));
+    return leftTokens.some((token) => sourceTokens.has(token)) &&
+      rightTokens.some((token) => sourceTokens.has(token));
+  });
+}
+
+function conservativeConnectorReplacement(sentence = '') {
+  const text = String(sentence || '').trim();
+  const match = text.match(/^(.+?)[,;]?\s+while\s+(.+)$/i);
+  if (!match) return '';
+  const left = String(match[1] || '').trim().replace(/[.!?]+$/, '');
+  const right = String(match[2] || '').trim().replace(/[.!?]+$/, '');
+  if (!left) return '';
+  const leftSentence = `${left}.`;
+  // A dangling gerund such as "while placing bets..." has no safely grounded
+  // subject after the unsupported connection is removed. Preserve only the
+  // independently complete clause; the next audit pass re-verifies it.
+  if (/^(?:placing|discussing|talking|reacting|mentioning|following|coming|using|evolving|betting|celebrating)\b/i.test(right)) {
+    return leftSentence;
+  }
+  if (!/\b(?:is|are|was|were|has|had|said|asked|joked|discussed|talked|reacted|mentioned|won|lost|resolved|evolved|used|placed|bet|celebrated)\b/i.test(right)) {
+    return leftSentence;
+  }
+  return `${leftSentence} ${right.charAt(0).toUpperCase()}${right.slice(1)}.`;
+}
+
+function predictionBettingClaim(sentence = '') {
+  return /\b(?:viewers?|chat|participants?|people|members?)\b[^.!?]{0,90}\b(?:plac(?:e|ed|ing)|mak(?:e|es|ing)|put(?:ting)?|wager(?:ed|ing)?)\b[^.!?]{0,30}\b(?:bets?|wagers?|channel points?)\b|\b(?:viewers?|chat|participants?|people|members?)\b[^.!?]{0,90}\bbetting\b/i.test(String(sentence || ''));
+}
+
+function chatSupportsPredictionBetting(citedChats = []) {
+  return citedChats.some((record) => /\b(?:bet|bets|betting|wager|channel points?|all in|points on)\b/i.test(String(record?.text || record?.body || '')));
+}
+
 function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventRecords = [], identities = [], mode = 'recap') {
   if (mode === 'tagged') return resultMap;
   const chat = normalizeChatRecords(chatRecords);
@@ -647,6 +705,20 @@ function validateRecapEvidence(sentences, resultMap, chatRecords = [], eventReco
       result.supported = false;
       result.reason = 'deterministic evidence check: recap claim needs valid current-source evidence; bot context alone is not proof';
       result.replacement = '';
+      continue;
+    }
+
+    if (mode === 'recap' && predictionBettingClaim(sentence) && !chatSupportsPredictionBetting(citedChats)) {
+      result.supported = false;
+      result.reason = 'deterministic evidence check: a prediction result does not establish that viewers placed bets or Channel Points without cited viewer chat';
+      result.replacement = conservativeConnectorReplacement(sentence);
+      continue;
+    }
+
+    if (mode === 'recap' && ASSOCIATIVE_RELATIONSHIP_WORDS.test(sentence) && !connectorRelationshipIsExplicit(sentence, citedChats, citedEvents)) {
+      result.supported = false;
+      result.reason = 'deterministic evidence check: temporal/associative connector links facts without a cited source explicitly establishing that relationship';
+      result.replacement = conservativeConnectorReplacement(sentence);
       continue;
     }
 

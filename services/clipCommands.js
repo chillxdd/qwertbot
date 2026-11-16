@@ -5,6 +5,12 @@ const {
   validateClipForChannel
 } = require('./twitchClips');
 const { requestGeminiText } = require('./geminiClient');
+const { isSharedChatGuest } = require('./sourceRecords');
+const {
+  normalizeTwitchUsername,
+  normalizeClipLastAllowedUsernames,
+  clipLastUsernameAllowed
+} = require('./clipCommandAccess');
 
 const MIN_CLIP_DURATION = 5;
 const MAX_CLIP_DURATION = 60;
@@ -15,7 +21,7 @@ const AUTO_TITLE_TIMEOUT_MS = 10000;
 const MAX_MANUAL_LAST_LENGTH = 450;
 const DEFAULT_CLIP_SETTINGS = Object.freeze({
   clip: { defaultDuration: 45 },
-  cliplast: { defaultDuration: 45 }
+  cliplast: { defaultDuration: 45, allowedUsernames: [] }
 });
 
 // Exact normalized Twitch categories. This intentionally excludes fan games and
@@ -94,13 +100,14 @@ function normalizeTitle(value) {
   return String(value ?? '').trim().slice(0, 250);
 }
 
-function normalizeClipSettings(input = {}) {
+function normalizeClipSettings(input = {}, { strictAllowedUsernames = false } = {}) {
   return {
     clip: {
       defaultDuration: clampDuration(input?.clip?.defaultDuration, DEFAULT_CLIP_SETTINGS.clip.defaultDuration)
     },
     cliplast: {
-      defaultDuration: clampDuration(input?.cliplast?.defaultDuration, DEFAULT_CLIP_SETTINGS.cliplast.defaultDuration)
+      defaultDuration: clampDuration(input?.cliplast?.defaultDuration, DEFAULT_CLIP_SETTINGS.cliplast.defaultDuration),
+      allowedUsernames: normalizeClipLastAllowedUsernames(input?.cliplast?.allowedUsernames, { strict: strictAllowedUsernames })
     }
   };
 }
@@ -357,7 +364,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
   }
 
   async function saveSettings(input = {}) {
-    const settings = normalizeClipSettings(input);
+    const settings = normalizeClipSettings(input, { strictAllowedUsernames: true });
     await ClipCommandConfig.findOneAndUpdate(
       { channelName: channel },
       { $set: { clip: settings.clip, cliplast: settings.cliplast } },
@@ -614,7 +621,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     }
   }
 
-  async function handleClipLast({ channel: channelArg, rawMessage, displayName, tags }) {
+  async function handleClipLast({ channel: channelArg, rawMessage, displayName, tags, settings: suppliedSettings = null }) {
     const identity = userIdentityFromTags(tags, displayName);
     const now = Date.now();
     if (lastUpdateCommandUse && now - lastUpdateCommandUse < LAST_UPDATE_COOLDOWN_MS) {
@@ -634,7 +641,7 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     let createdClip = null;
     try {
       liveInfo = await requireOfficialPokemonLive();
-      const { settings } = await readConfig();
+      const settings = suppliedSettings || (await readConfig()).settings;
       const parsed = parseClipArguments(rawMessage, '!cliplast', settings.cliplast);
       if (parsed?.error) {
         const err = new Error(parsed.error);
@@ -704,9 +711,22 @@ function createClipCommandManager({ channelName, sendMessage, getNativeCommandRe
     if (!['!last', '!setlast', '!cliplast', '!textlast', '!clip'].includes(command)) return { matched: false };
 
     if (command === '!last') return handleLast({ channel: channelArg, displayName });
+
+    if (command === '!cliplast') {
+      let settings = null;
+      let authorized = Boolean(isModOrBroadcaster);
+      if (!authorized && !isSharedChatGuest({ tags })) {
+        settings = (await readConfig()).settings;
+        const username = normalizeTwitchUsername(tags.username || displayName);
+        authorized = clipLastUsernameAllowed(username, settings.cliplast.allowedUsernames);
+        if (authorized) console.log(`[Clips] Allowlisted viewer ${username} invoked !cliplast.`);
+      }
+      if (!authorized) return { matched: true, responded: false, reason: 'unauthorized' };
+      return handleClipLast({ channel: channelArg, rawMessage, displayName, tags, settings });
+    }
+
     if (!isModOrBroadcaster) return { matched: true, responded: false, reason: 'unauthorized' };
     if (command === '!setlast') return handleSetLast({ channel: channelArg, rawMessage, displayName, tags });
-    if (command === '!cliplast') return handleClipLast({ channel: channelArg, rawMessage, displayName, tags });
     if (command === '!textlast') return handleTextLast({ channel: channelArg, displayName, tags });
     return handleClip({ channel: channelArg, rawMessage, displayName, tags });
   }

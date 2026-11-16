@@ -14,11 +14,22 @@ const replyReferenceSchema = new mongoose.Schema({
   author: { type: identitySchema, default: null }
 }, { _id: false });
 
+const predictionResultSchema = new mongoose.Schema({
+  predictionId: { type: String, default: '' },
+  sourceEventId: { type: String, default: '' },
+  timestamp: { type: Number, default: 0 },
+  title: { type: String, default: '' },
+  outcome: { type: String, default: '' },
+  status: { type: String, default: 'resolved' },
+  gymResult: { type: String, enum: ['', 'win', 'loss'], default: '' }
+}, { _id: false });
+
 const recapEntrySchema = new mongoose.Schema(
   {
     windowId: { type: String, default: '' },
     sequence: { type: Number, required: true },
     text: { type: String, required: true },
+    predictionResults: { type: [predictionResultSchema], default: [] },
     createdAt: { type: Date, default: Date.now }
   },
   { _id: false }

@@ -2,6 +2,7 @@ const { WRITE_OPTIONS } = require('./reliability/store');
 const operationContext = require('./reliability/context');
 const StreamRecapSession = require('../models/StreamRecapSession');
 const StreamEndLearningJob = require('../models/StreamEndLearningJob');
+const { sanitizePredictionResults } = require('./predictionRecapContext');
 
 function normalizeStreamId(streamId) {
   return String(streamId || '').trim();
@@ -14,7 +15,7 @@ function normalizeChannelName(channelName) {
 async function getRecentStreamRecaps({ streamId, limit = 5 }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   if (!normalizedStreamId) return [];
-  const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
+  const safeLimit = Math.max(1, Math.min(96, Number(limit) || 5));
 
   // Slice in MongoDB so Atlas returns only the recap rows the caller can use.
   const session = await StreamRecapSession.findOne({ streamId: normalizedStreamId })
@@ -23,7 +24,12 @@ async function getRecentStreamRecaps({ streamId, limit = 5 }) {
 
   if (!session || !Array.isArray(session.recaps)) return [];
   return session.recaps
-    .map((entry) => ({ sequence: entry.sequence, text: String(entry.text || '').trim(), createdAt: entry.createdAt || null }))
+    .map((entry) => ({
+      sequence: entry.sequence,
+      text: String(entry.text || '').trim(),
+      predictionResults: sanitizePredictionResults(entry.predictionResults || []),
+      createdAt: entry.createdAt || null
+    }))
     .filter((entry) => entry.text);
 }
 
@@ -33,10 +39,11 @@ function liveFencedFilter(streamId) {
   ] };
 }
 
-async function saveStreamRecap({ streamId, channelName, startedAt, text, windowId = '' }) {
+async function saveStreamRecap({ streamId, channelName, startedAt, text, windowId = '', predictionResults = [] }) {
   const normalizedStreamId = normalizeStreamId(streamId);
   const normalizedChannelName = normalizeChannelName(channelName);
   const recapText = String(text || '').trim();
+  const storedPredictionResults = sanitizePredictionResults(predictionResults);
   if (!normalizedStreamId || !normalizedChannelName || !recapText) return null;
   const counter = await StreamRecapSession.findOneAndUpdate(
     liveFencedFilter(normalizedStreamId),
@@ -47,7 +54,7 @@ async function saveStreamRecap({ streamId, channelName, startedAt, text, windowI
   return StreamRecapSession.updateOne({ ...liveFencedFilter(normalizedStreamId),
     ...(windowId ? { 'recaps.windowId': { $ne: windowId } } : {}) }, {
     $push: { recaps: { $each: [{ windowId, sequence: counter.recapSequence,
-      text: recapText.slice(0, 2000), createdAt: new Date() }], $slice: -96 } }
+      text: recapText.slice(0, 2000), predictionResults: storedPredictionResults, createdAt: new Date() }], $slice: -96 } }
   }, WRITE_OPTIONS);
 }
 
